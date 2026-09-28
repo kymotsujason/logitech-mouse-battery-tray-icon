@@ -1,0 +1,20 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run the unit suite on Debian 12, Ubuntu 24.04, and Arch
+        run: tests/containers/runUnitTests.sh
+      - name: Validate the desktop entries, udev rule, and AppStream data
+        run: packaging/validate.sh

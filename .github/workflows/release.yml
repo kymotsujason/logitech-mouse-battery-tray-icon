@@ -1,0 +1,71 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      released: ${{ steps.version.outputs.released }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Find the version and whether it has a release
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(sed -n 's/^VERSION = "\([^"]*\)"$/\1/p' version.py)
+          if [ -z "$version" ]; then
+            echo "::error::version.py holds no VERSION line"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if gh release view "v$version" --repo "$GITHUB_REPOSITORY" > /tmp/view.log 2>&1; then
+            echo "released=true" >> "$GITHUB_OUTPUT"
+            echo "v$version already has a release, thus there's nothing to publish"
+          elif grep -q "release not found" /tmp/view.log; then
+            echo "released=false" >> "$GITHUB_OUTPUT"
+            echo "v$version has no release yet, thus it gets built, tested, and published"
+          else
+            cat /tmp/view.log
+            exit 1
+          fi
+
+  release:
+    needs: check
+    if: needs.check.outputs.released == 'false'
+    runs-on: ubuntu-24.04
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run the unit suite on Debian 12, Ubuntu 24.04, and Arch
+        run: tests/containers/runUnitTests.sh
+      - name: Validate the desktop entries, udev rule, and AppStream data
+        run: packaging/validate.sh
+      - name: Build the tarball
+        run: packaging/tarball.sh
+      - name: Build the .deb and .rpm
+        run: packaging/build.sh
+      - name: Build the Arch package
+        run: packaging/buildArch.sh
+      - name: Test each package in a clean container
+        run: tests/containers/testPackages.sh
+      - name: Bundle the checksummed PKGBUILD for the AUR
+        run: tar -czf "dist/logitech-mouse-battery-$VERSION-aur.tar.gz" -C dist/aur PKGBUILD .SRCINFO
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "v$VERSION" --target "$GITHUB_SHA" --title "Mouse Battery $VERSION" --notes "Install steps are in the README." dist/*.deb dist/*.rpm dist/*.pkg.tar.zst dist/*.tar.gz

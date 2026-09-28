@@ -1,0 +1,15 @@
+#!/bin/sh
+# -B keeps a root run from leaving __pycache__ in the package's folder
+APP_DIR=/usr/share/logitech-mouse-battery
+
+case "$1" in
+    check)
+        exec /usr/bin/python3 -B "$APP_DIR/check.py"
+        ;;
+    --version)
+        sed -n 's/^VERSION = "\([^"]*\)"$/\1/p' "$APP_DIR/version.py"
+        ;;
+    *)
+        exec /usr/bin/python3 -B "$APP_DIR/tray.py"
+        ;;
+esac

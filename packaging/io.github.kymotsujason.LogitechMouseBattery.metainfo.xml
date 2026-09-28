@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.kymotsujason.LogitechMouseBattery</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>Mouse Battery</name>
+  <summary>Show your Logitech mouse battery in the system tray</summary>
+  <developer id="io.github.kymotsujason">
+    <name>kymotsujason</name>
+  </developer>
+  <description>
+    <p>Mouse Battery puts the battery level of every connected Logitech mouse in the system tray, and warns once at 10% and once at 5% per charge.</p>
+    <p>It reads mice the kernel drives through UPower, and reads receivers the kernel leaves alone, such as the one for the PRO X3 SUPERSTRIKE, over HID++. It isn't affiliated with Logitech.</p>
+  </description>
+  <launchable type="desktop-id">logitech-mouse-battery.desktop</launchable>
+  <url type="homepage">https://github.com/kymotsujason/logitech-mouse-battery-tray-icon</url>
+  <url type="bugtracker">https://github.com/kymotsujason/logitech-mouse-battery-tray-icon/issues</url>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/kymotsujason/logitech-mouse-battery-tray-icon/main/docs/screenshot.png</image>
+      <caption>The tray icon and its menu</caption>
+    </screenshot>
+  </screenshots>
+  <provides>
+    <binary>logitech-mouse-battery</binary>
+  </provides>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="1.0.0" date="2026-09-28"/>
+  </releases>
+</component>
