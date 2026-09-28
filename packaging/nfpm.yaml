@@ -1,0 +1,87 @@
+name: logitech-mouse-battery
+arch: all
+platform: linux
+version: ${VERSION}
+section: utils
+maintainer: kymotsujason <kymotsujason@gmail.com>
+description: |
+  Logitech mouse battery in the system tray
+  Mouse Battery shows the battery level of every connected Logitech mouse
+  in the system tray and warns at 10% and 5%. It isn't affiliated with
+  Logitech.
+homepage: https://github.com/kymotsujason/logitech-mouse-battery-tray-icon
+license: GPL-3.0-or-later
+contents:
+  - src: packaging/logitech-mouse-battery
+    dst: /usr/bin/logitech-mouse-battery
+    file_info:
+      mode: 0755
+  - dst: /usr/share/logitech-mouse-battery
+    type: dir
+    file_info:
+      mode: 0755
+  - src: autostart.py
+    dst: /usr/share/logitech-mouse-battery/autostart.py
+  - src: check.py
+    dst: /usr/share/logitech-mouse-battery/check.py
+  - src: hidpp.py
+    dst: /usr/share/logitech-mouse-battery/hidpp.py
+  - src: icon.py
+    dst: /usr/share/logitech-mouse-battery/icon.py
+  - src: isHidpp.py
+    dst: /usr/share/logitech-mouse-battery/isHidpp.py
+  - src: mice.py
+    dst: /usr/share/logitech-mouse-battery/mice.py
+  - src: notify.py
+    dst: /usr/share/logitech-mouse-battery/notify.py
+  - src: panelColor.py
+    dst: /usr/share/logitech-mouse-battery/panelColor.py
+  - src: tray.py
+    dst: /usr/share/logitech-mouse-battery/tray.py
+  - src: upower.py
+    dst: /usr/share/logitech-mouse-battery/upower.py
+  - src: version.py
+    dst: /usr/share/logitech-mouse-battery/version.py
+  - src: NotoSans-Medium.ttf
+    dst: /usr/share/logitech-mouse-battery/NotoSans-Medium.ttf
+  - src: OFL.txt
+    dst: /usr/share/logitech-mouse-battery/OFL.txt
+  - src: packaging/logitech-mouse-battery.desktop
+    dst: /usr/share/applications/logitech-mouse-battery.desktop
+  - src: packaging/autostart/logitech-mouse-battery.desktop
+    dst: /etc/xdg/autostart/logitech-mouse-battery.desktop
+  - src: packaging/70-logitech-mouse-battery.rules
+    dst: /usr/lib/udev/rules.d/70-logitech-mouse-battery.rules
+  - src: packaging/logitech-mouse-battery.svg
+    dst: /usr/share/icons/hicolor/scalable/apps/logitech-mouse-battery.svg
+  - src: packaging/io.github.kymotsujason.LogitechMouseBattery.metainfo.xml
+    dst: /usr/share/metainfo/io.github.kymotsujason.LogitechMouseBattery.metainfo.xml
+  - dst: /usr/share/doc/logitech-mouse-battery
+    type: dir
+    file_info:
+      mode: 0755
+  - src: README.md
+    dst: /usr/share/doc/logitech-mouse-battery/README.md
+  - src: LICENSE
+    dst: /usr/share/doc/logitech-mouse-battery/copyright
+    packager: deb
+  - dst: /usr/share/licenses/logitech-mouse-battery
+    type: dir
+    file_info:
+      mode: 0755
+    packager: rpm
+  - src: LICENSE
+    dst: /usr/share/licenses/logitech-mouse-battery/LICENSE
+    packager: rpm
+scripts:
+  postinstall: packaging/reloadUdev.sh
+  postremove: packaging/reloadUdev.sh
+overrides:
+  deb:
+    depends:
+      - python3 (>= 3.11)
+      - python3-pyqt6
+  rpm:
+    depends:
+      - python3
+      - python3-pyqt6

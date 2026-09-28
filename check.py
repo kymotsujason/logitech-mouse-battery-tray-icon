@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+import sys
+
+from PyQt6.QtCore import QCoreApplication
+
+import hidpp
+import upower
+
+DEFAULT_NAME = "Logitech mouse"
+
+
+def printMouse(name, source, reading):
+    print((name or DEFAULT_NAME) + " (" + source + ")")
+    if (reading is None):
+        print("  no battery reply")
+    else:
+        print("  " + hidpp.describeReading(reading))
+
+
+def checkHidpp():
+    paths = hidpp.findHidppNodes()
+    denied = 0
+    searched = 0
+    found = 0
+    for path in paths:
+        try:
+            node = hidpp.HidppNode.open(path)
+        except PermissionError:
+            print("No access to " + path + ". Unplug the receiver or cable and plug it back in.")
+            denied += 1
+            continue
+        except OSError as error:
+            print("Couldn't open " + path + ": " + str(error))
+            continue
+        try:
+            result = hidpp.searchNode(node)
+        except OSError as error:
+            print("Lost " + path + " while reading it: " + str(error))
+            continue
+        finally:
+            node.close()
+        searched += 1
+        for mouse in result.mice:
+            printMouse(mouse.name, path, mouse.reading)
+            found += 1
+    return (len(paths), denied, searched, found)
+
+
+def checkUPower():
+    found = upower.listMice()
+    for mouse in found:
+        printMouse(mouse.name, "UPower", mouse.reading)
+    return len(found)
+
+
+def main():
+    # QtDBus wants an application object before it talks to the system bus
+    app = QCoreApplication.instance() or QCoreApplication(sys.argv[:1])
+    nodes, denied, searched, found = checkHidpp()
+    found += checkUPower()
+    if (found):
+        return
+    if (nodes == 0):
+        print("No Logitech mouse found.")
+    elif (searched > 0):
+        print("No mouse answered. Move your mouse to wake it, then run this again.")
+    elif (denied < nodes):
+        # every node that wasn't denied failed to open or dropped out, thus waking the mouse can't help
+        print("Can't read the receiver. Unplug it and plug it back in.")
+    sys.exit(1)
+
+
+if (__name__ == "__main__"):
+    main()

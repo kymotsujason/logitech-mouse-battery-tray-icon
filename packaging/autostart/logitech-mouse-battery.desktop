@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Mouse Battery
+Comment=Show your Logitech mouse battery in the system tray
+Exec=logitech-mouse-battery
+TryExec=logitech-mouse-battery
+Icon=logitech-mouse-battery
+Terminal=false
+NoDisplay=true
