@@ -19,7 +19,7 @@ import hidpp
 import mice
 import panelColor
 from icon import IconState, makeIcon
-from notify import Notifier
+from notify import NO_REPLY, Notifier
 from upower import UPowerWatcher
 from version import VERSION
 
@@ -281,7 +281,9 @@ class MouseBatteryApp(QObject):
         self.loginAction.setChecked(autostart.isEnabled(self.configHome))
 
     def onLowBattery(self, key, name, percent):
-        if (self.notifier.send("Mouse battery low", name + " has " + str(percent) + "% left.") is None):
+        notificationId, error = self.notifier.send("Mouse battery low", name + " has " + str(percent) + "% left.")
+        # a call that timed out already reached the server, and sending it again would block for the timeout on every reading
+        if (notificationId is None and error != NO_REPLY):
             return
         self.mice.warner.markSent(key, percent)
 

@@ -79,9 +79,9 @@ class WarnerTests(unittest.TestCase):
 
 
 class NotifierTests(unittest.TestCase):
-    def testMissingServiceSkipsTheNotification(self):
+    def testMissingServiceSkipsTheNotificationAndSaysWhy(self):
         bus = QDBusConnection.connectToBus("unix:path=/nonexistent/bus", "notifyTestBus")
-        self.assertIsNone(notify.Notifier(bus).send("Title", "Body"))
+        self.assertEqual(notify.Notifier(bus).send("Title", "Body"), (None, "org.freedesktop.DBus.Error.Disconnected"))
         QDBusConnection.disconnectFromBus("notifyTestBus")
 
 

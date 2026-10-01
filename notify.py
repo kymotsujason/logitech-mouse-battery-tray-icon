@@ -11,6 +11,7 @@ LOW_PERCENT = 10
 CRITICAL_PERCENT = 5
 REARM_PERCENT = 20
 CALL_TIMEOUT_MS = 5000
+NO_REPLY = "org.freedesktop.DBus.Error.NoReply"
 
 
 class LowBatteryWarner:
@@ -74,11 +75,11 @@ class Notifier(QObject):
         message.setArguments([APP_NAME, uintArgument(0), APP_ICON, summary, body, stringListArgument(flat), QVariant({"desktop-entry": APP_ICON}), -1])
         reply = self.bus.call(message, QDBus.CallMode.Block, CALL_TIMEOUT_MS)
         if (reply.type() != QDBusMessage.MessageType.ReplyMessage or not reply.arguments()):
-            return None
+            return (None, reply.errorName())
         notificationId = reply.arguments()[0]
         if (onAction is not None):
             self.handlers[notificationId] = onAction
-        return notificationId
+        return (notificationId, None)
 
     @pyqtSlot(QDBusMessage)
     def onActionInvoked(self, message):
