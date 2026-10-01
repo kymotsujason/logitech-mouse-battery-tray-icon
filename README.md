@@ -61,7 +61,7 @@ It has been tested with the PRO X3 SUPERSTRIKE on its receiver and on its cable,
 
 ## What the udev rule allows
 
-The rule gives the logged in user read and write access to the HID++ interface of any Logitech USB device, such as a receiver or a mouse on its cable, that the kernel leaves to its generic HID driver, when that interface's report descriptor passes the app's own check. The check rejects any interface with a keyboard, keypad, or mouse collection and any receiver interface that carries a paired keyboard's keystrokes. Any program you run can then send HID++ commands to those devices and to the devices paired with them, the same way Mouse Battery does, and those commands can change their settings and pairings.
+The rule gives the logged in user read and write access to the HID++ interface of any Logitech USB device, such as a receiver or a mouse on its cable, that the kernel leaves to its generic HID driver, when that interface's report descriptor passes the app's own check. The check rejects any interface with a keyboard, keypad, or mouse collection and any receiver interface that carries a paired keyboard's keystrokes. Any program you run can then send HID++ commands to those devices and to the devices paired with them, including a keyboard paired to the same receiver, the same way Mouse Battery does, and those commands can change their settings and pairings.
 
 ## Uninstall
 
@@ -82,7 +82,7 @@ These haven't been tested yet:
 - An Open at Login override that another tool wrote with GNOME's `X-GNOME-Autostart-enabled` key
 - The `.deb` and `.rpm` on a real Debian, Ubuntu, or Fedora machine, including the rule applying without a replug (only clean containers have run them)
 
-Apart from these, two limits are known. A mouse that reports its battery without a percentage draws a full icon and never warns, while its menu line shows what it reported instead, such as a level name. A mouse on a receiver the kernel leaves alone also keeps showing its last reading after it's turned off, until the app next reads it (every 5 minutes, or when you open the menu or click the icon), since those receivers don't announce a mouse turning off.
+Apart from these, two limits are known. A mouse that reports its battery without a percentage draws a full icon and never warns, while its menu line shows what it reported instead, such as a level name. A mouse on a receiver the kernel leaves alone also keeps showing as awake with its last reading after it's turned off, until the app next reads it (every 5 minutes, or when you open the menu or click the icon), since the receivers tested so far don't announce a mouse turning off.
 
 ## Code layout
 
@@ -127,7 +127,7 @@ sudo pacman -U dist/logitech-mouse-battery-1.0.1-1-any.pkg.tar.zst
 
 On Debian, Ubuntu, or Fedora, run `packaging/build.sh` and install `dist/logitech-mouse-battery_1.0.1_all.deb` with `sudo apt install` or `dist/logitech-mouse-battery-1.0.1-1.noarch.rpm` with `sudo dnf install`, giving the path with a leading `./`.
 
-To release a new version, run `python3 packaging/bumpVersion.py <VERSION>`, where `<VERSION>` is the new number such as `1.1.0`. It updates every file that carries the version, and the tests fail if any of them disagree. Then commit and push to `main`, and the release workflow builds, tests, and publishes `v<VERSION>` with the packages attached, since that version has no release yet. A push that keeps the version publishes nothing.
+To release a new version, run `python3 packaging/bumpVersion.py <VERSION>`, where `<VERSION>` is the new version number. It updates every file that carries the version, and the tests fail if any of them disagree. Then commit and push to `main`, and the release workflow builds, tests, and publishes `v<VERSION>` with the packages attached, since that version has no release yet. A push that keeps the version publishes nothing.
 
 ## License
 

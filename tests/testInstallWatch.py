@@ -39,7 +39,7 @@ class InstallWatchTests(unittest.TestCase):
         self.watcher.removed.connect(lambda: self.removals.append(1))
 
     def testAFileChangeStartsTheTimer(self):
-        with tempfile.TemporaryDirectory() as folder:
+        with mock.patch.object(installWatch.os, "execv"), tempfile.TemporaryDirectory() as folder:
             installedCopy(folder, installWatch.VERSION)
             with mock.patch.object(installWatch, "APP_FOLDER", folder):
                 self.watcher.start()
@@ -48,6 +48,7 @@ class InstallWatchTests(unittest.TestCase):
                     f.write("VERSION = \"9.9.9\"\n")
                 started = waitFor(lambda: self.watcher.timer.isActive())
                 self.watcher.timer.stop()
+                self.watcher.watcher.removePaths(self.watcher.watcher.files() + self.watcher.watcher.directories())
         self.assertTrue(started)
 
     def testABrokenTrayPyFailsTheRealImportCheck(self):

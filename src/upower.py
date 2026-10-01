@@ -156,6 +156,8 @@ class UPowerWatcher(QObject):
             if (error not in ABSENT_ERRORS):
                 self.enumerateDue = True
                 self.scheduleRetry()
+            else:
+                self.enumerateDue = False
             return
         self.enumerateDue = False
         for path in paths:

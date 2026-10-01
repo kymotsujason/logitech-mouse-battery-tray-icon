@@ -725,6 +725,17 @@ class MouseListTests(unittest.TestCase):
         answers[(5, 1)] = [77, 0x04, 0, 0]
         self.assertTrue(waitUntil(lambda: self.mouse().reading == hidpp.BatteryReading(77, 0), timeout=2.0))
 
+    def testAMouseThatKeepsAnsweringWithAnErrorIsReadAFewTimesThenWaits(self):
+        receiver = self.nodes.add(RECEIVER, mouseHandler(answers={(5, 0): [0x0F, 0x02]}))
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: batteryReads(receiver) == 4))
+        # longer than four more retries at the patched WAKE_RETRY_MS of 300
+        QTest.qWait(1500)
+        self.assertEqual(batteryReads(receiver), 4)
+        self.assertFalse(self.mouse().wakeTimer.isActive())
+        receiver.send(bytes([0x11, 1, 5, 0x00, 64, 0x04, 0, 0]).ljust(20, b"\x00"))
+        self.assertTrue(waitUntil(lambda: self.mouse().reading == hidpp.BatteryReading(64, 0)))
+
     def testANoticeDuringASearchKeepsItsSlotFromBeingSkipped(self):
         keyboardFirst = [True]
         keyboard = mouseHandler(slot=2, kind=0)

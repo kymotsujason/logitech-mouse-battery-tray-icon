@@ -86,7 +86,7 @@ class ProcessTests(unittest.TestCase):
         self.assertEqual(tray.takeLock(""), (True, None))
 
     def testMainInstallsTheExceptionHooks(self):
-        with mock.patch.object(sys, "excepthook", sys.excepthook), mock.patch.object(tray.threading, "excepthook", tray.threading.excepthook), mock.patch.object(tray, "raiseNiceness"), mock.patch.object(tray, "QApplication"), mock.patch.object(tray, "takeLock", return_value=(False, None)), mock.patch.object(tray, "Notifier"):
+        with mock.patch.object(tray.signal, "signal"), mock.patch.object(sys, "excepthook", sys.excepthook), mock.patch.object(tray.threading, "excepthook", tray.threading.excepthook), mock.patch.object(tray, "raiseNiceness"), mock.patch.object(tray, "QApplication"), mock.patch.object(tray, "takeLock", return_value=(False, None)), mock.patch.object(tray, "Notifier"):
             self.assertEqual(tray.main(), 0)
             self.assertEqual((sys.excepthook, tray.threading.excepthook), (tray.printException, tray.printThreadException))
 
@@ -123,6 +123,8 @@ class AppTests(unittest.TestCase):
     def tearDown(self):
         if (self.mouseApp is not None):
             self.mouseApp.stop()
+            fileWatcher = self.mouseApp.installWatcher.watcher
+            fileWatcher.removePaths(fileWatcher.files() + fileWatcher.directories())
             if (self.mouseApp.tray is not None):
                 self.mouseApp.tray.hide()
         for patch in self.patches:

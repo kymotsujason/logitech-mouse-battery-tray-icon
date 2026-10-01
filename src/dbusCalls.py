@@ -20,7 +20,7 @@ def call(bus, message, timeoutMs=DEFAULT_TIMEOUT_MS):
 
 
 def failure(reply):
-    # the error name of a call that got no reply, or None when it got one
+    # the error name of a call that failed, or None when it got a reply
     if (reply.type() == QDBusMessage.MessageType.ReplyMessage):
         return None
     return reply.errorName()

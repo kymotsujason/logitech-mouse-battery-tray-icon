@@ -14,6 +14,7 @@ from lowBattery import LowBatteryWarner
 
 READ_INTERVAL_MS = 300 * 1000
 WAKE_RETRY_MS = 6 * 1000
+ERROR_RETRY_LIMIT = 3
 SETTLE_MS = 1500
 DENIED_RETRY_MS = 5 * 1000
 DENIED_RETRY_MAX_MS = 300 * 1000
@@ -148,6 +149,7 @@ class Mouse:
         self.wokeAt = None
         self.batteryEventAt = None
         self.wakeTimer = None
+        self.errorRetries = 0
 
 
 class NodeState:
@@ -423,6 +425,7 @@ class MouseList(QObject):
 
     def applyReading(self, mouse, reading, woke=False):
         now = time.time()
+        mouse.errorRetries = 0
         if (reading is None):
             mouse.asleep = True
         else:
@@ -439,8 +442,9 @@ class MouseList(QObject):
         if (outcome == hidpp.ANSWER):
             self.applyReading(mouse, reading, woke=woke)
         elif (outcome == hidpp.ERROR):
-            # the device answered with an error, so it's awake and its last reading stands, while a mouse with no reading yet gets read again soon
-            if (mouse.reading is None):
+            # the device answered with an error, so it's awake and its last reading stands, while a mouse with no reading yet gets a few quick reads before it waits for its next event or the timed read
+            if (mouse.reading is None and mouse.errorRetries < ERROR_RETRY_LIMIT):
+                mouse.errorRetries += 1
                 self.retryLater(mouse)
         elif (mouse.batteryEventAt is not None and mouse.batteryEventAt >= queuedAt):
             # a battery event that arrived while this request waited shows the mouse is awake, so it wins over the timeout
@@ -541,6 +545,7 @@ class MouseList(QObject):
         self.requestSearch(state.path)
 
     def onMouseReport(self, state, mouse, report):
+        mouse.errorRetries = 0
         kind, reading = hidpp.parseEvent(report, mouse.feature)
         before = (mouse.reading, mouse.asleep)
         if (kind == hidpp.EVENT_BATTERY):

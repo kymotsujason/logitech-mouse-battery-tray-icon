@@ -213,6 +213,15 @@ class RetryTests(unittest.TestCase):
                 watcher.start()
                 self.assertFalse(watcher.enumerateDue or watcher.retryTimer.isActive())
 
+    def testARetriedListingThatFindsNoUPowerStopsListing(self):
+        names = ["org.freedesktop.DBus.Error.NoReply", "org.freedesktop.DBus.Error.ServiceUnknown"]
+        bus, watcher = self.makeWatcher(lambda message: message.createErrorReply(names.pop(0), "failed on purpose"))
+        watcher.start()
+        self.assertTrue(watcher.enumerateDue)
+        watcher.retryTimer.stop()
+        watcher.onRetry()
+        self.assertEqual((watcher.enumerateDue, watcher.retryTimer.isActive()), (False, False))
+
     def testAFailedGetAllKeepsTheMouseAndRetries(self):
         bus, watcher = self.makeWatcher(failWith("org.freedesktop.DBus.Error.NoReply"))
         watcher.paths.add(PATH)
@@ -220,10 +229,14 @@ class RetryTests(unittest.TestCase):
         self.assertEqual((self.removed, PATH in watcher.paths, PATH in watcher.retryPaths, watcher.retryTimer.isActive()), ([], True, True, True))
 
     def testAGoneDeviceIsRemoved(self):
-        bus, watcher = self.makeWatcher(failWith("org.freedesktop.DBus.Error.UnknownObject"))
-        watcher.paths.add(PATH)
-        watcher.refresh(PATH)
-        self.assertEqual((self.removed, watcher.retryPaths), ([PATH], set()))
+        # the real UPower answers UnknownMethod for a device path that's gone
+        self.assertIn("org.freedesktop.DBus.Error.UnknownMethod", upower.GONE_ERRORS)
+        for name in upower.GONE_ERRORS:
+            with self.subTest(name=name):
+                bus, watcher = self.makeWatcher(failWith(name))
+                watcher.paths.add(PATH)
+                watcher.refresh(PATH)
+                self.assertEqual((self.removed, watcher.retryPaths), ([PATH], set()))
 
     def testRetriesBackOffUpToACap(self):
         with mock.patch.object(upower, "RETRY_MS", 10), mock.patch.object(upower, "RETRY_MAX_MS", 40):
