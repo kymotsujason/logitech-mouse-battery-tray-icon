@@ -344,9 +344,14 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("run: tests/containers/testUpgrade.sh\n", release)
         self.assertLess(release.index("testUpgrade.sh"), release.index("gh release create"))
 
+    def testTheReleaseChecksTheBootedServiceBeforePublishing(self):
+        release = self.releaseJob()
+        self.assertIn("run: tests/booted/checkService.sh\n", release)
+        self.assertLess(release.index("tests/booted/checkService.sh"), release.index("gh release create"))
+
     def testCiRunsTheLateTrayCheckAndEveryBuild(self):
         ci = self.read("ci.yml")
-        for script in ("tests/live/checkLateTray.sh", "packaging/tarball.sh", "packaging/build.sh", "packaging/buildArch.sh", "tests/containers/testPackages.sh", "tests/containers/testUpgrade.sh"):
+        for script in ("tests/live/checkLateTray.sh", "packaging/tarball.sh", "packaging/build.sh", "packaging/buildArch.sh", "tests/containers/testPackages.sh", "tests/containers/testUpgrade.sh", "tests/booted/checkService.sh"):
             self.assertIn("run: " + script + "\n", ci)
 
     def testTheAurBundleCarriesTheInstallFile(self):

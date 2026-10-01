@@ -33,3 +33,5 @@ jobs:
         run: tests/containers/testPackages.sh
       - name: Upgrade a running 1.0.1 tray in a container
         run: tests/containers/testUpgrade.sh
+      - name: Check the packaged service on this booted runner
+        run: tests/booted/checkService.sh
