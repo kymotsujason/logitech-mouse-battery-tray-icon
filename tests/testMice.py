@@ -1,3 +1,4 @@
+import io
 import os
 import queue
 import sys
@@ -57,44 +58,69 @@ class WorkerTests(unittest.TestCase):
     def testQueuedWorkRunsWhileTheDeviceIsSilent(self):
         self.startWorker(mouseHandler())
         time.sleep(0.2)
-        self.worker.queueWork(("read", 1, FEATURE))
-        self.assertEqual(nextMessage(self.messages, "read"), ("read", PATH, 1, (hidpp.ANSWER, hidpp.BatteryReading(81, 0))))
+        self.worker.queueWork(("read", 1, FEATURE, 0.0))
+        message = nextMessage(self.messages, "read")
+        self.assertIs(message[1], self.worker)
+        self.assertEqual(message[2:], (1, (hidpp.ANSWER, hidpp.BatteryReading(81, 0)), 0.0))
 
     def testSearchResultIsPosted(self):
         self.startWorker(mouseHandler())
-        self.worker.queueWork(("search", frozenset()))
+        self.worker.queueWork(("search", frozenset(), 0.0))
         self.assertEqual(nextMessage(self.messages, "searched")[2].mice[0].unitId, "02bc524c")
 
     def testIdentifyResultIsPosted(self):
         self.startWorker(mouseHandler())
-        self.worker.queueWork(("identify", 1))
+        self.worker.queueWork(("identify", 1, 0.0))
         self.assertEqual(nextMessage(self.messages, "identified")[3][0], hidpp.FOUND)
 
     def testReportsArePosted(self):
         self.startWorker(mouseHandler())
         event = bytes([0x11, 1, 5, 0x00, 42, 0x04, 0, 0]).ljust(20, b"\x00")
         self.device.send(event)
-        self.assertEqual(nextMessage(self.messages, "report"), ("report", PATH, event))
+        self.assertEqual(nextMessage(self.messages, "report"), ("report", self.worker, event))
 
     def testExceptionInAWorkItemKeepsTheThreadRunning(self):
         self.startWorker(mouseHandler())
         with mock.patch.object(mice.traceback, "print_exc") as printed:
             self.worker.queueWork(("bogus",))
-            self.assertEqual(nextMessage(self.messages, "failed"), ("failed", PATH, ("bogus",)))
+            self.assertEqual(nextMessage(self.messages, "failed"), ("failed", self.worker, ("bogus",)))
         self.assertTrue(printed.called)
-        self.worker.queueWork(("read", 1, FEATURE))
+        self.worker.queueWork(("read", 1, FEATURE, 0.0))
         self.assertIsNotNone(nextMessage(self.messages, "read"))
 
     def testUnplugPostsLost(self):
         self.startWorker(mouseHandler())
         self.device.unplug()
-        self.assertEqual(nextMessage(self.messages, "lost"), ("lost", PATH))
+        self.assertEqual(nextMessage(self.messages, "lost")[:2], ("lost", self.worker))
 
     def testStopEndsTheThreadAndClosesThePipe(self):
         self.startWorker(mouseHandler())
         self.worker.stop()
         self.assertFalse(self.worker.is_alive())
         self.assertIsNone(self.worker.wakeRead)
+        self.worker = None
+
+    def testAnUnexpectedErrorInTheLoopPostsLost(self):
+        self.startWorker(mouseHandler())
+        with mock.patch.object(mice.traceback, "print_exc") as printed, mock.patch.object(self.worker.node, "readReport", side_effect=ValueError("bad")):
+            self.device.send(bytes([0x11, 1, 9, 0x00, 1, 2, 3]).ljust(20, b"\x00"))
+            message = nextMessage(self.messages, "lost")
+        self.assertEqual((message[1], type(message[2])), (self.worker, ValueError))
+        self.assertTrue(printed.called)
+
+    def testAStopThatGivesUpWaitingStillClosesThePipeLater(self):
+        with mock.patch.object(hidpp, "REQUEST_TIMEOUT", 0.5):
+            self.startWorker(silent)
+            self.worker.queueWork(("read", 1, FEATURE, 0.0))
+            time.sleep(0.05)
+            self.worker.stop(timeout=0.01)
+            self.assertTrue(self.worker.is_alive())
+            self.worker.wake()
+            self.worker.join(2)
+        self.assertFalse(self.worker.is_alive())
+        self.assertIsNone(self.worker.wakeRead)
+        # a wake after the thread closed its pipe does nothing
+        self.worker.wake()
         self.worker = None
 
     def testAReportTakenByARequestDoesntStallTheNextWork(self):
@@ -138,9 +164,14 @@ def pingsTo(device, slot):
     return sum(1 for sent in list(device.requests) if sent[1] == slot and sent[2] == 0 and (sent[3] >> 4) == 1)
 
 
+def batteryReads(device, slot=1, featureIndex=5):
+    return sum(1 for sent in list(device.requests) if sent[1] == slot and sent[2] == featureIndex and (sent[3] >> 4) == 1)
+
+
 class MouseListTests(unittest.TestCase):
     def setUp(self):
         self.nodes = FakeNodes()
+        self.errors = io.StringIO()
         self.patches = [
             mock.patch.object(hidpp, "findHidppNodes", self.nodes.find),
             mock.patch.object(hidpp.HidppNode, "open", self.nodes.open),
@@ -149,6 +180,7 @@ class MouseListTests(unittest.TestCase):
             mock.patch.object(mice, "WAKE_RETRY_MS", 300),
             mock.patch.object(mice, "SETTLE_MS", 10),
             mock.patch.object(mice, "DENIED_RETRY_MS", 100),
+            mock.patch.object(sys, "stderr", self.errors),
         ]
         for patch in self.patches:
             patch.start()
@@ -250,12 +282,12 @@ class MouseListTests(unittest.TestCase):
         state = self.mice.nodes[RECEIVER]
         report = bytearray(OTHER_REPORT)
         report[1] = 2
-        self.mice.onReport(RECEIVER, bytes(report))
-        self.mice.onSearched(RECEIVER, hidpp.SearchResult((), frozenset(), frozenset({2})))
+        self.mice.onReport(state, bytes(report))
+        self.mice.onSearched(state, hidpp.SearchResult((), frozenset(), frozenset({2})), 0.0)
         self.assertTrue(state.retryTimer.isActive())
         state.retryTimer.stop()
-        self.mice.onReport(RECEIVER, OTHER_REPORT)
-        self.mice.onSearched(RECEIVER, hidpp.SearchResult((), frozenset({1}), frozenset()))
+        self.mice.onReport(state, OTHER_REPORT)
+        self.mice.onSearched(state, hidpp.SearchResult((), frozenset({1}), frozenset()), 0.0)
         self.assertFalse(state.retryTimer.isActive())
 
     def testReadingAnAsleepMouseWakesIt(self):
@@ -382,8 +414,9 @@ class MouseListTests(unittest.TestCase):
         self.nodes.add(RECEIVER, mouseHandler())
         self.mice.start()
         self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"]))
+        worker = self.mice.nodes[RECEIVER].worker
         self.mice.stop()
-        self.mice.onMessage(("lost", RECEIVER))
+        self.mice.onMessage(("lost", worker, OSError("late")))
         self.assertEqual(self.mice.denied, set())
         self.assertFalse(self.mice.deniedTimer.isActive())
 
@@ -558,6 +591,208 @@ class MouseListTests(unittest.TestCase):
         self.assertTrue(waitUntil(lambda: self.mice.status() == mice.STATUS_WAITING))
         self.mice.applyUPower(upower.UPowerMouse("/p", "12ab34cd", None, hidpp.BatteryReading(55, 0)))
         self.assertEqual(self.mice.status(), mice.STATUS_MICE)
+
+    def testABurstOfReadsCostsAtMostOneMore(self):
+        receiver = self.nodes.add(RECEIVER, mouseHandler())
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"] and not self.mice.nodes[RECEIVER].searching))
+        before = batteryReads(receiver)
+        for i in range(10):
+            self.mice.readAll()
+        self.assertTrue(waitUntil(lambda: not self.mice.nodes[RECEIVER].pendingReads))
+        QTest.qWait(100)
+        self.assertEqual(batteryReads(receiver) - before, 2)
+
+    def testALinkUpDuringAPendingReadStillIdentifies(self):
+        receiver = self.nodes.add(RECEIVER, mouseHandler())
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"] and not self.mice.nodes[RECEIVER].searching))
+        receiver.handler = silent
+        self.mice.readAll()
+        self.assertIn(1, self.mice.nodes[RECEIVER].pendingReads)
+        receiver.handler = mouseHandler(unitId=bytes.fromhex("11223344"))
+        receiver.send(LINK_UP)
+        self.assertTrue(waitUntil(lambda: self.keys() == ["11223344"]))
+
+    def testASecondLinkUpDuringAnIdentifyGetsItsOwn(self):
+        receiver = self.nodes.add(RECEIVER, mouseHandler())
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"] and not self.mice.nodes[RECEIVER].searching))
+        state = self.mice.nodes[RECEIVER]
+        with mock.patch.object(hidpp, "REQUEST_TIMEOUT", 0.5):
+            receiver.handler = silent
+            receiver.send(LINK_UP)
+            self.assertTrue(waitUntil(lambda: 1 in state.pendingIdentifies))
+            receiver.send(LINK_UP)
+            self.assertTrue(waitUntil(lambda: 1 in state.identifyAgain))
+            receiver.handler = mouseHandler(unitId=bytes.fromhex("11223344"))
+            self.assertTrue(waitUntil(lambda: self.keys() == ["11223344"], timeout=4.0))
+
+    def testAFailedReadDoesntBlockTheNextOne(self):
+        self.nodes.add(RECEIVER, mouseHandler())
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"] and not self.mice.nodes[RECEIVER].searching))
+        realRead = hidpp.readBattery
+        calls = []
+
+        def flakyRead(node, feature):
+            calls.append(feature)
+            if (len(calls) == 1):
+                raise ValueError("boom")
+            return realRead(node, feature)
+
+        with mock.patch.object(hidpp, "readBattery", flakyRead), mock.patch.object(mice.traceback, "print_exc"):
+            self.mice.readAll()
+            self.assertTrue(waitUntil(lambda: calls and not self.mice.nodes[RECEIVER].pendingReads))
+            self.mice.readAll()
+            self.assertTrue(waitUntil(lambda: len(calls) == 2))
+
+    def testABatteryEventDuringATimedOutReadKeepsTheMouseAwake(self):
+        event = bytes([0x11, 1, 5, 0x00, 42, 0x04, 0, 0]).ljust(20, b"\x00")
+        receiver = self.nodes.add(RECEIVER, mouseHandler())
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"] and not self.mice.nodes[RECEIVER].searching))
+
+        def eventThenSilence(request):
+            if (request[2] == 5 and (request[3] >> 4) == 1):
+                return [event]
+            return []
+
+        receiver.handler = eventThenSilence
+        self.mice.readAll()
+        self.assertTrue(waitUntil(lambda: not self.mice.nodes[RECEIVER].pendingReads))
+        self.assertEqual((self.mouse().reading, self.mouse().asleep), (hidpp.BatteryReading(42, 0), False))
+
+    def testAnErrorOnANewMousesFirstReadReadsItAgainSoon(self):
+        answers = {(5, 0): [0x0F, 0x02]}
+        self.nodes.add(RECEIVER, mouseHandler(answers=answers))
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"]))
+        mouse = self.mouse()
+        self.assertEqual((mouse.reading, mouse.asleep), (None, False))
+        self.assertTrue(mouse.wakeTimer is not None and mouse.wakeTimer.isActive())
+        answers[(5, 1)] = [77, 0x04, 0, 0]
+        self.assertTrue(waitUntil(lambda: self.mouse().reading == hidpp.BatteryReading(77, 0), timeout=2.0))
+
+    def testANoticeDuringASearchKeepsItsSlotFromBeingSkipped(self):
+        keyboardFirst = [True]
+        keyboard = mouseHandler(slot=2, kind=0)
+        mouse = mouseHandler(slot=2, unitId=bytes.fromhex("bbbbbbbb"))
+
+        def handler(request):
+            if (request[1] != 2):
+                return []
+            if (keyboardFirst[0] and request[2] == 2 and (request[3] >> 4) == 2):
+                # slot 2 answers keyboard, and a new pairing's notice for it follows during the same search
+                keyboardFirst[0] = False
+                return keyboard(request) + [bytes([0x10, 2, 0x41, 0x10, 0x00, 0x00, 0x00])]
+            return (keyboard if keyboardFirst[0] else mouse)(request)
+
+        self.nodes.add(RECEIVER, handler)
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: self.keys() == ["bbbbbbbb"], timeout=3.0))
+        self.assertNotIn(2, self.mice.nodes[RECEIVER].skipped)
+
+    def testASlotLeftUnknownGetsOneFollowUpSearch(self):
+        receiver = self.nodes.add(RECEIVER, pingOnly)
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: pingsTo(receiver, 1) == 2, timeout=2.0))
+        QTest.qWait(800)
+        self.assertEqual(pingsTo(receiver, 1), 2)
+
+    def testDeniedRetriesBackOffAndADevChangeStartsThemOver(self):
+        with mock.patch.object(mice, "DENIED_RETRY_MAX_MS", 400):
+            self.nodes.deny(RECEIVER)
+            self.mice.start()
+            intervals = [self.mice.deniedTimer.interval()]
+            for i in range(3):
+                self.mice.retryDenied()
+                intervals.append(self.mice.deniedTimer.interval())
+            self.assertEqual(intervals, [100, 200, 400, 400])
+            self.mice.onDevChanged("/dev")
+            self.assertEqual(self.mice.deniedTimer.interval(), 100)
+
+    def testADeniedPathThatsNoLongerListedIsntOpened(self):
+        self.nodes.deny(RECEIVER)
+        self.mice.start()
+        self.nodes.denied.discard(RECEIVER)
+        opened = []
+        with mock.patch.object(hidpp.HidppNode, "open", lambda path, onEvent=None: opened.append(path)):
+            self.mice.retryDenied()
+        self.assertEqual((opened, self.mice.denied), ([], set()))
+
+    def testOnlyARealChangeRedraws(self):
+        receiver = self.nodes.add(RECEIVER, mouseHandler())
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"] and not self.mice.nodes[RECEIVER].searching))
+        changes = []
+        self.mice.changed.connect(lambda: changes.append(1))
+        event = bytes([0x11, 1, 5, 0x00, 64, 0x04, 0, 0]).ljust(20, b"\x00")
+        for i in range(3):
+            receiver.send(event)
+            receiver.send(OTHER_REPORT)
+        self.assertTrue(waitUntil(lambda: self.mouse().reading == hidpp.BatteryReading(64, 0)))
+        QTest.qWait(200)
+        self.assertEqual(len(changes), 1)
+
+    def testItSaysItsLookingWhileTheFirstSearchRuns(self):
+        self.nodes.add(RECEIVER, silent)
+        self.mice.start()
+        self.assertEqual(self.mice.status(), mice.STATUS_SEARCHING)
+        self.assertTrue(waitUntil(lambda: self.mice.status() == mice.STATUS_WAITING))
+
+    def testAnOpenErrorIsPrintedOncePerPathWithItsErrnoName(self):
+        self.nodes.deny(RECEIVER)
+        self.mice.start()
+        self.mice.retryDenied()
+        self.mice.retryDenied()
+        self.assertEqual(self.errors.getvalue(), "Couldn't open " + RECEIVER + ": EACCES\n")
+
+    def testALostNodeIsPrintedWithItsError(self):
+        self.nodes.add(RECEIVER, mouseHandler())
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"]))
+        self.nodes.remove(RECEIVER)
+        self.assertTrue(waitUntil(lambda: self.keys() == []))
+        self.assertIn("Lost " + RECEIVER + ": HID++ node closed\n", self.errors.getvalue())
+
+    def testAMessageFromAReplacedWorkerIsIgnored(self):
+        self.nodes.add(RECEIVER, mouseHandler())
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"]))
+        oldWorker = self.mice.nodes[RECEIVER].worker
+        lostState = self.mice.nodes[RECEIVER]
+        self.nodes.replace(RECEIVER, mouseHandler())
+        self.assertTrue(waitUntil(lambda: self.mice.nodes.get(RECEIVER) not in (None, lostState)))
+        self.mice.onMessage(("lost", oldWorker, OSError("late")))
+        self.assertIn(RECEIVER, self.mice.nodes)
+
+    def testAFailureWhileApplyingASearchStillEndsIt(self):
+        self.nodes.add(RECEIVER, mouseHandler())
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"] and not self.mice.nodes[RECEIVER].searching))
+        state = self.mice.nodes[RECEIVER]
+        state.searching = True
+        result = hidpp.SearchResult((hidpp.FoundMouse(1, "02bc524c", None, FEATURE, hidpp.BatteryReading(50, 0)),), frozenset(), frozenset())
+        with mock.patch.object(self.mice, "registerFound", side_effect=RuntimeError("boom")):
+            with self.assertRaises(RuntimeError):
+                self.mice.onSearched(state, result, 0.0)
+        self.assertFalse(state.searching)
+
+    def testAReplugWithAReadPendingReadsNormallyAfterwards(self):
+        receiver = self.nodes.add(RECEIVER, mouseHandler())
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"] and not self.mice.nodes[RECEIVER].searching))
+        receiver.handler = silent
+        self.mice.readAll()
+        lostState = self.mice.nodes[RECEIVER]
+        self.assertIn(1, lostState.pendingReads)
+        answers = {(5, 0): [0x0F, 0x02], (5, 1): [33, 0x04, 0, 0]}
+        self.nodes.replace(RECEIVER, mouseHandler(answers=answers))
+        self.assertTrue(waitUntil(lambda: self.mice.nodes.get(RECEIVER) not in (None, lostState) and not self.mice.nodes[RECEIVER].searching and self.mouse() is not None and self.mouse().reading == hidpp.BatteryReading(33, 0)))
+        answers[(5, 1)] = [34, 0x04, 0, 0]
+        self.mice.readAll()
+        self.assertTrue(waitUntil(lambda: self.mouse().reading == hidpp.BatteryReading(34, 0)))
 
 
 if (__name__ == "__main__"):

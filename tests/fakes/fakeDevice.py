@@ -142,7 +142,7 @@ class FakeNodes:
 
     def open(self, path, onEvent=None):
         if (path in self.denied):
-            raise PermissionError(path)
+            raise PermissionError(errno.EACCES, "Permission denied", path)
         if (path in self.failing):
             self.failing.discard(path)
             raise OSError(errno.EIO, "Input/output error", path)
