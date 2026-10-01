@@ -69,7 +69,7 @@ class TrayHost(QObject):
     def start(self):
         self.hostWatcher = QDBusServiceWatcher(WATCHER_SERVICE, self.sessionBus, QDBusServiceWatcher.WatchModeFlag.WatchForRegistration, self)
         self.hostWatcher.serviceRegistered.connect(self.onWatcherRegistered)
-        self.sessionBus.connect("", WATCHER_PATH, WATCHER_SERVICE, "StatusNotifierHostRegistered", self.onHostRegistered)
+        self.sessionBus.connect(WATCHER_SERVICE, WATCHER_PATH, WATCHER_SERVICE, "StatusNotifierHostRegistered", self.onHostRegistered)
         self.noticeTimer.start()
         self.checkHost()
 

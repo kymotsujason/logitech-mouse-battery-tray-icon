@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import QApplication
 
 import notify
 import trayHost
+from tests.fakes.recordingBus import RecordingBus
 
 app = QApplication.instance() or QApplication([])
 
@@ -133,6 +134,14 @@ class TrayHostTests(unittest.TestCase):
         host = self.makeHost(False)
         host.onNoticeAction("dontOpen")
         self.assertEqual(self.leaves, [1])
+
+    def testTheHostSignalIsTakenOnlyFromTheWatcher(self):
+        bus = RecordingBus()
+        with mock.patch.object(trayHost, "QDBusServiceWatcher"), mock.patch.object(trayHost, "hostRegistered", return_value=False):
+            host = trayHost.TrayHost(bus, mock.Mock())
+            host.start()
+        host.stop()
+        self.assertEqual(bus.subscriptions, [(trayHost.WATCHER_SERVICE, trayHost.WATCHER_PATH, trayHost.WATCHER_SERVICE, "StatusNotifierHostRegistered")])
 
 
 if (__name__ == "__main__"):

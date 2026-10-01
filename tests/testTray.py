@@ -9,7 +9,7 @@ from unittest import mock
 
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
-from PyQt6.QtDBus import QDBusConnection, QDBusMessage
+from PyQt6.QtDBus import QDBusConnection
 from PyQt6.QtGui import QColor, QPalette
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
@@ -17,10 +17,12 @@ from PyQt6.QtWidgets import QApplication
 import autostart
 import hidpp
 import mice
+import panelColor
 import tray
 import trayHost
 import upower
 from icon import IconState
+from tests.fakes.recordingBus import RecordingBus
 
 app = QApplication.instance() or QApplication([])
 NAME = "PRO X3 SUPERSTRIKE"
@@ -149,7 +151,9 @@ class AppTests(unittest.TestCase):
         return [each.args[1] for each in send.call_args_list]
 
     def testALowBatteryNoticeThatFailsIsSentAgain(self):
-        self.assertEqual(self.lowBatterySends([(None, "org.freedesktop.DBus.Error.ServiceUnknown"), (7, None), (7, None)]), ["MX Master 3 has 9% left.", "MX Master 3 has 8% left."])
+        with contextlib.redirect_stderr(io.StringIO()):
+            sends = self.lowBatterySends([(None, "org.freedesktop.DBus.Error.ServiceUnknown"), (7, None), (7, None)])
+        self.assertEqual(sends, ["MX Master 3 has 9% left.", "MX Master 3 has 8% left."])
 
     def testALowBatteryNoticeThatTimedOutIsntSentAgain(self):
         self.assertEqual(self.lowBatterySends([(None, "org.freedesktop.DBus.Error.NoReply"), (7, None), (7, None)]), ["MX Master 3 has 9% left."])
@@ -196,6 +200,20 @@ class AppTests(unittest.TestCase):
     def testUPowersOwnerIsWatched(self):
         mouseApp = self.makeApp(True)
         self.assertEqual(mouseApp.upower.ownerWatcher.watchedServices(), [upower.SERVICE])
+
+    def testThePortalSignalIsTakenOnlyFromThePortal(self):
+        mouseApp = self.makeApp(True)
+        bus = RecordingBus()
+        mouseApp.sessionBus = bus
+        with mock.patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": "GNOME"}), mock.patch.object(tray.panelColor, "readPortalColorScheme", return_value=0):
+            mouseApp.watchColors()
+        self.assertIn((panelColor.PORTAL_SERVICE, panelColor.PORTAL_PATH, panelColor.SETTINGS_INTERFACE, "SettingChanged"), bus.subscriptions)
+
+    def testAFailedLowBatteryNoticeIsLoggedOnce(self):
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors):
+            self.lowBatterySends([(None, "org.freedesktop.DBus.Error.ServiceUnknown")] * 3)
+        self.assertEqual(errors.getvalue(), "Couldn't send the low battery notice for MX Master 3: org.freedesktop.DBus.Error.ServiceUnknown\n")
 
 
 class ConfigFolderTests(unittest.TestCase):

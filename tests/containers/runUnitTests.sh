@@ -20,10 +20,10 @@ runIn() {
     fi
 }
 
-aptInstall="export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -qq --no-install-recommends python3 python3-pyqt6"
+aptInstall="export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -qq --no-install-recommends python3 python3-pyqt6 dbus-daemon python3-gi gir1.2-glib-2.0"
 runIn debian:12 "$aptInstall"
 runIn ubuntu:24.04 "$aptInstall"
-runIn archlinux:latest "pacman -Syu --noconfirm --needed python python-pyqt6"
+runIn archlinux:latest "pacman -Syu --noconfirm --needed python python-pyqt6 dbus python-gobject"
 
 if [ "$failures" -gt 0 ]; then
     exit 1

@@ -11,7 +11,7 @@ fi
 cp -r /repo /tmp/app
 cd /tmp/app
 python3 -c 'import sys; from PyQt6.QtCore import PYQT_VERSION_STR, QT_VERSION_STR; print("Python " + sys.version.split()[0] + ", Qt " + QT_VERSION_STR + ", PyQt6 " + PYQT_VERSION_STR)'
-QT_QPA_PLATFORM=offscreen python3 -B -m unittest discover -s tests -t . > /tmp/suite.log 2>&1
+MOUSE_BATTERY_REQUIRE_DBUS=1 QT_QPA_PLATFORM=offscreen python3 -B -m unittest discover -s tests -t . > /tmp/suite.log 2>&1
 status=$?
 if [ "$status" -ne 0 ]; then
     cat /tmp/suite.log
