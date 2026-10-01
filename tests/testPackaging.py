@@ -141,11 +141,11 @@ class ServiceFileTests(unittest.TestCase):
 
     def testTheBusPolicyLetsOnlyTheServiceUserOwnTheNameAndCallsOnlyItsMethods(self):
         root = ElementTree.parse(os.path.join(PACKAGING, "dbus", serviceState.SERVICE_NAME + ".conf")).getroot()
-        owners = [(policy.get("user"), rule.get("own")) for policy in root.iter("policy") for rule in policy if rule.get("own") is not None]
-        self.assertEqual(owners, [(USER, serviceState.SERVICE_NAME)])
-        calls = [rule for policy in root.iter("policy") if policy.get("context") == "default" for rule in policy]
-        self.assertTrue(all(rule.tag == "allow" and rule.get("send_destination") == serviceState.SERVICE_NAME and rule.get("send_member") for rule in calls))
-        self.assertEqual({(rule.get("send_interface"), rule.get("send_member")) for rule in calls}, ALLOWED_CALLS)
+        policies = list(root)
+        self.assertEqual([(policy.tag, policy.attrib) for policy in policies], [("policy", {"user": USER}), ("policy", {"context": "default"})])
+        self.assertEqual([(rule.tag, rule.attrib) for rule in policies[0]], [("allow", {"own": serviceState.SERVICE_NAME})])
+        calls = [("allow", {"send_destination": serviceState.SERVICE_NAME, "send_interface": interface, "send_member": member}) for interface, member in ALLOWED_CALLS]
+        self.assertCountEqual([(rule.tag, rule.attrib) for rule in policies[1]], calls)
 
     def testTheActivationFileStartsTheUnit(self):
         sections = iniSections(os.path.join(PACKAGING, "dbus", serviceState.SERVICE_NAME + ".service"))

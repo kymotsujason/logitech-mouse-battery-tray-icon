@@ -151,6 +151,18 @@ class ServiceTests(unittest.TestCase):
         self.caller.call("ReadAll")
         self.assertTrue(waitUntil(lambda: len(self.caller.signals) > count))
 
+    def testAChangedSignalWithAnUnchangedStateSendsNoStateChanged(self):
+        device = self.startWithMouse()
+        self.assertTrue(self.clientBus.connect(serviceState.SERVICE_NAME, serviceState.OBJECT_PATH, serviceState.INTERFACE, "StateChanged", self.caller.onState))
+        device.send(REPEATED_BATTERY)
+        self.assertTrue(waitUntil(lambda: self.caller.signals))
+        count = len(self.caller.signals)
+        self.receiverList.changed.emit()
+        QTest.qWait(300)
+        self.assertEqual(len(self.caller.signals), count)
+        device.send(REPEATED_BATTERY)
+        self.assertTrue(waitUntil(lambda: len(self.caller.signals) > count))
+
     def testSearchingGoesFalseAfterTheFirstSearchEvenWhileAnotherRuns(self):
         self.startWithMouse()
         self.receiverList.requestSearch(RECEIVER)

@@ -2,7 +2,6 @@ import time
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
-import hidpp
 from lowBattery import LowBatteryWarner
 
 READ_INTERVAL_MS = 300 * 1000
@@ -122,7 +121,7 @@ class MouseList(QObject):
         if (entry.name):
             mouse.name = entry.name
         mouse.nodePath = entry.source
-        # a reading UPower gave stays until the service has a later one, so an older entry never brings back a stale level or re-arms the warner
+        # a reading UPower gave stays until the service has a later one, so an older entry never brings back a stale level or makes the warner warn again
         if ((mouse.upowerPath is not None or mouse.readFromUPower) and not isLater(entry.lastRead, mouse.lastRead)):
             if (mouse.upowerPath is None):
                 # with UPower gone, only the service can say the mouse went to sleep

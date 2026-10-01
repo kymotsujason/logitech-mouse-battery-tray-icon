@@ -62,7 +62,7 @@ jobs:
           persist-credentials: false
       - name: Run the unit suite on Debian 12, Ubuntu 24.04, and Arch
         run: tests/containers/runUnitTests.sh
-      - name: Validate the desktop entries, udev rule, and AppStream data
+      - name: Validate the desktop entries, udev rule, service unit, and AppStream data
         run: packaging/validate.sh
       - name: Check the icon registers with a tray that shows up late on Qt 6.4
         run: tests/live/checkLateTray.sh

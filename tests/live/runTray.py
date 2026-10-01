@@ -2,7 +2,6 @@ import os
 import sys
 
 repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, repo)
 sys.path.insert(0, os.path.join(repo, "src"))
 
 import tray

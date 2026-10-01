@@ -1,5 +1,4 @@
 import errno
-import importlib.util
 import io
 import os
 import shutil

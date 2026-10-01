@@ -115,7 +115,7 @@ class MouseListTests(unittest.TestCase):
         mouse = self.byKey("02bc524c")
         self.assertEqual((mouse.reading.percent, mouse.asleep), (50, True))
 
-    def testTheEndIsTheSameWhicheverBusDeliversFirst(self):
+    def testAnAsleepEntryBeforeUPowerLeavesEndsTheSame(self):
         self.mice.applyService(state(entry(percent=40, lastRead=1000.0)))
         self.addUPower(50)
         self.mice.applyService(state(entry(percent=40, lastRead=1000.0, asleep=True)))

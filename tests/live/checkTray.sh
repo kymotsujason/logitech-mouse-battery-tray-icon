@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# runs the real tray code against fake devices and services on private D-Bus buses with its own folders,
-# which checks the theme, watcher, menu, UPower, notification, lock, and trayless paths without touching the session
+# runs the real tray and service code with fake devices, and fake UPower, notification, and tray watcher services,
+# on private D-Bus buses with its own folders, which checks the theme, watcher, menu, UPower, notification, lock,
+# and trayless paths without touching the session
 set -u
 
 here=$(cd "$(dirname "$0")" && pwd)
