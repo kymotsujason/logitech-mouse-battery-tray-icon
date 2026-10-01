@@ -3,11 +3,11 @@ import select
 import time
 from dataclasses import dataclass
 
+from hidDescriptor import isHidppDescriptor
+
 LOGITECH_VENDOR = "0000046D"
 USB_BUS = "0003"
 HID_GENERIC = "hid-generic"
-VENDOR_PAGE_FIRST = 0xFF00
-DJ_REPORTS = (0x20, 0x21)
 LONG_REPORT = 0x11
 REPORT_LENGTH = 20
 SW_IDS = range(0x08, 0x10)
@@ -38,7 +38,14 @@ PING_TIMEOUT = 0.25
 CHARGING_NAMES = ["discharging", "charging", "charging slowly", "full", "charging error", "pending charge", "unknown"]
 # HID++ defines the first five codes, and the last two only come from UPower's states
 HIDPP_STATUS_COUNT = 5
-EXTERNAL_POWER = (1, 2, 3)
+CHARGING_DISCHARGING = 0
+CHARGING_CHARGING = 1
+CHARGING_SLOW = 2
+CHARGING_FULL = 3
+CHARGING_ERROR = 4
+CHARGING_PENDING = 5
+CHARGING_UNKNOWN = 6
+EXTERNAL_POWER = (CHARGING_CHARGING, CHARGING_SLOW, CHARGING_FULL)
 
 EVENT_NONE = 0
 EVENT_OTHER = 1
@@ -86,45 +93,6 @@ def readUevent(text):
         if (separator):
             fields[key] = value
     return fields
-
-
-def isHidppDescriptor(data):
-    # walks the items as HID 1.11 lays them out, where a short item's low two prefix bits give its size
-    pages = []
-    usagePageCount = 0
-    reportIds = []
-    i = 0
-    while (i < len(data)):
-        prefix = data[i]
-        if (prefix == 0xFE):
-            if (i + 1 >= len(data)):
-                return False
-            end = i + 3 + data[i + 1]
-            if (end > len(data)):
-                return False
-            i = end
-            continue
-        size = [0, 1, 2, 4][prefix & 0x03]
-        if (i + 1 + size > len(data)):
-            return False
-        value = int.from_bytes(data[i + 1:i + 1 + size], "little")
-        kind = (prefix >> 2) & 0x03
-        tag = prefix >> 4
-        if (kind == 1 and tag == 0):
-            pages.append(value)
-            usagePageCount += 1
-        elif (kind == 1 and tag == 8):
-            reportIds.append(value)
-        elif (kind == 2 and tag in (0, 1, 2) and size == 4):
-            pages.append(value >> 16)
-        i += 1 + size
-    if (usagePageCount == 0):
-        return False
-    if (any(page < VENDOR_PAGE_FIRST or page > 0xFFFF for page in pages)):
-        return False
-    if (LONG_REPORT not in reportIds):
-        return False
-    return not any(reportId in DJ_REPORTS for reportId in reportIds)
 
 
 def isHidppNode(uevent, descriptor):
@@ -363,26 +331,26 @@ def searchNode(node, skipped=frozenset(), pingTimeout=None):
 def statusCharging(status):
     # battery status (0x1000) codes mapped onto the unified battery ones
     if (status == 0):
-        return 0
+        return CHARGING_DISCHARGING
     if (status in (1, 2)):
-        return 1
+        return CHARGING_CHARGING
     if (status == 3):
-        return 3
+        return CHARGING_FULL
     if (status == 4):
-        return 2
-    return 4
+        return CHARGING_SLOW
+    return CHARGING_ERROR
 
 
 def voltageCharging(flags):
     # bit 7 means external power, and the low 3 bits then give the charge state
     if (not (flags & 0x80)):
-        return 0
+        return CHARGING_DISCHARGING
     state = flags & 0x07
     if (state == 0):
-        return 1
+        return CHARGING_CHARGING
     if (state == 1):
-        return 3
-    return 4
+        return CHARGING_FULL
+    return CHARGING_ERROR
 
 
 def parseBatteryStatus(level, status):
@@ -396,7 +364,7 @@ def parseBatteryStatus(level, status):
 
 def parseUnifiedStatus(params, hasPercent):
     percent = min(params[0], 100) if hasPercent else None
-    charging = params[2] if params[2] < HIDPP_STATUS_COUNT else 4
+    charging = params[2] if params[2] < HIDPP_STATUS_COUNT else CHARGING_ERROR
     return BatteryReading(percent, charging)
 
 

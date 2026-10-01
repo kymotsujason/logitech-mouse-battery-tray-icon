@@ -8,7 +8,7 @@ import traceback
 from PyQt6.QtCore import QFileSystemWatcher, QObject, QTimer, pyqtSignal
 
 import hidpp
-from notify import LowBatteryWarner
+from lowBattery import LowBatteryWarner
 
 READ_INTERVAL_MS = 300 * 1000
 WAKE_RETRY_MS = 6 * 1000
@@ -19,6 +19,11 @@ STATUS_MICE = "mice"
 STATUS_WAITING = "waiting"
 STATUS_DENIED = "denied"
 STATUS_NONE = "none"
+STATUS_TEXT = {
+    STATUS_WAITING: "Move your mouse to wake it.",
+    STATUS_DENIED: "Can't read the receiver. Unplug it and plug it back in.",
+    STATUS_NONE: "No Logitech mouse found",
+}
 
 
 class NodeWorker(threading.Thread):
@@ -116,8 +121,10 @@ def singleShotTimer(parent, interval, slot):
 
 
 class Mouse:
-    def __init__(self, key):
+    def __init__(self, key, pathKey=False):
         self.key = key
+        # a key built from a path can pass to a different mouse later, while a unit id or serial stays with its mouse
+        self.pathKey = pathKey
         self.name = None
         self.nodePath = None
         self.slot = None
@@ -303,7 +310,7 @@ class MouseList(QObject):
         for other in list(self.mice):
             if (other.key != key and other.nodePath == path and other.slot == found.slot):
                 self.detachHidpp(other)
-        mouse = self.mouseFor(key)
+        mouse = self.mouseFor(key, pathKey=not found.unitId)
         moved = (mouse.nodePath != path or mouse.slot != found.slot)
         mouse.name = found.name or mouse.name
         mouse.nodePath = path
@@ -311,11 +318,11 @@ class MouseList(QObject):
         mouse.feature = found.feature
         self.applyReading(mouse, found.reading, woke=(moved or linkUp))
 
-    def mouseFor(self, key):
+    def mouseFor(self, key, pathKey=False):
         for mouse in self.mice:
             if (mouse.key == key):
                 return mouse
-        mouse = Mouse(key)
+        mouse = Mouse(key, pathKey)
         self.mice.append(mouse)
         return mouse
 
@@ -338,9 +345,12 @@ class MouseList(QObject):
 
     def removeMouse(self, mouse):
         self.mice.remove(mouse)
-        # a key built from a path can pass to a different mouse later, while a unit id stays with its mouse and clears itself above REARM_PERCENT
-        if (mouse.key.startswith("/")):
+        # a unit id or serial stays with its mouse and clears itself above REARM_PERCENT, while a path key can pass to a different mouse
+        if (mouse.pathKey):
             self.warner.forget(mouse.key)
+
+    def markWarningSent(self, key, percent):
+        self.warner.markSent(key, percent)
 
     def applyReading(self, mouse, reading, woke=False):
         now = time.time()
@@ -423,7 +433,7 @@ class MouseList(QObject):
         self.changed.emit()
 
     def applyUPower(self, upowerMouse):
-        mouse = self.mouseFor(upowerMouse.key)
+        mouse = self.mouseFor(upowerMouse.key, pathKey=upowerMouse.pathKey)
         mouse.upowerPath = upowerMouse.path
         if (mouse.name is None):
             mouse.name = upowerMouse.name

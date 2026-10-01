@@ -1,50 +1,14 @@
 from PyQt6.QtCore import QMetaType, QObject, QVariant, pyqtSlot
-from PyQt6.QtDBus import QDBus, QDBusArgument, QDBusConnection, QDBusMessage
+from PyQt6.QtDBus import QDBusArgument, QDBusConnection, QDBusMessage
 
-import hidpp
+import dbusCalls
 
 SERVICE = "org.freedesktop.Notifications"
 PATH = "/org/freedesktop/Notifications"
 APP_NAME = "Mouse Battery"
 APP_ICON = "logitech-mouse-battery"
-LOW_PERCENT = 10
-CRITICAL_PERCENT = 5
-REARM_PERCENT = 20
 CALL_TIMEOUT_MS = 5000
 NO_REPLY = "org.freedesktop.DBus.Error.NoReply"
-
-
-class LowBatteryWarner:
-    def __init__(self):
-        self.sent = {}
-
-    def update(self, key, reading, asleep):
-        if (asleep or reading is None):
-            return None
-        if (reading.charging in hidpp.EXTERNAL_POWER):
-            self.sent.pop(key, None)
-            return None
-        if (reading.charging != 0 or reading.percent is None):
-            return None
-        # a charge the app never saw (suspend, mouse off, wall charger, new batteries) only shows as a high reading, and the margin over LOW_PERCENT keeps a wobbling level from warning twice
-        if (reading.percent > REARM_PERCENT):
-            self.sent.pop(key, None)
-            return None
-        sent = self.sent.get(key, set())
-        if (reading.percent <= CRITICAL_PERCENT and CRITICAL_PERCENT not in sent):
-            return reading.percent
-        if (reading.percent <= LOW_PERCENT and LOW_PERCENT not in sent):
-            return reading.percent
-        return None
-
-    def markSent(self, key, percent):
-        sent = self.sent.setdefault(key, set())
-        sent.add(LOW_PERCENT)
-        if (percent <= CRITICAL_PERCENT):
-            sent.add(CRITICAL_PERCENT)
-
-    def forget(self, key):
-        self.sent.pop(key, None)
 
 
 def uintArgument(value):
@@ -73,7 +37,7 @@ class Notifier(QObject):
         message = QDBusMessage.createMethodCall(SERVICE, PATH, SERVICE, "Notify")
         # a plain list goes out as av and a plain dict fails on PyQt6 6.4, thus both are typed by hand
         message.setArguments([APP_NAME, uintArgument(0), APP_ICON, summary, body, stringListArgument(flat), QVariant({"desktop-entry": APP_ICON}), -1])
-        reply = self.bus.call(message, QDBus.CallMode.Block, CALL_TIMEOUT_MS)
+        reply = dbusCalls.call(self.bus, message, CALL_TIMEOUT_MS)
         if (reply.type() != QDBusMessage.MessageType.ReplyMessage or not reply.arguments()):
             return (None, reply.errorName())
         notificationId = reply.arguments()[0]

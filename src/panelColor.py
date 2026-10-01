@@ -1,7 +1,9 @@
 import os
 
-from PyQt6.QtDBus import QDBusMessage, QDBusVariant
+from PyQt6.QtDBus import QDBusMessage
 from PyQt6.QtGui import QColor
+
+import dbusCalls
 
 WHITE = QColor(255, 255, 255)
 PORTAL_SERVICE = "org.freedesktop.portal.Desktop"
@@ -78,18 +80,12 @@ def baseColor(env, configHome, dirs, portalScheme, paletteColor):
     return QColor(paletteColor)
 
 
-def plain(value):
-    while (isinstance(value, QDBusVariant)):
-        value = value.variant()
-    return value
-
-
 def readPortalColorScheme(bus):
     for method in ("ReadOne", "Read"):
         message = QDBusMessage.createMethodCall(PORTAL_SERVICE, PORTAL_PATH, SETTINGS_INTERFACE, method)
         message.setArguments([APPEARANCE, "color-scheme"])
         reply = bus.call(message)
         if (reply.type() == QDBusMessage.MessageType.ReplyMessage and reply.arguments()):
-            value = plain(reply.arguments()[0])
+            value = dbusCalls.plain(reply.arguments()[0])
             return value if isinstance(value, int) else 0
     return 0

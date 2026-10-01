@@ -9,7 +9,7 @@ ICON_SIZES = [16, 22, 24, 32, 44, 48, 64, 96, 128]
 NUMBER_MIN_SIZE = 22
 # up to this size antialiased digits read faint, thus they're drawn crisp
 CRISP_MAX_SIZE = 22
-LOW_PERCENT = 20
+RED_PERCENT = 20
 GREEN = "#30D158"
 RED = "#FF453A"
 GRAY = "#8E8E93"
@@ -43,7 +43,7 @@ def fillColor(state, baseColor):
         return QColor(GRAY)
     if (state.charging):
         return QColor(GREEN)
-    if (state.percent is not None and state.percent <= LOW_PERCENT):
+    if (state.percent is not None and state.percent <= RED_PERCENT):
         return QColor(RED)
     return QColor(baseColor)
 
@@ -56,7 +56,7 @@ def markColor(state, baseColor):
 
 def numberColor(state, baseColor):
     # at 5% the red fill is a single row, thus the number turns red with it
-    if (not (state.asleep or state.empty or state.charging) and state.percent is not None and state.percent <= LOW_PERCENT):
+    if (not (state.asleep or state.empty or state.charging) and state.percent is not None and state.percent <= RED_PERCENT):
         return QColor(RED)
     return markColor(state, baseColor)
 

@@ -24,6 +24,10 @@ contents:
     dst: /usr/share/logitech-mouse-battery/autostart.py
   - src: src/check.py
     dst: /usr/share/logitech-mouse-battery/check.py
+  - src: src/dbusCalls.py
+    dst: /usr/share/logitech-mouse-battery/dbusCalls.py
+  - src: src/hidDescriptor.py
+    dst: /usr/share/logitech-mouse-battery/hidDescriptor.py
   - src: src/hidpp.py
     dst: /usr/share/logitech-mouse-battery/hidpp.py
   - src: src/icon.py
@@ -32,6 +36,8 @@ contents:
     dst: /usr/share/logitech-mouse-battery/installWatch.py
   - src: src/isHidpp.py
     dst: /usr/share/logitech-mouse-battery/isHidpp.py
+  - src: src/lowBattery.py
+    dst: /usr/share/logitech-mouse-battery/lowBattery.py
   - src: src/mice.py
     dst: /usr/share/logitech-mouse-battery/mice.py
   - src: src/notify.py

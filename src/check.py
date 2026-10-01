@@ -4,13 +4,12 @@ import sys
 from PyQt6.QtCore import QCoreApplication
 
 import hidpp
+import mice
 import upower
-
-DEFAULT_NAME = "Logitech mouse"
 
 
 def printMouse(name, source, reading):
-    print((name or DEFAULT_NAME) + " (" + source + ")")
+    print((name or mice.DEFAULT_NAME) + " (" + source + ")")
     if (reading is None):
         print("  no battery reply")
     else:

@@ -1,10 +1,10 @@
 import os
 import sys
 
-# udev runs this with -I, which leaves the script's own folder off sys.path, thus the sibling import needs it put back
+# udev runs this with -I, which leaves the script's own folder off sys.path, so the sibling import needs it put back
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import hidpp
+import hidDescriptor
 
 
 def main(argv):
@@ -15,7 +15,7 @@ def main(argv):
             descriptor = f.read()
     except OSError:
         return 1
-    return 0 if hidpp.isHidppDescriptor(descriptor) else 1
+    return 0 if hidDescriptor.isHidppDescriptor(descriptor) else 1
 
 
 if (__name__ == "__main__"):

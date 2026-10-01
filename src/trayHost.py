@@ -4,9 +4,10 @@ import subprocess
 import sys
 
 from PyQt6.QtCore import QObject, QUrl, pyqtSignal, pyqtSlot
-from PyQt6.QtDBus import QDBus, QDBusMessage, QDBusServiceWatcher
+from PyQt6.QtDBus import QDBusMessage, QDBusServiceWatcher
 from PyQt6.QtGui import QDesktopServices
 
+import dbusCalls
 import mice
 import panelColor
 
@@ -24,17 +25,17 @@ EXTENSION_URL = "https://extensions.gnome.org/extension/615/appindicator-support
 def hostRegistered(bus):
     message = QDBusMessage.createMethodCall(WATCHER_SERVICE, WATCHER_PATH, "org.freedesktop.DBus.Properties", "Get")
     message.setArguments([WATCHER_SERVICE, "IsStatusNotifierHostRegistered"])
-    reply = bus.call(message, QDBus.CallMode.Block, CALL_TIMEOUT_MS)
-    if (reply.type() != QDBusMessage.MessageType.ReplyMessage or not reply.arguments()):
+    reply = dbusCalls.call(bus, message, CALL_TIMEOUT_MS)
+    if (dbusCalls.failure(reply) is not None or not reply.arguments()):
         return False
-    return bool(panelColor.plain(reply.arguments()[0]))
+    return bool(dbusCalls.plain(reply.arguments()[0]))
 
 
 def nameHasOwner(bus, name):
     message = QDBusMessage.createMethodCall("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "NameHasOwner")
     message.setArguments([name])
-    reply = bus.call(message, QDBus.CallMode.Block, CALL_TIMEOUT_MS)
-    return (reply.type() == QDBusMessage.MessageType.ReplyMessage and bool(reply.arguments() and reply.arguments()[0]))
+    reply = dbusCalls.call(bus, message, CALL_TIMEOUT_MS)
+    return (dbusCalls.failure(reply) is None and bool(reply.arguments() and reply.arguments()[0]))
 
 
 def installedExtension():

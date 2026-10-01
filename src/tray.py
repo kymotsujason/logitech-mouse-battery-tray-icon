@@ -12,6 +12,7 @@ from PyQt6.QtGui import QAction, QIcon, QPalette
 from PyQt6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
 import autostart
+import dbusCalls
 import hidpp
 import mice
 import panelColor
@@ -27,11 +28,6 @@ APP_NAME = "Mouse Battery"
 LOCK_NAME = "logitech-mouse-battery.lock"
 TARGET_NICENESS = 10
 PROJECT_URL = "https://github.com/kymotsujason/logitech-mouse-battery-tray-icon"
-STATUS_TEXT = {
-    mice.STATUS_WAITING: "Move your mouse to wake it.",
-    mice.STATUS_DENIED: "Can't read the receiver. Unplug it and plug it back in.",
-    mice.STATUS_NONE: "No Logitech mouse found",
-}
 
 
 def iconStateFor(mouse):
@@ -47,9 +43,9 @@ def mouseLine(name, mouse):
     level = hidpp.levelText(mouse.reading)
     if (mouse.asleep):
         return name + ", asleep, " + level + " at " + time.strftime("%H:%M", time.localtime(mouse.lastRead))
-    if (mouse.reading.charging in (1, 2)):
+    if (mouse.reading.charging in (hidpp.CHARGING_CHARGING, hidpp.CHARGING_SLOW)):
         return name + ", charging, " + level
-    if (mouse.reading.charging == 3):
+    if (mouse.reading.charging == hidpp.CHARGING_FULL):
         return name + ", full, " + level
     return name + ", " + level
 
@@ -59,7 +55,7 @@ def statusLines(mouseList):
     lines = [mouseLine(names[mouse.key], mouse) for mouse in mouseList.mice]
     if (lines):
         return lines
-    return [STATUS_TEXT[mouseList.status()]]
+    return [mice.STATUS_TEXT[mouseList.status()]]
 
 
 def printException(kind, value, tb):
@@ -199,7 +195,7 @@ class MouseBatteryApp(QObject):
         # NoReply means the bus already handed the message to the server (or is starting the server for it), and asking again after a timeout would block every reading
         if (notificationId is None and error != NO_REPLY):
             return
-        self.mouseList.warner.markSent(key, percent)
+        self.mouseList.markWarningSent(key, percent)
 
     def showAbout(self):
         QMessageBox.about(None, "About Mouse Battery", "Mouse Battery " + VERSION + "\n\nShows the battery of Logitech mice in the system tray.\n\n" + PROJECT_URL + "\n\nLicensed under the GNU GPL, version 3 or later.\nNot affiliated with Logitech.")
@@ -265,7 +261,7 @@ class MouseBatteryApp(QObject):
     def onPortalSetting(self, message):
         arguments = message.arguments()
         if (len(arguments) >= 3 and arguments[0] == panelColor.APPEARANCE and arguments[1] == "color-scheme"):
-            value = panelColor.plain(arguments[2])
+            value = dbusCalls.plain(arguments[2])
             self.portalScheme = value if isinstance(value, int) else 0
             self.updateTray()
 

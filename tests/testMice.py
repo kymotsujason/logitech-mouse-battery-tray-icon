@@ -455,7 +455,7 @@ class MouseListTests(unittest.TestCase):
         def onLowBattery(key, name, percent):
             warnings.append((key, name, percent))
             # the tray marks a warning sent once its notification goes out
-            self.mice.warner.markSent(key, percent)
+            self.mice.markWarningSent(key, percent)
 
         self.mice.lowBattery.connect(onLowBattery)
         self.nodes.add(RECEIVER, mouseHandler(answers={(5, 0): [0x0F, 0x02], (5, 1): [9, 0x02, 0, 0]}))
@@ -474,14 +474,14 @@ class MouseListTests(unittest.TestCase):
         def onLowBattery(key, name, percent):
             warnings.append(percent)
             # the tray marks a warning sent once its notification goes out
-            self.mice.warner.markSent(key, percent)
+            self.mice.markWarningSent(key, percent)
 
         self.mice.lowBattery.connect(onLowBattery)
         return warnings
 
     def upowerWarningsAcrossARemoval(self, path, key):
         warnings = self.sentWarnings()
-        lowMouse = upower.UPowerMouse(path, key, "MX Master 3", hidpp.BatteryReading(9, 0))
+        lowMouse = upower.UPowerMouse(path, key, "MX Master 3", hidpp.BatteryReading(9, 0), pathKey=(key == path))
         self.mice.applyUPower(lowMouse)
         self.mice.removeUPower(path)
         self.mice.applyUPower(lowMouse)
@@ -516,7 +516,7 @@ class MouseListTests(unittest.TestCase):
         path = "/org/freedesktop/UPower/devices/mouse_hidpp_battery_0"
         self.mice.applyUPower(upower.UPowerMouse(path, "02bc524c", "PRO X3", hidpp.BatteryReading(55, 0)))
         self.assertEqual((self.keys(), self.mouse().upowerPath, self.mouse().reading.percent), (["02bc524c"], path, 55))
-        self.mice.warner.markSent("02bc524c", 9)
+        self.mice.markWarningSent("02bc524c", 9)
         self.mice.removeUPower(path)
         self.assertEqual((self.keys(), self.mouse().upowerPath, self.mice.warner.sent), (["02bc524c"], None, {"02bc524c": {10}}))
 

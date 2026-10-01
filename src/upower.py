@@ -1,8 +1,9 @@
 from dataclasses import dataclass
 
 from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
-from PyQt6.QtDBus import QDBusConnection, QDBusMessage, QDBusServiceWatcher, QDBusVariant
+from PyQt6.QtDBus import QDBusConnection, QDBusMessage, QDBusServiceWatcher
 
+import dbusCalls
 import hidpp
 
 SERVICE = "org.freedesktop.UPower"
@@ -14,9 +15,9 @@ TYPE_MOUSE = 5
 NATIVE_PATH_PREFIX = "hidpp_battery"
 LEVEL_NONE = 1
 LEVEL_NAMES = {3: "low", 4: "critical", 6: "normal", 7: "high", 8: "full"}
-# UPower's states on the HID++ charging codes, with 5 and 6 for the two states HID++ doesn't have
-STATE_CODES = {1: 1, 2: 0, 3: 0, 4: 3, 5: 5, 6: 0}
-UNKNOWN_CODE = 6
+# UPower's State values mapped onto the charging codes, where pending charge keeps a code of its own and any value missing here, such as 0 (unknown), becomes CHARGING_UNKNOWN
+STATE_CODES = {1: hidpp.CHARGING_CHARGING, 2: hidpp.CHARGING_DISCHARGING, 3: hidpp.CHARGING_DISCHARGING, 4: hidpp.CHARGING_FULL, 5: hidpp.CHARGING_PENDING, 6: hidpp.CHARGING_DISCHARGING}
+UNKNOWN_CODE = hidpp.CHARGING_UNKNOWN
 
 
 @dataclass(frozen=True)
@@ -25,16 +26,11 @@ class UPowerMouse:
     key: str
     name: str | None
     reading: hidpp.BatteryReading
-
-
-def plain(value):
-    while (isinstance(value, QDBusVariant)):
-        value = value.variant()
-    return value
+    pathKey: bool = False
 
 
 def mouseFromProperties(path, props):
-    values = {key: plain(value) for key, value in props.items()}
+    values = {key: dbusCalls.plain(value) for key, value in props.items()}
     if (values.get("Type") != TYPE_MOUSE):
         return None
     nativePath = str(values.get("NativePath", ""))
@@ -49,8 +45,8 @@ def mouseFromProperties(path, props):
     else:
         # UPower's docs call the percentage an approximation whenever the device reports coarse levels
         reading = hidpp.BatteryReading(None, charging, level=LEVEL_NAMES.get(level, "unknown level"))
-    key = str(values.get("Serial", "")).replace("-", "").lower() or path
-    return UPowerMouse(path, key, values.get("Model") or None, reading)
+    serial = str(values.get("Serial", "")).replace("-", "").lower()
+    return UPowerMouse(path, serial or path, values.get("Model") or None, reading, pathKey=not serial)
 
 
 def callMethod(bus, path, interface, method, arguments=None):
@@ -67,7 +63,7 @@ def enumeratePaths(bus):
     arguments = callMethod(bus, ROOT_PATH, SERVICE, "EnumerateDevices")
     if (not arguments):
         return []
-    return [str(plain(path)) for path in arguments[0]]
+    return [dbusCalls.pathText(path) for path in arguments[0]]
 
 
 def getProperties(bus, path):
@@ -155,7 +151,7 @@ class UPowerWatcher(QObject):
             self.refresh(path)
             return
         # UPower can set Type after DeviceAdded, once the mouse's input device shows up
-        changed = plain(arguments[1]) if len(arguments) > 1 else {}
+        changed = dbusCalls.plain(arguments[1]) if len(arguments) > 1 else {}
         if ("Type" in changed):
             self.refresh(path)
 
@@ -164,5 +160,4 @@ def pathArgument(message):
     arguments = message.arguments()
     if (not arguments):
         return ""
-    value = plain(arguments[0])
-    return value.path() if hasattr(value, "path") else str(value)
+    return dbusCalls.pathText(arguments[0])

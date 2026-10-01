@@ -48,6 +48,10 @@ class ReadingTests(unittest.TestCase):
         mouse = upower.mouseFromProperties(PATH, mouseProperties())
         self.assertEqual(mouse, upower.UPowerMouse(PATH, "12ab34cd", "MX Master 3", hidpp.BatteryReading(55, 0)))
 
+    def testAPathKeyIsMarked(self):
+        self.assertTrue(upower.mouseFromProperties(PATH, mouseProperties(Serial="")).pathKey)
+        self.assertFalse(upower.mouseFromProperties(PATH, mouseProperties()).pathKey)
+
     def testLevelOnlyMouseHasNoPercentage(self):
         reading = upower.mouseFromProperties(PATH, mouseProperties(BatteryLevel=3)).reading
         self.assertEqual(reading, hidpp.BatteryReading(None, 0, level="low"))

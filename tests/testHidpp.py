@@ -5,54 +5,9 @@ import unittest
 from unittest import mock
 
 import hidpp
+from tests.fakes.descriptors import C54F_DESCRIPTOR, GENERIC_DESKTOP_DESCRIPTOR
 from tests.fakes.fakeDevice import NAME, FakeDevice, deviceError, mouseHandler, receiverError, reply
 
-C54F_DESCRIPTOR = bytes.fromhex("06 43 ff 0a 01 03 a1 01 85 10 95 06 75 08 15 00 26 ff 00 09 01 81 00 09 01 91 00 c0 06 43 ff 0a 02 03 a1 01 85 11 95 13 75 08 15 00 26 ff 00 09 02 81 00 09 02 91 00 c0")
-GENERIC_DESKTOP_DESCRIPTOR = bytes.fromhex("05 01 09 02 a1 01 09 01 a1 00 95 10 75 01 15 00 25 01 05 09 19 01 29 10")
-
-
-class DescriptorTests(unittest.TestCase):
-    def testReceiverHidppDescriptorPasses(self):
-        self.assertTrue(hidpp.isHidppDescriptor(C54F_DESCRIPTOR))
-
-    def testGenericDesktopFails(self):
-        self.assertFalse(hidpp.isHidppDescriptor(GENERIC_DESKTOP_DESCRIPTOR))
-
-    def testEitherDjReportAloneRejects(self):
-        self.assertFalse(hidpp.isHidppDescriptor(C54F_DESCRIPTOR + bytes.fromhex("85 20")))
-        self.assertFalse(hidpp.isHidppDescriptor(C54F_DESCRIPTOR + bytes.fromhex("85 21")))
-
-    def testKeyboardCollectionInAVendorDescriptorFails(self):
-        self.assertFalse(hidpp.isHidppDescriptor(C54F_DESCRIPTOR + bytes.fromhex("05 07 09 06 a1 01 c0")))
-
-    def testExtendedUsageFromGenericDesktopFails(self):
-        self.assertFalse(hidpp.isHidppDescriptor(C54F_DESCRIPTOR + bytes.fromhex("0b 02 00 01 00")))
-
-    def testExtendedUsageMinimumFromTheKeyboardPageFails(self):
-        self.assertFalse(hidpp.isHidppDescriptor(C54F_DESCRIPTOR + bytes.fromhex("1b e0 00 07 00")))
-
-    def testExtendedUsageMaximumFromTheKeyboardPageFails(self):
-        self.assertFalse(hidpp.isHidppDescriptor(C54F_DESCRIPTOR + bytes.fromhex("2b e7 00 07 00")))
-
-    def testNoUsagePageFails(self):
-        self.assertFalse(hidpp.isHidppDescriptor(bytes.fromhex("85 11 09 01 c0")))
-
-    def testExtendedUsageAloneIsNotAUsagePage(self):
-        self.assertFalse(hidpp.isHidppDescriptor(bytes.fromhex("0b 01 00 00 ff 85 11")))
-
-    def testMissingLongReportFails(self):
-        self.assertFalse(hidpp.isHidppDescriptor(bytes.fromhex("06 43 ff 0a 01 03 a1 01 85 10 c0")))
-
-    def testTruncatedItemFails(self):
-        # a Report ID item missing its data byte, which only the bounds check can reject
-        self.assertFalse(hidpp.isHidppDescriptor(C54F_DESCRIPTOR + bytes.fromhex("85")))
-
-    def testLongItemIsSkipped(self):
-        # the long item's data would read as a keyboard usage page if it were parsed as short items
-        self.assertTrue(hidpp.isHidppDescriptor(C54F_DESCRIPTOR + bytes.fromhex("fe 02 10 05 07")))
-
-    def testTruncatedLongItemFails(self):
-        self.assertFalse(hidpp.isHidppDescriptor(C54F_DESCRIPTOR + bytes.fromhex("fe 05 10 05")))
 
 
 class FindNodeTests(unittest.TestCase):
