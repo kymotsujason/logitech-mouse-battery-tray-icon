@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import QApplication
 import check
 import hidpp
 import upower
-from tests.fakeDevice import NAME, FakeNodes, mouseHandler
+from tests.fakes.fakeDevice import NAME, FakeNodes, mouseHandler
 
 app = QApplication.instance() or QApplication([])
 

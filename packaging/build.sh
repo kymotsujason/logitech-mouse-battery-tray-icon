@@ -4,7 +4,7 @@
 set -eu
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
-version=$(sed -n 's/^VERSION = "\([^"]*\)"$/\1/p' "$repo/version.py")
+version=$(sed -n 's/^VERSION = "\([^"]*\)"$/\1/p' "$repo/src/version.py")
 mkdir -p "$repo/dist"
 for packager in deb rpm; do
     docker run --rm --user "$(id -u):$(id -g)" -e VERSION="$version" -v "$repo:/work" -w /work goreleaser/nfpm:v2.47.0 package --config packaging/nfpm.yaml --packager "$packager" --target dist/

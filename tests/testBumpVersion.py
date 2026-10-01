@@ -10,7 +10,7 @@ import version
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 METAINFO = "packaging/io.github.kymotsujason.LogitechMouseBattery.metainfo.xml"
-FILES = ["version.py", "README.md", "packaging/bumpVersion.py", "packaging/aur/PKGBUILD", "packaging/aur/.SRCINFO", METAINFO]
+FILES = ["src/version.py", "README.md", "packaging/bumpVersion.py", "packaging/aur/PKGBUILD", "packaging/aur/.SRCINFO", METAINFO]
 
 
 class BumpVersionTests(unittest.TestCase):
@@ -36,7 +36,7 @@ class BumpVersionTests(unittest.TestCase):
 
     def testANewVersionReachesEveryFileThatCarriesIt(self):
         self.assertEqual(self.bump("9.8.7"), 0)
-        self.assertIn('VERSION = "9.8.7"', self.read("version.py"))
+        self.assertIn('VERSION = "9.8.7"', self.read("src/version.py"))
         self.assertIn("\npkgver=9.8.7\n", self.read("packaging/aur/PKGBUILD"))
         srcinfo = self.read("packaging/aur/.SRCINFO")
         self.assertIn("\tpkgver = 9.8.7\n", srcinfo)

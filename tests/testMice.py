@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import QApplication
 import hidpp
 import mice
 import upower
-from tests.fakeDevice import NAME, FakeDevice, FakeNodes, mouseHandler, reply
+from tests.fakes.fakeDevice import NAME, FakeDevice, FakeNodes, mouseHandler, reply
 
 app = QApplication.instance() or QApplication([])
 FEATURE = hidpp.BatteryFeature(1, hidpp.FEATURE_UNIFIED_BATTERY, 5, True)

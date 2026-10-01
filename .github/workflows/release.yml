@@ -26,9 +26,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          version=$(sed -n 's/^VERSION = "\([^"]*\)"$/\1/p' version.py)
+          version=$(sed -n 's/^VERSION = "\([^"]*\)"$/\1/p' src/version.py)
           if [ -z "$version" ]; then
-            echo "::error::version.py holds no VERSION line"
+            echo "::error::src/version.py holds no VERSION line"
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"

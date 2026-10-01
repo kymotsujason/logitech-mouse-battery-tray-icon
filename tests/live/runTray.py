@@ -1,11 +1,13 @@
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, repo)
+sys.path.insert(0, os.path.join(repo, "src"))
 
 import hidpp
 import tray
-from tests.fakeDevice import FakeDevice, mouseHandler
+from tests.fakes.fakeDevice import FakeDevice, mouseHandler
 
 percentFile = os.environ.get("LIVE_PERCENT_FILE")
 

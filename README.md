@@ -109,4 +109,4 @@ To release a new version, run `python3 packaging/bumpVersion.py <VERSION>`, wher
 
 ## License
 
-Mouse Battery is licensed under the GNU General Public License, version 3 or later (see `LICENSE`). The bundled Noto Sans Medium font is under the SIL Open Font License 1.1 (see `OFL.txt`).
+Mouse Battery is licensed under the GNU General Public License, version 3 or later (see `LICENSE`). The bundled Noto Sans Medium font is under the SIL Open Font License 1.1 (see `src/OFL.txt`).

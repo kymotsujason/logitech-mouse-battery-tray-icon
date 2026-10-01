@@ -4,7 +4,7 @@
 set -eu
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
-version=$(sed -n 's/^VERSION = "\([^"]*\)"$/\1/p' "$repo/version.py")
+version=$(sed -n 's/^VERSION = "\([^"]*\)"$/\1/p' "$repo/src/version.py")
 tarball="logitech-mouse-battery-$version.tar.gz"
 if [ ! -f "$repo/dist/$tarball" ]; then
     echo "dist/$tarball is missing, run packaging/tarball.sh first" >&2

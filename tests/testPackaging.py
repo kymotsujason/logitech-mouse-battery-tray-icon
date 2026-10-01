@@ -16,6 +16,7 @@ app = QApplication.instance() or QApplication([])
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PACKAGING = os.path.join(REPO, "packaging")
+SRC = os.path.join(REPO, "src")
 
 
 def entryKeys(path):
@@ -57,7 +58,7 @@ class UdevRuleTests(unittest.TestCase):
         with open(os.path.join(PACKAGING, "logitech-mouse-battery")) as f:
             appDir = next(line.split("=", 1)[1] for line in f.read().splitlines() if line.startswith("APP_DIR="))
         self.assertIn(" " + appDir + "/isHidpp.py ", self.readRule()[0])
-        self.assertTrue(os.path.exists(os.path.join(REPO, "isHidpp.py")))
+        self.assertTrue(os.path.exists(os.path.join(SRC, "isHidpp.py")))
 
 
 SVG = "{http://www.w3.org/2000/svg}"
@@ -113,8 +114,8 @@ class MetainfoTests(unittest.TestCase):
 
 
 def appFiles():
-    # every Python module at the repo root is part of the app, thus a new one has to be packaged as well
-    modules = sorted(name for name in os.listdir(REPO) if name.endswith(".py"))
+    # every Python module in src/ is part of the app, so a new one has to be packaged as well
+    modules = sorted(name for name in os.listdir(SRC) if name.endswith(".py"))
     return modules + ["NotoSans-Medium.ttf", "OFL.txt"]
 
 
@@ -125,7 +126,7 @@ class NfpmTests(unittest.TestCase):
 
     def testEveryAppFileGoesToTheAppFolder(self):
         for name in appFiles():
-            self.assertIn("  - src: " + name + "\n    dst: /usr/share/logitech-mouse-battery/" + name + "\n", self.text)
+            self.assertIn("  - src: src/" + name + "\n    dst: /usr/share/logitech-mouse-battery/" + name + "\n", self.text)
 
     def testTheVersionComesFromTheBuild(self):
         self.assertIn("\nversion: ${VERSION}\n", self.text)
@@ -151,7 +152,7 @@ class PkgbuildTests(unittest.TestCase):
 
     def testEveryAppFileGoesToTheAppFolder(self):
         line = next(line for line in self.text.splitlines() if '-t "$pkgdir/usr/share/$pkgname"' in line)
-        self.assertEqual(line.split('-t "$pkgdir/usr/share/$pkgname"', 1)[1].split(), appFiles())
+        self.assertEqual(line.split('-t "$pkgdir/usr/share/$pkgname"', 1)[1].split(), ["src/" + name for name in appFiles()])
 
     def testTheSrcinfoMatchesTheVersion(self):
         with open(os.path.join(PACKAGING, "aur", ".SRCINFO")) as f:

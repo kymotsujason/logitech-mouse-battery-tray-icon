@@ -111,7 +111,7 @@ EOF
 }
 
 startWatcher() {
-    python3 "$here/fakeWatcher.py" "$session" "$1" > "$work/watcher$1.log" 2>&1 &
+    python3 "$here/../fakes/fakeWatcher.py" "$session" "$1" > "$work/watcher$1.log" 2>&1 &
     watcherPid=$!
     pids+=("$watcherPid")
     waitForLine "$work/watcher$1.log" "owns the watcher name" > /dev/null
@@ -133,9 +133,9 @@ applyScheme() {
     systemd-run --user --collect --wait --quiet "${privateEnv[@]}" plasma-apply-colorscheme "$1" > /dev/null
 }
 
-python3 "$here/fakeNotifications.py" "$session" dontOpen > "$work/notifications.log" 2>&1 &
+python3 "$here/../fakes/fakeNotifications.py" "$session" dontOpen > "$work/notifications.log" 2>&1 &
 pids+=($!)
-python3 "$here/fakeUPower.py" "$system" "$work/upowerPercent" > "$work/upower.log" 2>&1 &
+python3 "$here/../fakes/fakeUPower.py" "$system" "$work/upowerPercent" > "$work/upower.log" 2>&1 &
 pids+=($!)
 waitForLine "$work/notifications.log" "owns the notifications name" > /dev/null
 waitForLine "$work/upower.log" "owns the upower name" > /dev/null

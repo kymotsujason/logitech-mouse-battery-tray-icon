@@ -20,31 +20,31 @@ contents:
     type: dir
     file_info:
       mode: 0755
-  - src: autostart.py
+  - src: src/autostart.py
     dst: /usr/share/logitech-mouse-battery/autostart.py
-  - src: check.py
+  - src: src/check.py
     dst: /usr/share/logitech-mouse-battery/check.py
-  - src: hidpp.py
+  - src: src/hidpp.py
     dst: /usr/share/logitech-mouse-battery/hidpp.py
-  - src: icon.py
+  - src: src/icon.py
     dst: /usr/share/logitech-mouse-battery/icon.py
-  - src: isHidpp.py
+  - src: src/isHidpp.py
     dst: /usr/share/logitech-mouse-battery/isHidpp.py
-  - src: mice.py
+  - src: src/mice.py
     dst: /usr/share/logitech-mouse-battery/mice.py
-  - src: notify.py
+  - src: src/notify.py
     dst: /usr/share/logitech-mouse-battery/notify.py
-  - src: panelColor.py
+  - src: src/panelColor.py
     dst: /usr/share/logitech-mouse-battery/panelColor.py
-  - src: tray.py
+  - src: src/tray.py
     dst: /usr/share/logitech-mouse-battery/tray.py
-  - src: upower.py
+  - src: src/upower.py
     dst: /usr/share/logitech-mouse-battery/upower.py
-  - src: version.py
+  - src: src/version.py
     dst: /usr/share/logitech-mouse-battery/version.py
-  - src: NotoSans-Medium.ttf
+  - src: src/NotoSans-Medium.ttf
     dst: /usr/share/logitech-mouse-battery/NotoSans-Medium.ttf
-  - src: OFL.txt
+  - src: src/OFL.txt
     dst: /usr/share/logitech-mouse-battery/OFL.txt
   - src: packaging/logitech-mouse-battery.desktop
     dst: /usr/share/applications/logitech-mouse-battery.desktop

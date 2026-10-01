@@ -7,7 +7,8 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PKGBUILD = "packaging/aur/PKGBUILD"
 SRCINFO = "packaging/aur/.SRCINFO"
 METAINFO = "packaging/io.github.kymotsujason.LogitechMouseBattery.metainfo.xml"
-VERSION_FORMAT = re.compile(r"^\d+\.\d+\.\d+$")
+VERSION_FILE = "src/version.py"
+VERSION_FORMAT =re.compile(r"^\d+\.\d+\.\d+$")
 
 
 def readFile(name):
@@ -16,7 +17,7 @@ def readFile(name):
 
 
 def readVersion():
-    match = re.search(r'VERSION = "([^"]*)"', readFile("version.py"))
+    match = re.search(r'VERSION = "([^"]*)"', readFile(VERSION_FILE))
     return match.group(1) if match else None
 
 
@@ -36,7 +37,7 @@ def requireReplace(old, new, text, name):
 def bumpedFiles(old, new, today):
     # every new text is worked out before anything is written, thus a file that doesn't match leaves all of them as they were
     files = {}
-    files["version.py"] = requireSub(r'^VERSION = "' + re.escape(old) + '"$', 'VERSION = "' + new + '"', readFile("version.py"), "version.py")
+    files[VERSION_FILE] = requireSub(r'^VERSION = "' + re.escape(old) + '"$', 'VERSION = "' + new + '"', readFile(VERSION_FILE), VERSION_FILE)
     pkgbuild = requireSub(r"^pkgver=" + re.escape(old) + "$", "pkgver=" + new, readFile(PKGBUILD), PKGBUILD)
     files[PKGBUILD] = re.sub(r"^pkgrel=\d+$", "pkgrel=1", pkgbuild, flags=re.M)
     srcinfo = requireReplace(old, new, readFile(SRCINFO), SRCINFO)

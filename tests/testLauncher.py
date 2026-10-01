@@ -19,7 +19,7 @@ class LauncherTests(unittest.TestCase):
         os.makedirs(self.appDir)
         for name in ("check", "tray"):
             self.writeScript(name, "import sys\nprint('" + name + "', sys.flags.dont_write_bytecode, sys.argv[1:])\n")
-        shutil.copy(os.path.join(REPO, "version.py"), self.appDir)
+        shutil.copy(os.path.join(REPO, "src", "version.py"), self.appDir)
         with open(LAUNCHER) as f:
             text = f.read()
         # the copy runs against a stand in app folder, thus the real folder line has to be there to replace

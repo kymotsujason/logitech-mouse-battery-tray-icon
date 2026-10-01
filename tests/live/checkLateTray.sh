@@ -50,7 +50,7 @@ EOF
     dbus-daemon --config-file="/tmp/$name/bus.conf" --fork --print-address=1 --print-pid=1 > "/tmp/$name/busInfo"
     local address
     address=$(sed -n 1p "/tmp/$name/busInfo")
-    python3 /tmp/app/tests/live/fakeWatcher.py "$address" A 5 > "/tmp/$name/watcher.log" 2>&1 &
+    python3 /tmp/app/tests/fakes/fakeWatcher.py "$address" A 5 > "/tmp/$name/watcher.log" 2>&1 &
     local watcherPid=$!
     sleep 1
     env -u QT_QPA_PLATFORMTHEME DISPLAY=:99 QT_QPA_PLATFORM=xcb DBUS_SESSION_BUS_ADDRESS="$address" DBUS_SYSTEM_BUS_ADDRESS="$address" XDG_RUNTIME_DIR="/tmp/$name/runtime" XDG_CONFIG_HOME="/tmp/$name/config" LIVE_EARLY_TRAY="$early" python3 -B /tmp/app/tests/live/runTray.py > "/tmp/$name/app.log" 2>&1 &
