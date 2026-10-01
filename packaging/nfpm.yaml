@@ -22,40 +22,76 @@ contents:
       mode: 0755
   - src: src/autostart.py
     dst: /usr/share/logitech-mouse-battery/autostart.py
+    file_info:
+      mode: 0644
   - src: src/check.py
     dst: /usr/share/logitech-mouse-battery/check.py
+    file_info:
+      mode: 0644
   - src: src/dbusCalls.py
     dst: /usr/share/logitech-mouse-battery/dbusCalls.py
+    file_info:
+      mode: 0644
   - src: src/hidDescriptor.py
     dst: /usr/share/logitech-mouse-battery/hidDescriptor.py
+    file_info:
+      mode: 0644
   - src: src/hidpp.py
     dst: /usr/share/logitech-mouse-battery/hidpp.py
+    file_info:
+      mode: 0644
   - src: src/icon.py
     dst: /usr/share/logitech-mouse-battery/icon.py
+    file_info:
+      mode: 0644
   - src: src/installWatch.py
     dst: /usr/share/logitech-mouse-battery/installWatch.py
+    file_info:
+      mode: 0644
   - src: src/isHidpp.py
     dst: /usr/share/logitech-mouse-battery/isHidpp.py
+    file_info:
+      mode: 0644
   - src: src/lowBattery.py
     dst: /usr/share/logitech-mouse-battery/lowBattery.py
+    file_info:
+      mode: 0644
   - src: src/mice.py
     dst: /usr/share/logitech-mouse-battery/mice.py
+    file_info:
+      mode: 0644
   - src: src/notify.py
     dst: /usr/share/logitech-mouse-battery/notify.py
+    file_info:
+      mode: 0644
   - src: src/panelColor.py
     dst: /usr/share/logitech-mouse-battery/panelColor.py
+    file_info:
+      mode: 0644
   - src: src/tray.py
     dst: /usr/share/logitech-mouse-battery/tray.py
+    file_info:
+      mode: 0644
   - src: src/trayHost.py
     dst: /usr/share/logitech-mouse-battery/trayHost.py
+    file_info:
+      mode: 0644
   - src: src/upower.py
     dst: /usr/share/logitech-mouse-battery/upower.py
+    file_info:
+      mode: 0644
   - src: src/version.py
     dst: /usr/share/logitech-mouse-battery/version.py
+    file_info:
+      mode: 0644
   - src: src/NotoSans-Medium.ttf
     dst: /usr/share/logitech-mouse-battery/NotoSans-Medium.ttf
+    file_info:
+      mode: 0644
   - src: src/OFL.txt
     dst: /usr/share/logitech-mouse-battery/OFL.txt
+    file_info:
+      mode: 0644
   - src: packaging/logitech-mouse-battery.desktop
     dst: /usr/share/applications/logitech-mouse-battery.desktop
   - src: packaging/autostart/logitech-mouse-battery.desktop
@@ -93,5 +129,5 @@ overrides:
       - python3-pyqt6
   rpm:
     depends:
-      - python3
+      - python3 >= 3.11
       - python3-pyqt6

@@ -12,9 +12,22 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Run the unit suite on Debian 12, Ubuntu 24.04, and Arch
         run: tests/containers/runUnitTests.sh
       - name: Validate the desktop entries, udev rule, and AppStream data
         run: packaging/validate.sh
+      - name: Check the icon registers with a tray that shows up late on Qt 6.4
+        run: tests/live/checkLateTray.sh
+      - name: Build the tarball
+        run: packaging/tarball.sh
+      - name: Build the .deb and .rpm
+        run: packaging/build.sh
+      - name: Build the Arch package
+        run: packaging/buildArch.sh
+      - name: Test each package in a clean container
+        run: tests/containers/testPackages.sh

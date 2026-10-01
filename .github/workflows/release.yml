@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release
@@ -16,11 +16,14 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     outputs:
       version: ${{ steps.version.outputs.version }}
       released: ${{ steps.version.outputs.released }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Find the version and whether it has a release
         id: version
         env:
@@ -34,10 +37,10 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           if gh release view "v$version" --repo "$GITHUB_REPOSITORY" > /tmp/view.log 2>&1; then
             echo "released=true" >> "$GITHUB_OUTPUT"
-            echo "v$version already has a release, thus there's nothing to publish"
+            echo "v$version already has a release, so there's nothing to publish"
           elif grep -q "release not found" /tmp/view.log; then
             echo "released=false" >> "$GITHUB_OUTPUT"
-            echo "v$version has no release yet, thus it gets built, tested, and published"
+            echo "v$version has no release yet, so it gets built, tested, and published"
           else
             cat /tmp/view.log
             exit 1
@@ -45,16 +48,24 @@ jobs:
 
   release:
     needs: check
-    if: needs.check.outputs.released == 'false'
+    # a manual run can start from any branch, and only main publishes
+    if: needs.check.outputs.released == 'false' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write
     env:
       VERSION: ${{ needs.check.outputs.version }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Run the unit suite on Debian 12, Ubuntu 24.04, and Arch
         run: tests/containers/runUnitTests.sh
       - name: Validate the desktop entries, udev rule, and AppStream data
         run: packaging/validate.sh
+      - name: Check the icon registers with a tray that shows up late on Qt 6.4
+        run: tests/live/checkLateTray.sh
       - name: Build the tarball
         run: packaging/tarball.sh
       - name: Build the .deb and .rpm
@@ -65,7 +76,9 @@ jobs:
         run: tests/containers/testPackages.sh
       - name: Bundle the checksummed PKGBUILD for the AUR
         run: tar -czf "dist/logitech-mouse-battery-$VERSION-aur.tar.gz" -C dist/aur PKGBUILD .SRCINFO
+      - name: Write the checksums of every asset
+        run: cd dist && sha256sum *.deb *.rpm *.pkg.tar.zst *.tar.gz > SHA256SUMS
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "v$VERSION" --target "$GITHUB_SHA" --title "Mouse Battery $VERSION" --notes "Install steps are in the README." dist/*.deb dist/*.rpm dist/*.pkg.tar.zst dist/*.tar.gz
+        run: gh release create "v$VERSION" --target "$GITHUB_SHA" --title "Mouse Battery $VERSION" --notes "Install steps are in the README." dist/*.deb dist/*.rpm dist/*.pkg.tar.zst dist/*.tar.gz dist/SHA256SUMS
