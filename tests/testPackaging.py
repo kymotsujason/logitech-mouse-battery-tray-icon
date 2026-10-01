@@ -129,6 +129,10 @@ class ServiceFileTests(unittest.TestCase):
         # it starts when udev or a caller wants it, never at boot by itself
         self.assertNotIn("Install", sections)
 
+    def testTheUnitLoadsHidBeforeItStarts(self):
+        unit = iniSections(os.path.join(PACKAGING, "systemd", UNIT_NAME))["Unit"]
+        self.assertEqual((unit.get("Wants"), unit.get("After")), ("modprobe@hid.service", "modprobe@hid.service"))
+
     def testTheUnitIsSandboxed(self):
         service = iniSections(os.path.join(PACKAGING, "systemd", UNIT_NAME))["Service"]
         self.assertEqual({key: service.get(key) for key in SANDBOX}, SANDBOX)

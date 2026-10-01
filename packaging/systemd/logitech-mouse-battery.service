@@ -1,6 +1,9 @@
 [Unit]
 Description=Mouse Battery service
 Documentation=https://github.com/kymotsujason/logitech-mouse-battery-tray-icon
+# DeviceAllow=char-hidraw takes hidraw's major from /proc/devices at start, and a kernel with HID as a module has none until hid loads
+Wants=modprobe@hid.service
+After=modprobe@hid.service
 StartLimitIntervalSec=60
 StartLimitBurst=20
 
