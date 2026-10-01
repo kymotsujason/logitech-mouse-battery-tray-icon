@@ -106,6 +106,7 @@ check "the icon renders offscreen with the bundled font" "$rendered" "drawn"
 
 check "the rule's program accepts the C54F HID++ node" "$(ruleProgram "$(fakeNode 0003:046D:C54F.0001 "$C54F_HIDPP")")" "0"
 check "the rule's program rejects a generic desktop node" "$(ruleProgram "$(fakeNode 0003:046D:C0A9.0002 "$GENERIC_DESKTOP")")" "1"
+check "the rule's program rejects a HID++ node with a keyboard collection" "$(ruleProgram "$(fakeNode 0003:046D:C54F.0003 "$C54F_HIDPP 05 07 09 06 a1 01 c0")")" "1"
 
 files=$(listFiles | while read -r path; do if [ -f "$path" ] || [ -L "$path" ]; then echo "$path"; fi; done)
 removePackage > /tmp/remove.log 2>&1

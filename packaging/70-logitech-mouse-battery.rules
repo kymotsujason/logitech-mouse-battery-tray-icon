@@ -1,4 +1,5 @@
-# lets the logged in user read and write a Logitech USB device's HID++ interface, such as a receiver's or a cable's,
-# when the kernel leaves it to hid-generic and its descriptor passes the app's check, which rejects any keyboard,
-# keypad, or mouse collection and the DJ reports that carry a paired keyboard's keystrokes
-ACTION!="remove", SUBSYSTEM=="hidraw", KERNELS=="0003:046D:*", DRIVERS=="hid-generic", PROGRAM="/usr/bin/python3 -I -B /usr/share/logitech-mouse-battery/isHidpp.py %S%p", TAG+="uaccess"
+# lets the logged in user read and write the HID++ interface of the PRO X3 SUPERSTRIKE's receiver (C54F) and of its
+# cable (C0A9), when the kernel leaves it to hid-generic and its descriptor passes the app's check, which rejects any
+# keyboard, keypad, or mouse collection and the DJ reports that carry a paired keyboard's keystrokes. Any program the
+# user runs can then send HID++ commands to the receiver or cable, which can change the device's settings
+ACTION!="remove", SUBSYSTEM=="hidraw", KERNELS=="0003:046D:C54F.*|0003:046D:C0A9.*", DRIVERS=="hid-generic", PROGRAM="/usr/bin/python3 -I -B /usr/share/logitech-mouse-battery/isHidpp.py %S%p", TAG+="uaccess"

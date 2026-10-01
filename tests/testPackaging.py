@@ -8,6 +8,7 @@ from PyQt6.QtGui import QColor, QIcon, QImageReader
 from PyQt6.QtWidgets import QApplication
 
 import autostart
+import hidpp
 import icon
 import tray
 import version
@@ -43,7 +44,7 @@ class DesktopEntryTests(unittest.TestCase):
 
 
 RULE_FILE = "70-logitech-mouse-battery.rules"
-RULE = 'ACTION!="remove", SUBSYSTEM=="hidraw", KERNELS=="0003:046D:*", DRIVERS=="hid-generic", PROGRAM="/usr/bin/python3 -I -B /usr/share/logitech-mouse-battery/isHidpp.py %S%p", TAG+="uaccess"'
+RULE = 'ACTION!="remove", SUBSYSTEM=="hidraw", KERNELS=="0003:046D:C54F.*|0003:046D:C0A9.*", DRIVERS=="hid-generic", PROGRAM="/usr/bin/python3 -I -B /usr/share/logitech-mouse-battery/isHidpp.py %S%p", TAG+="uaccess"'
 
 
 class UdevRuleTests(unittest.TestCase):
@@ -59,6 +60,11 @@ class UdevRuleTests(unittest.TestCase):
             appDir = next(line.split("=", 1)[1] for line in f.read().splitlines() if line.startswith("APP_DIR="))
         self.assertIn(" " + appDir + "/isHidpp.py ", self.readRule()[0])
         self.assertTrue(os.path.exists(os.path.join(SRC, "isHidpp.py")))
+
+    def testTheRuleNamesTheSameProductsAsDiscovery(self):
+        kernels = self.readRule()[0].split('KERNELS=="', 1)[1].split('"', 1)[0]
+        ruleProducts = {int(pattern.split(":")[2].split(".")[0], 16) for pattern in kernels.split("|")}
+        self.assertEqual(ruleProducts, {int(product, 16) for product in hidpp.PRODUCT_IDS})
 
 
 SVG = "{http://www.w3.org/2000/svg}"

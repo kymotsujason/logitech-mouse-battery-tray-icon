@@ -12,14 +12,9 @@ def isHidppDescriptor(data):
     i = 0
     while (i < len(data)):
         prefix = data[i]
-        if (prefix == 0xFE):
-            if (i + 1 >= len(data)):
-                return False
-            end = i + 3 + data[i + 1]
-            if (end > len(data)):
-                return False
-            i = end
-            continue
+        # the kernel reads every prefix whose tag is 15 as a long item and then refuses the whole descriptor, so the check refuses it too
+        if ((prefix >> 4) == 0x0F):
+            return False
         size = [0, 1, 2, 4][prefix & 0x03]
         if (i + 1 + size > len(data)):
             return False

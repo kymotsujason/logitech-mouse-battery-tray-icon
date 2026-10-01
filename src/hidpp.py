@@ -8,6 +8,8 @@ from hidDescriptor import isHidppDescriptor
 LOGITECH_VENDOR = "0000046D"
 USB_BUS = "0003"
 HID_GENERIC = "hid-generic"
+# the products the udev rule grants access to, as HID_ID writes them, so discovery and the rule agree
+PRODUCT_IDS = ("0000C54F", "0000C0A9")
 LONG_REPORT = 0x11
 REPORT_LENGTH = 20
 SW_IDS = range(0x08, 0x10)
@@ -98,7 +100,7 @@ def readUevent(text):
 def isHidppNode(uevent, descriptor):
     fields = readUevent(uevent)
     parts = fields.get("HID_ID", "").upper().split(":")
-    if (len(parts) != 3 or parts[0] != USB_BUS or parts[1] != LOGITECH_VENDOR):
+    if (len(parts) != 3 or parts[0] != USB_BUS or parts[1] != LOGITECH_VENDOR or parts[2] not in PRODUCT_IDS):
         return False
     if (fields.get("DRIVER") != HID_GENERIC):
         return False

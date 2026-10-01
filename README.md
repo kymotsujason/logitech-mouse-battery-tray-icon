@@ -52,16 +52,18 @@ GNOME's top bar has no system tray of its own, so Mouse Battery needs the AppInd
 
 ## Which mice work
 
-Mouse Battery reads two kinds of mice:
+Mouse Battery reads mice in two ways:
 
 - Mice the Linux kernel already drives, such as most Unifying, LIGHTSPEED, and Bluetooth mice, are read through UPower.
-- Mice on receivers the kernel leaves alone, such as the PRO X3 SUPERSTRIKE's receiver (`046d:c54f`) and its USB cable, are read directly over Logitech's HID++ protocol.
+- The PRO X3 SUPERSTRIKE on its receiver (`046d:c54f`) or its USB cable (`046d:c0a9`), which the kernel leaves alone, is read directly over Logitech's HID++ protocol.
 
 It has only been tested with the PRO X3 SUPERSTRIKE, on its receiver and on its cable (see "Not tested" below).
 
 ## What the udev rule allows
 
-The rule gives the logged in user read and write access to a Logitech USB device's HID++ interface, such as a receiver's or the PRO X3 SUPERSTRIKE cable's, only when the kernel's generic HID driver holds it and its report descriptor passes the app's own check. That check rejects any interface with a keyboard, keypad, or mouse collection, and any receiver interface that carries a paired keyboard's keystrokes, so other programs can't use the rule to read your keystrokes.
+The rule gives the logged in user read and write access to the HID++ interface of the PRO X3 SUPERSTRIKE's receiver and of its cable, and to no other device. It only applies when the kernel's generic HID driver holds that interface and its report descriptor passes the app's own check, which rejects any interface with a keyboard, keypad, or mouse collection and any receiver interface that carries a paired keyboard's keystrokes. Any program you run can then send HID++ commands to the receiver or cable, the same way Mouse Battery does, and those commands can change the device's settings.
+
+The first release's rule covered every Logitech HID++ interface the check accepted. Access it already gave to another device lasts until you replug that device or restart, the same as after an uninstall.
 
 ## Uninstall
 

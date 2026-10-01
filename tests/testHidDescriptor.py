@@ -40,9 +40,22 @@ class DescriptorTests(unittest.TestCase):
         # a Report ID item missing its data byte, which only the bounds check can reject
         self.assertFalse(hidDescriptor.isHidppDescriptor(C54F_DESCRIPTOR + bytes.fromhex("85")))
 
-    def testLongItemIsSkipped(self):
-        # the long item's data would read as a keyboard usage page if it were parsed as short items
-        self.assertTrue(hidDescriptor.isHidppDescriptor(C54F_DESCRIPTOR + bytes.fromhex("fe 02 10 05 07")))
+    def testALongItemFails(self):
+        # the kernel refuses a descriptor with any long item, so the check does too
+        self.assertFalse(hidDescriptor.isHidppDescriptor(C54F_DESCRIPTOR + bytes.fromhex("fe 02 10 05 07")))
+
+    def testAnyTagFifteenPrefixFails(self):
+        self.assertFalse(hidDescriptor.isHidppDescriptor(C54F_DESCRIPTOR + bytes.fromhex("f3 00 01 05 01")))
+
+    def testALoneTrailingLongPrefixFails(self):
+        self.assertFalse(hidDescriptor.isHidppDescriptor(C54F_DESCRIPTOR + bytes.fromhex("fe")))
+
+    def testAFourByteUsagePageAboveTheVendorRangeFails(self):
+        # page 0xFF000007 passes the lower bound, so only the upper bound at VENDOR_PAGE_LAST catches it
+        self.assertFalse(hidDescriptor.isHidppDescriptor(C54F_DESCRIPTOR + bytes.fromhex("07 07 00 00 ff")))
+
+    def testAFourByteVendorUsagePagePasses(self):
+        self.assertTrue(hidDescriptor.isHidppDescriptor(C54F_DESCRIPTOR + bytes.fromhex("07 00 ff 00 00")))
 
     def testTruncatedLongItemFails(self):
         self.assertFalse(hidDescriptor.isHidppDescriptor(C54F_DESCRIPTOR + bytes.fromhex("fe 05 10 05")))

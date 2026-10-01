@@ -10,7 +10,7 @@
   </developer>
   <description>
     <p>Mouse Battery puts the battery level of every connected Logitech mouse in the system tray, and warns once at 10% and once at 5% per charge.</p>
-    <p>It reads mice the kernel drives through UPower, and reads receivers the kernel leaves alone, such as the one for the PRO X3 SUPERSTRIKE, over HID++. It isn't affiliated with Logitech.</p>
+    <p>It reads mice the kernel drives through UPower, and reads the PRO X3 SUPERSTRIKE's receiver and cable over HID++. It isn't affiliated with Logitech.</p>
   </description>
   <launchable type="desktop-id">logitech-mouse-battery.desktop</launchable>
   <url type="homepage">https://github.com/kymotsujason/logitech-mouse-battery-tray-icon</url>

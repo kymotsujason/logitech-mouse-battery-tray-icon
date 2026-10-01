@@ -36,6 +36,9 @@ class IsHidppTests(unittest.TestCase):
     def testAGenericDesktopNodeFails(self):
         self.assertEqual(self.runScript(self.fakeNode(GENERIC_DESKTOP)), 1)
 
+    def testAKeyboardCollectionAfterTheHidppReportsFails(self):
+        self.assertEqual(self.runScript(self.fakeNode(C54F_HIDPP + bytes.fromhex("05 07 09 06 a1 01 c0"))), 1)
+
     def testAMissingDescriptorFails(self):
         self.assertEqual(self.runScript(self.fakeNode(None)), 1)
 
