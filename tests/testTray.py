@@ -153,6 +153,12 @@ class AppTests(unittest.TestCase):
                 afterHost = mouseApp.hostTimer.interval()
         self.assertEqual((afterWatcher, afterHost), (10, 10))
 
+    def testStopEndsTheHostAndNoticeTimers(self):
+        mouseApp = self.makeApp(False)
+        self.assertEqual((mouseApp.hostTimer.isActive(), mouseApp.noticeTimer.isActive()), (True, True))
+        mouseApp.stop()
+        self.assertEqual((mouseApp.hostTimer.isActive(), mouseApp.noticeTimer.isActive()), (False, False))
+
     def testTheNoTrayNoticeAsksForTheHostFirst(self):
         mouseApp = self.makeApp(False)
         sent, patch = self.notices(mouseApp)

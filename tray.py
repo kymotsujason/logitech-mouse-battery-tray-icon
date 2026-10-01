@@ -203,6 +203,7 @@ class MouseBatteryApp(QObject):
         self.checkHost()
 
     def stop(self):
+        self.noticeTimer.stop()
         self.hostTimer.stop()
         self.mice.stop()
 
