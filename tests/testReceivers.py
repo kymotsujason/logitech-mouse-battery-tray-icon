@@ -803,6 +803,16 @@ class ReceiverListTests(unittest.TestCase):
         self.assertTrue(self.mice.nodes[RECEIVER].searching)
         self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"]))
 
+    def testReadAllDuringTheFirstSearchQueuesNoSecondSearch(self):
+        receiver = self.nodes.add(RECEIVER, silent)
+        self.mice.start()
+        self.assertTrue(self.mice.nodes[RECEIVER].searching)
+        self.mice.requestReadAll()
+        self.assertFalse(self.mice.nodes[RECEIVER].searchAgain)
+        self.assertTrue(waitUntil(lambda: not self.mice.isBusy()))
+        QTest.qWait(200)
+        self.assertEqual(pingsTo(receiver, 2), 1)
+
     def testReadAllLeavesANodeWithAMouseUnsearched(self):
         receiver = self.nodes.add(RECEIVER, mouseHandler())
         self.mice.start()

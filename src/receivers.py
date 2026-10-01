@@ -212,8 +212,9 @@ class ReceiverList(QObject):
         self.readAll()
         # 1.0.1 searched every node whenever the tray or check started, so a mouse that slept through the first search is looked for again
         withMice = {mouse.nodePath for mouse in self.mice}
-        for path in list(self.nodes):
-            if (path not in withMice):
+        for path, state in list(self.nodes.items()):
+            # a search that's already running stands in for this one, instead of a whole second search queued after it
+            if (path not in withMice and not state.searching):
                 self.requestSearch(path)
 
     def onDevChanged(self, path):
