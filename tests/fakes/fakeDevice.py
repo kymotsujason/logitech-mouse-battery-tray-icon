@@ -89,7 +89,10 @@ class FakeDevice:
 
     def node(self, onEvent=None):
         # a duplicate lets the app close its own copy without closing a number another test may reuse
-        return hidpp.HidppNode(os.dup(self.appSide.fileno()), onEvent)
+        fd = os.dup(self.appSide.fileno())
+        # HidppNode.open opens a real node with O_NONBLOCK, and the worker loop counts on a read with nothing waiting returning at once
+        os.set_blocking(fd, False)
+        return hidpp.HidppNode(fd, onEvent)
 
     def close(self):
         try:

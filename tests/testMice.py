@@ -97,6 +97,17 @@ class WorkerTests(unittest.TestCase):
         self.assertIsNone(self.worker.wakeRead)
         self.worker = None
 
+    def testAReportTakenByARequestDoesntStallTheNextWork(self):
+        self.device = FakeDevice(mouseHandler())
+        self.worker = mice.NodeWorker(PATH, self.device.node(), self.messages.put)
+        # the report and the wake both wait at the first select, and the queued read takes the report off the node before the loop reads it
+        self.worker.queueWork(("read", 1, FEATURE, 0.0))
+        self.device.send(OTHER_REPORT)
+        self.worker.start()
+        self.assertIsNotNone(nextMessage(self.messages, "read"))
+        self.worker.queueWork(("read", 1, FEATURE, 0.0))
+        self.assertIsNotNone(nextMessage(self.messages, "read"))
+
 
 RECEIVER = "/dev/hidraw18"
 CABLE = "/dev/hidraw30"
