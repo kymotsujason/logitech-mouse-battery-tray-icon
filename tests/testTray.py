@@ -13,7 +13,7 @@ from PyQt6.QtCore import QCoreApplication, QEvent
 from PyQt6.QtDBus import QDBusConnection
 from PyQt6.QtGui import QAction, QColor, QPalette, QSessionManager
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QSystemTrayIcon
 
 import autostart
 import exceptionHooks
@@ -22,6 +22,7 @@ import installWatch
 import mice
 import notify
 import panelColor
+import serviceClient
 import tray
 import trayHost
 import upower
@@ -41,6 +42,15 @@ def makeMouse(reading, asleep=False):
     mouse.asleep = asleep
     mouse.lastRead = LAST_READ
     return mouse
+
+
+def waitUntil(condition, timeout=3.0):
+    deadline = time.monotonic() + timeout
+    while (time.monotonic() < deadline):
+        if (condition()):
+            return True
+        QTest.qWait(10)
+    return condition()
 
 
 class TrayTextTests(unittest.TestCase):
@@ -65,7 +75,7 @@ class TrayTextTests(unittest.TestCase):
     def testAnAsleepLineDatesAnOlderReading(self):
         local = time.localtime(LAST_READ)
         clock = time.strftime("%H:%M", local)
-        day = tray.MONTH_NAMES[local.tm_mon - 1] + " " + str(local.tm_mday)
+        day = mice.MONTH_NAMES[local.tm_mon - 1] + " " + str(local.tm_mday)
         asleep = makeMouse(hidpp.BatteryReading(69, 0), asleep=True)
         self.assertEqual(tray.mouseLine(NAME, asleep, now=LAST_READ), NAME + ", asleep, 69% at " + clock)
         self.assertEqual(tray.mouseLine(NAME, asleep, now=LAST_READ + 3 * 86400), NAME + ", asleep, 69% on " + day + " at " + clock)
@@ -165,7 +175,7 @@ class AppTests(unittest.TestCase):
 
     def testMenuLinesAndTooltipFollowTheMice(self):
         mouseApp = self.makeApp(True)
-        self.assertEqual([action.text() for action in mouseApp.statusActions], ["No Logitech mouse found."])
+        self.assertTrue(waitUntil(lambda: [action.text() for action in mouseApp.statusActions] == ["Can't reach the battery service."]))
         mouseApp.mouseList.applyUPower(upower.UPowerMouse(PATH, "12ab34cd", "MX Master 3", hidpp.BatteryReading(55, 0)))
         self.assertEqual([action.text() for action in mouseApp.statusActions], ["MX Master 3, 55%"])
         self.assertEqual(mouseApp.shownTooltip, "MX Master 3, 55%")
@@ -329,6 +339,18 @@ class AppTests(unittest.TestCase):
         with contextlib.redirect_stderr(errors):
             self.lowBatterySends([(None, "org.freedesktop.DBus.Error.ServiceUnknown")] * 3)
         self.assertEqual(errors.getvalue(), "Couldn't send the low battery notice for MX Master 3: org.freedesktop.DBus.Error.ServiceUnknown\n")
+
+    def testTheMenuALeftClickAndTheTimerEachAskTheServiceToRead(self):
+        with mock.patch.object(serviceClient.ServiceWatcher, "readAll") as readAll:
+            mouseApp = self.makeApp(True)
+            mouseApp.onMenuShown()
+            self.assertEqual(readAll.call_count, 1)
+            mouseApp.onActivated(QSystemTrayIcon.ActivationReason.Trigger)
+            self.assertEqual(readAll.call_count, 2)
+            mouseApp.mouseList.readTimer.start(10)
+            QTest.qWait(100)
+            mouseApp.mouseList.readTimer.stop()
+        self.assertGreaterEqual(readAll.call_count, 3)
 
 
 class ConfigFolderTests(unittest.TestCase):

@@ -19,6 +19,7 @@ from exceptionHooks import installExceptionHooks
 from icon import IconState, makeIcon
 from installWatch import InstallWatcher
 from notify import NO_REPLY, Notifier
+from serviceClient import ServiceWatcher
 from trayHost import TrayHost
 from upower import UPowerWatcher
 from version import VERSION
@@ -29,8 +30,6 @@ LOCK_NAME = "logitech-mouse-battery.lock"
 TARGET_NICENESS = 10
 PROJECT_URL = "https://github.com/kymotsujason/logitech-mouse-battery-tray-icon"
 PORTAL_RETRY_MS = 10 * 1000
-# the menu is in English, so a date in it is too, whatever the locale
-MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 
 def iconStateFor(mouse):
@@ -40,20 +39,12 @@ def iconStateFor(mouse):
     return IconState(percent=reading.percent, charging=(reading.charging in hidpp.EXTERNAL_POWER), asleep=mouse.asleep)
 
 
-def readingTime(stamp, now):
-    local = time.localtime(stamp)
-    clock = time.strftime("%H:%M", local)
-    if (local[:3] == time.localtime(now)[:3]):
-        return "at " + clock
-    return "on " + MONTH_NAMES[local.tm_mon - 1] + " " + str(local.tm_mday) + " at " + clock
-
-
 def mouseLine(name, mouse, now=None):
     if (mouse.reading is None):
         return name + ", no reading yet"
     level = hidpp.levelText(mouse.reading)
     if (mouse.asleep):
-        return name + ", asleep, " + level + " " + readingTime(mouse.lastRead, time.time() if now is None else now)
+        return name + ", asleep, " + level + " " + mice.readingTime(mouse.lastRead, time.time() if now is None else now)
     charging = mouse.reading.charging
     if (charging in (hidpp.CHARGING_CHARGING, hidpp.CHARGING_SLOW)):
         return name + ", charging, " + level
@@ -128,6 +119,10 @@ class MouseBatteryApp(QObject):
         self.mouseList.lowBattery.connect(self.onLowBattery)
         # the 300 s read also looks at the panel color again, which catches a plasmarc made after the app started
         self.mouseList.readTimer.timeout.connect(self.onColorsChanged)
+        # the tray reads HID++ mice only through the service, which alone may open the receivers
+        self.serviceWatcher = ServiceWatcher(self.systemBus)
+        self.serviceWatcher.stateChanged.connect(self.mouseList.applyService)
+        self.mouseList.readRequested.connect(self.serviceWatcher.readAll)
         self.upower = UPowerWatcher(self.systemBus)
         self.upower.mouseChanged.connect(self.mouseList.applyUPower)
         self.upower.mouseRemoved.connect(self.mouseList.removeUPower)
@@ -152,6 +147,7 @@ class MouseBatteryApp(QObject):
 
     def start(self):
         self.mouseList.start()
+        self.serviceWatcher.start()
         self.upower.watchOwner()
         self.upower.start()
         self.installWatcher.start()
@@ -162,6 +158,7 @@ class MouseBatteryApp(QObject):
         self.trayHost.stop()
         self.upower.stop()
         self.portalTimer.stop()
+        self.serviceWatcher.stop()
         self.mouseList.stop()
 
     def quitApp(self):
