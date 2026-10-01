@@ -27,13 +27,20 @@ check() {
 
 stop() {
     echo "FAIL $1"
+    failures=$((failures + 1))
     exit 1
 }
 
 cleanup() {
     if [ "$failures" -gt 0 ]; then
-        sudo journalctl -u "$unit" --no-pager 2>/dev/null | tail -50
-        cat "$work/fake.log" 2>/dev/null
+        echo "--- journal for $unit"
+        sudo -n journalctl -u "$unit" --no-pager 2>/dev/null | tail -50
+        for log in "$work"/*.log; do
+            if [ -f "$log" ]; then
+                echo "--- $(basename "$log")"
+                cat "$log"
+            fi
+        done
     fi
     if [ -n "$fakePid" ]; then
         sudo kill "$fakePid" 2>/dev/null
@@ -66,7 +73,6 @@ startFake() {
         sleep 0.1
     done
     if [ -z "$node" ]; then
-        cat "$work/fake.log"
         stop "the fake receiver never got a hidraw node"
     fi
     sudo udevadm settle
@@ -84,11 +90,11 @@ sudo -n true 2>/dev/null || stop "sudo asks for a password here"
 
 curl -fsSL -o "$work/old.deb" "https://github.com/kymotsujason/logitech-mouse-battery-tray-icon/releases/download/v1.0.1/logitech-mouse-battery_1.0.1_all.deb" || stop "couldn't download the 1.0.1 package"
 sudo apt-get update -qq > /dev/null
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$work/old.deb" acl > "$work/install1.log" 2>&1 || { cat "$work/install1.log"; stop "1.0.1 didn't install"; }
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$work/old.deb" acl > "$work/install1.log" 2>&1 || stop "1.0.1 didn't install"
 
 if ! sudo modprobe uhid 2>/dev/null; then
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "linux-modules-extra-$(uname -r)" > "$work/modules.log" 2>&1
-    sudo modprobe uhid || { cat "$work/modules.log"; stop "couldn't load uhid"; }
+    sudo modprobe uhid || stop "couldn't load uhid"
 fi
 [ -e /dev/uhid ] || stop "/dev/uhid is missing after loading uhid"
 
@@ -97,7 +103,7 @@ check "the fake receiver landed on hid-generic" "$(grep '^DRIVER=' "/sys/class/h
 sudo setfacl -m "u:$(id -un):rw" "$node"
 check "with 1.0.x's ACL the runner's user can open the receiver" "$(canOpen "$node")" "opened"
 
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "$repo/dist/${name}_${version}_all.deb" > "$work/install2.log" 2>&1 || { cat "$work/install2.log"; stop "1.1.0 didn't install"; }
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "$repo/dist/${name}_${version}_all.deb" > "$work/install2.log" 2>&1 || stop "1.1.0 didn't install"
 expected="Mouse Battery: reloading systemd
 Mouse Battery: reloading the system bus
 Mouse Battery: reloading the udev rules
@@ -115,7 +121,9 @@ check "the runner's user can't open the receiver now" "$(canOpen "$node" | grep 
 # the runner has no seat session to show the uaccess builtin putting an ACL back, so this checks the tag that would
 sudo udevadm trigger --action=change "$node"
 sudo udevadm settle
-check "the node no longer carries the uaccess tag" "$(udevadm info "$node" | grep '^E: CURRENT_TAGS=' | grep -c ':uaccess:')" "0"
+tags=$(udevadm info "$node" | grep '^E: CURRENT_TAGS=')
+check "the change event applied the new rule's systemd tag" "$(echo "$tags" | grep -c ':systemd:')" "1"
+check "the node no longer carries the uaccess tag" "$(echo "$tags" | grep -c ':uaccess:')" "0"
 check "a change event leaves the ACL off" "$(namedAclEntries "$node")" "0"
 
 # systemd acts on SYSTEMD_WANTS only when a device first becomes active, so a fresh plug tests the start
@@ -135,19 +143,19 @@ check "the service runs as its own user" "$(stat -c '%U' "/proc/$(systemctl show
 
 state=""
 for i in $(seq 150); do
-    state=$(busctl --system call "$service" "$objectPath" "$interface" GetState 2>&1)
+    state=$(busctl --system --timeout=2 call "$service" "$objectPath" "$interface" GetState 2>&1)
     case "$state" in
         *02bc524c*) break ;;
     esac
     sleep 0.1
 done
 check "GetState as the runner's user lists the fake mouse at 81%" "$(echo "$state" | grep -c '\\"percent\\": 81')" "1"
-check "Properties.GetAll is denied" "$(busctl --system call "$service" "$objectPath" org.freedesktop.DBus.Properties GetAll s "$interface" 2>&1 | grep -c 'Access denied')" "1"
-check "a member the interface doesn't have is denied" "$(busctl --system call "$service" "$objectPath" "$interface" Missing 2>&1 | grep -c 'Access denied')" "1"
-check "taking the service's name is denied" "$(busctl --system call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus RequestName su "$service" 0 2>&1 | grep -c 'Access denied')" "1"
+check "Properties.GetAll is denied" "$(busctl --system --timeout=2 call "$service" "$objectPath" org.freedesktop.DBus.Properties GetAll s "$interface" 2>&1 | grep -c 'Access denied')" "1"
+check "a member the interface doesn't have is denied" "$(busctl --system --timeout=2 call "$service" "$objectPath" "$interface" Missing 2>&1 | grep -c 'Access denied')" "1"
+check "taking the service's name is denied" "$(busctl --system --timeout=2 call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus RequestName su "$service" 0 2>&1 | grep -c 'Access denied')" "1"
 check "check prints the fake mouse" "$(logitech-mouse-battery check 2>&1 | grep -c "PRO X3 SUPERSTRIKE ($node)")" "1"
 
-sudo DEBIAN_FRONTEND=noninteractive apt-get remove -y "$name" > "$work/remove.log" 2>&1 || { cat "$work/remove.log"; stop "1.1.0 didn't remove"; }
+sudo DEBIAN_FRONTEND=noninteractive apt-get remove -y "$name" > "$work/remove.log" 2>&1 || stop "1.1.0 didn't remove"
 check "removing the package stopped the service" "$(systemctl is-active "$unit")" "inactive"
 
 if [ "$failures" -gt 0 ]; then

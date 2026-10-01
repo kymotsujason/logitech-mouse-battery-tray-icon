@@ -21,6 +21,16 @@ check() {
     fi
 }
 
+waitForSocket() {
+    for i in $(seq 100); do
+        if [ -S "$1" ]; then
+            return 0
+        fi
+        sleep 0.1
+    done
+    return 1
+}
+
 # Debian's dbus holds the system bus config and the dbus.socket the unit needs, and Fedora keeps runuser in util-linux
 installPackage() {
     case "$kind" in
@@ -47,9 +57,17 @@ os.chmod("/run/systemd/journal/socket", 0o666)
 while True:
     s.recv(65536)
 ' &
-        sleep 0.5
+        if ! waitForSocket /run/systemd/journal/socket; then
+            echo "FAIL the journal stub never made /run/systemd/journal/socket"
+            exit 1
+        fi
         systemd-socket-activate -l "$socket" -- /usr/bin/dbus-broker-launch --scope system > /tmp/broker.log 2>&1 &
-        sleep 0.5
+        if ! waitForSocket "$socket"; then
+            echo "FAIL systemd-socket-activate never made $socket"
+            echo "--- /tmp/broker.log"
+            cat /tmp/broker.log
+            exit 1
+        fi
         chmod 0666 "$socket"
         expected=dbus-broker-lau
     fi
@@ -96,7 +114,11 @@ check "another user can't call a member the interface doesn't have" "$(asOther b
 check "another user can't take the service's name" "$(asOther busctl --system call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus RequestName su $service 0 | grep -c 'Access denied')" "1"
 
 if [ "$failures" -gt 0 ]; then
-    echo "--- service output"
-    cat /tmp/service.log
+    for log in /tmp/service.log /tmp/verify.log /tmp/broker.log; do
+        if [ -f "$log" ]; then
+            echo "--- $log"
+            cat "$log"
+        fi
+    done
     exit 1
 fi
