@@ -1,6 +1,6 @@
 pkgbase = logitech-mouse-battery
 	pkgdesc = Logitech mouse battery in the system tray
-	pkgver = 1.0.1
+	pkgver = 1.1.0
 	pkgrel = 1
 	url = https://github.com/kymotsujason/logitech-mouse-battery-tray-icon
 	install = logitech-mouse-battery.install
@@ -9,7 +9,7 @@ pkgbase = logitech-mouse-battery
 	depends = python
 	depends = python-pyqt6
 	depends = systemd
-	source = logitech-mouse-battery-1.0.1.tar.gz::https://github.com/kymotsujason/logitech-mouse-battery-tray-icon/releases/download/v1.0.1/logitech-mouse-battery-1.0.1.tar.gz
+	source = logitech-mouse-battery-1.1.0.tar.gz::https://github.com/kymotsujason/logitech-mouse-battery-tray-icon/releases/download/v1.1.0/logitech-mouse-battery-1.1.0.tar.gz
 	sha256sums = SKIP
 
 pkgname = logitech-mouse-battery
