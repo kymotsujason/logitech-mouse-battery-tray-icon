@@ -21,6 +21,15 @@ check() {
     fi
 }
 
+printLogs() {
+    for log in /tmp/service.log /tmp/verify.log /tmp/broker.log; do
+        if [ -f "$log" ]; then
+            echo "--- $log"
+            cat "$log"
+        fi
+    done
+}
+
 waitForSocket() {
     for i in $(seq 100); do
         if [ -S "$1" ]; then
@@ -59,13 +68,13 @@ while True:
 ' &
         if ! waitForSocket /run/systemd/journal/socket; then
             echo "FAIL the journal stub never made /run/systemd/journal/socket"
+            printLogs
             exit 1
         fi
         systemd-socket-activate -l "$socket" -- /usr/bin/dbus-broker-launch --scope system > /tmp/broker.log 2>&1 &
         if ! waitForSocket "$socket"; then
             echo "FAIL systemd-socket-activate never made $socket"
-            echo "--- /tmp/broker.log"
-            cat /tmp/broker.log
+            printLogs
             exit 1
         fi
         chmod 0666 "$socket"
@@ -114,11 +123,6 @@ check "another user can't call a member the interface doesn't have" "$(asOther b
 check "another user can't take the service's name" "$(asOther busctl --system call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus RequestName su $service 0 | grep -c 'Access denied')" "1"
 
 if [ "$failures" -gt 0 ]; then
-    for log in /tmp/service.log /tmp/verify.log /tmp/broker.log; do
-        if [ -f "$log" ]; then
-            echo "--- $log"
-            cat "$log"
-        fi
-    done
+    printLogs
     exit 1
 fi
