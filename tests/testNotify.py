@@ -54,6 +54,10 @@ class WarnerTests(unittest.TestCase):
             self.assertIsNone(self.warner.update("m", hidpp.BatteryReading(3, code), False))
         self.assertIsNone(self.warner.update("m", discharging(8), False))
 
+    def testOnlyADischargingReadingAboveTwentyArmsBothWarningsAgain(self):
+        results = [self.warner.update("m", discharging(percent), False) for percent in (10, 5, 20, 10, 5, 21, 10, 5)]
+        self.assertEqual(results, [10, 5, None, None, None, None, 10, 5])
+
     def testAsleepNeverWarns(self):
         self.assertIsNone(self.warner.update("m", discharging(4), True))
 

@@ -9,6 +9,7 @@ APP_NAME = "Mouse Battery"
 APP_ICON = "logitech-mouse-battery"
 LOW_PERCENT = 10
 CRITICAL_PERCENT = 5
+REARM_PERCENT = 20
 CALL_TIMEOUT_MS = 5000
 
 
@@ -23,6 +24,10 @@ class LowBatteryWarner:
             self.sent.pop(key, None)
             return None
         if (reading.charging != 0 or reading.percent is None):
+            return None
+        # a charge the app never saw (suspend, mouse off, wall charger, new batteries) only shows as a high reading, and the margin over LOW_PERCENT keeps a wobbling level from warning twice
+        if (reading.percent > REARM_PERCENT):
+            self.sent.pop(key, None)
             return None
         sent = self.sent.setdefault(key, set())
         if (reading.percent <= CRITICAL_PERCENT and CRITICAL_PERCENT not in sent):
