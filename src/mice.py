@@ -59,6 +59,7 @@ class Mouse:
         self.asleep = False
         self.lastRead = None
         self.wokeAt = None
+        self.readFromUPower = False
 
 
 class MouseList(QObject):
@@ -121,9 +122,13 @@ class MouseList(QObject):
         if (entry.name):
             mouse.name = entry.name
         mouse.nodePath = entry.source
-        # whichever path read last is what a mouse on both paths shows
-        if (mouse.upowerPath is not None and not isLater(entry.lastRead, mouse.lastRead)):
+        # a reading UPower gave stays until the service has a later one, so an older entry never brings back a stale level or re-arms the warner
+        if ((mouse.upowerPath is not None or mouse.readFromUPower) and not isLater(entry.lastRead, mouse.lastRead)):
+            if (mouse.upowerPath is None):
+                # with UPower gone, only the service can say the mouse went to sleep
+                mouse.asleep = entry.asleep
             return
+        mouse.readFromUPower = False
         mouse.reading = entry.reading
         mouse.asleep = entry.asleep
         mouse.lastRead = entry.lastRead
@@ -174,6 +179,7 @@ class MouseList(QObject):
         mouse.upowerPath = upowerMouse.path
         if (mouse.name is None):
             mouse.name = upowerMouse.name
+        mouse.readFromUPower = True
         # UPower sends no sleep signal, so a changed reading is the only sign the mouse is in use
         self.applyReading(mouse, upowerMouse.reading, woke=(mouse.reading != upowerMouse.reading))
         self.changed.emit()

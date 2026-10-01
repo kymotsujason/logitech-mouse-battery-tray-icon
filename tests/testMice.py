@@ -107,6 +107,56 @@ class MouseListTests(unittest.TestCase):
         self.mice.removeUPower(UPOWER_PATH)
         self.assertEqual((self.mouse().reading.percent, self.mouse().asleep), (50, True))
 
+    def testAnOlderEntryAfterUPowerLeavesGivesOnlyItsSleep(self):
+        self.mice.applyService(state(entry(percent=40, lastRead=1000.0)))
+        self.addUPower(50)
+        self.mice.removeUPower(UPOWER_PATH)
+        self.mice.applyService(state(entry(percent=40, lastRead=1000.0, asleep=True)))
+        mouse = self.byKey("02bc524c")
+        self.assertEqual((mouse.reading.percent, mouse.asleep), (50, True))
+
+    def testTheEndIsTheSameWhicheverBusDeliversFirst(self):
+        self.mice.applyService(state(entry(percent=40, lastRead=1000.0)))
+        self.addUPower(50)
+        self.mice.applyService(state(entry(percent=40, lastRead=1000.0, asleep=True)))
+        self.mice.removeUPower(UPOWER_PATH)
+        mouse = self.byKey("02bc524c")
+        self.assertEqual((mouse.reading.percent, mouse.asleep), (50, True))
+
+    def testNoneAfterUPowerLeavesDoesntWarnAgain(self):
+        warnings = self.sentWarnings()
+        self.mice.applyService(state(entry(percent=60, lastRead=1000.0)))
+        self.addUPower(9)
+        self.mice.removeUPower(UPOWER_PATH)
+        self.mice.applyService(None)
+        self.mice.applyService(state(entry(percent=60, lastRead=1000.0)))
+        self.assertEqual(self.byKey("02bc524c").reading.percent, 9)
+        self.mice.applyService(state(entry(percent=9, lastRead=time.time() + 10)))
+        self.assertEqual(warnings, [9])
+
+    def testALaterEntryAfterUPowerLeavesIsCopied(self):
+        self.mice.applyService(state(entry(percent=40, lastRead=1000.0)))
+        self.addUPower(50)
+        self.mice.removeUPower(UPOWER_PATH)
+        self.mice.applyService(state(entry(percent=30, lastRead=time.time() + 10)))
+        mouse = self.byKey("02bc524c")
+        self.assertEqual((mouse.reading.percent, mouse.readFromUPower), (30, False))
+
+    def testAMouseThatLosesItsUPowerHalfToAnAwakeEntryStaysAwake(self):
+        self.mice.applyService(state(entry(percent=40, lastRead=1000.0)))
+        self.addUPower(50)
+        self.mice.removeUPower(UPOWER_PATH)
+        mouse = self.byKey("02bc524c")
+        self.assertEqual((mouse.asleep, mouse.reading.percent), (False, 50))
+
+    def testAMouseThatLosesItsUPowerHalfWhileSearchingTurnsAsleep(self):
+        self.mice.applyService(state(entry(percent=40, lastRead=1000.0)))
+        self.addUPower(50)
+        self.mice.applyService(state(searching=True, nodes=(RECEIVER,)))
+        self.mice.removeUPower(UPOWER_PATH)
+        mouse = self.byKey("02bc524c")
+        self.assertEqual((mouse.asleep, mouse.reading.percent), (True, 50))
+
     def testAMergedMouseKeepsANewerUPowerReading(self):
         self.addUPower(50)
         self.mice.applyService(state(entry(percent=40, lastRead=time.time() - 100)))
