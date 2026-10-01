@@ -334,7 +334,12 @@ class MouseList(QObject):
             mouse.wakeTimer.deleteLater()
             mouse.wakeTimer = None
         if (mouse.upowerPath is None and mouse in self.mice):
-            self.mice.remove(mouse)
+            self.removeMouse(mouse)
+
+    def removeMouse(self, mouse):
+        self.mice.remove(mouse)
+        # a key built from a path can pass to a different mouse later, while a unit id stays with its mouse and clears itself above REARM_PERCENT
+        if (mouse.key.startswith("/")):
             self.warner.forget(mouse.key)
 
     def applyReading(self, mouse, reading, woke=False):
@@ -431,8 +436,7 @@ class MouseList(QObject):
             if (mouse.upowerPath == path):
                 mouse.upowerPath = None
                 if (mouse.nodePath is None):
-                    self.mice.remove(mouse)
-                    self.warner.forget(mouse.key)
+                    self.removeMouse(mouse)
         self.changed.emit()
 
     def shownMouse(self):

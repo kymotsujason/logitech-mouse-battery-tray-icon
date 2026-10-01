@@ -468,30 +468,46 @@ class MouseListTests(unittest.TestCase):
         QTest.qWait(300)
         self.assertEqual(warnings, [("02bc524c", NAME.decode(), 9)])
 
-    def testARemovedUPowerMouseForgetsItsWarnings(self):
+    def sentWarnings(self):
         warnings = []
 
         def onLowBattery(key, name, percent):
             warnings.append(percent)
+            # the tray marks a warning sent once its notification goes out
             self.mice.warner.markSent(key, percent)
 
         self.mice.lowBattery.connect(onLowBattery)
-        path = "/org/freedesktop/UPower/devices/mouse_hidpp_battery_1"
-        lowMouse = upower.UPowerMouse(path, "12ab34cd", "MX Master 3", hidpp.BatteryReading(9, 0))
+        return warnings
+
+    def upowerWarningsAcrossARemoval(self, path, key):
+        warnings = self.sentWarnings()
+        lowMouse = upower.UPowerMouse(path, key, "MX Master 3", hidpp.BatteryReading(9, 0))
         self.mice.applyUPower(lowMouse)
         self.mice.removeUPower(path)
-        self.assertEqual(self.mice.warner.sent, {})
         self.mice.applyUPower(lowMouse)
-        self.assertEqual(warnings, [9, 9])
+        return warnings
 
-    def testAMouseDroppedWithItsNodeForgetsItsWarnings(self):
-        self.mice.lowBattery.connect(lambda key, name, percent: self.mice.warner.markSent(key, percent))
-        self.nodes.add(RECEIVER, mouseHandler(answers={(5, 0): [0x0F, 0x02], (5, 1): [9, 0x02, 0, 0]}))
+    def warningsAfterTheNodeGoes(self, unitId, key):
+        self.sentWarnings()
+        self.nodes.add(RECEIVER, mouseHandler(answers={(5, 0): [0x0F, 0x02], (5, 1): [9, 0x02, 0, 0]}, unitId=unitId))
         self.mice.start()
-        self.assertTrue(waitUntil(lambda: "02bc524c" in self.mice.warner.sent))
+        self.assertTrue(waitUntil(lambda: key in self.mice.warner.sent))
         self.nodes.remove(RECEIVER)
         self.assertTrue(waitUntil(lambda: self.keys() == []))
-        self.assertEqual(self.mice.warner.sent, {})
+        return self.mice.warner.sent
+
+    def testAUPowerMouseKeyedByItsPathIsWarnedAgainAfterARemoval(self):
+        path = "/org/freedesktop/UPower/devices/mouse_hidpp_battery_1"
+        self.assertEqual(self.upowerWarningsAcrossARemoval(path, path), [9, 9])
+
+    def testAUPowerMouseWithASerialIsntWarnedAgainAfterARemoval(self):
+        self.assertEqual(self.upowerWarningsAcrossARemoval("/org/freedesktop/UPower/devices/mouse_hidpp_battery_1", "12ab34cd"), [9])
+
+    def testAMouseKeyedByNodeAndSlotForgetsItsWarningsWithTheNode(self):
+        self.assertEqual(self.warningsAfterTheNodeGoes(bytes(4), RECEIVER + "#1"), {})
+
+    def testAMouseWithAUnitIdKeepsItsWarningsWithoutItsNode(self):
+        self.assertEqual(self.warningsAfterTheNodeGoes(bytes.fromhex("02bc524c"), "02bc524c"), {"02bc524c": {10}})
 
     def testAUPowerMouseMergesWithTheSameHidppMouse(self):
         self.nodes.add(RECEIVER, mouseHandler())
