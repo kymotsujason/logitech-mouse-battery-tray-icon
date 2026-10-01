@@ -10,7 +10,7 @@ pids=()
 failures=0
 
 cleanup() {
-    for name in "$unit" "$unit-second" "$unit-trayless"; do
+    for name in "$unit" "$unit-second" "$unit-trayless" "$unit-service"; do
         systemctl --user stop "$name" 2>/dev/null
         systemctl --user reset-failed "$name" 2>/dev/null
     done
@@ -82,6 +82,16 @@ waitForOutput() {
     printf '%s' "$output"
 }
 
+waitForName() {
+    for i in $(seq 50); do
+        if busctl --address="$system" call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus NameHasOwner s "$1" 2>/dev/null | grep -q "b true"; then
+            return 0
+        fi
+        sleep 0.2
+    done
+    return 1
+}
+
 textColor() {
     kreadconfig6 --file "/usr/share/color-schemes/$1.colors" --group Colors:Window --key ForegroundNormal
 }
@@ -127,7 +137,7 @@ echo 81 > "$work/percent"
 echo 55 > "$work/upowerPercent"
 # the installed app holds its lock in the real runtime folder, so the test copy gets its own
 privateEnv=(-E "DBUS_SESSION_BUS_ADDRESS=$session" -E "DBUS_SYSTEM_BUS_ADDRESS=$system" -E "XDG_CONFIG_HOME=$work/config" -E "XDG_CACHE_HOME=$work/cache" -E "XDG_STATE_HOME=$work/state" -E "XDG_DATA_HOME=$work/data" -E "XDG_RUNTIME_DIR=$work/runtime")
-appEnv=("${privateEnv[@]}" -E QT_QPA_PLATFORM=offscreen -E QT_QPA_PLATFORMTHEME=kde -E "LIVE_PERCENT_FILE=$work/percent")
+appEnv=("${privateEnv[@]}" -E QT_QPA_PLATFORM=offscreen -E QT_QPA_PLATFORMTHEME=kde)
 
 applyScheme() {
     systemd-run --user --collect --wait --quiet "${privateEnv[@]}" plasma-apply-colorscheme "$1" > /dev/null
@@ -139,6 +149,8 @@ python3 "$here/../fakes/fakeUPower.py" "$system" "$work/upowerPercent" > "$work/
 pids+=($!)
 waitForLine "$work/notifications.log" "owns the notifications name" > /dev/null
 waitForLine "$work/upower.log" "owns the upower name" > /dev/null
+systemd-run --user --quiet --unit="$unit-service" "${privateEnv[@]}" -E QT_QPA_PLATFORM=offscreen -E "LIVE_PERCENT_FILE=$work/percent" python3 "$here/../fakes/runService.py" "$system"
+check "the service takes its name on the private system bus" "$(waitForName io.github.kymotsujason.LogitechMouseBattery && echo yes)" "yes"
 
 applyScheme BreezeDark
 startWatcher A
