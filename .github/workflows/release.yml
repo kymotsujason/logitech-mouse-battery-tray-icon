@@ -75,7 +75,7 @@ jobs:
       - name: Test each package in a clean container
         run: tests/containers/testPackages.sh
       - name: Bundle the checksummed PKGBUILD for the AUR
-        run: tar -czf "dist/logitech-mouse-battery-$VERSION-aur.tar.gz" -C dist/aur PKGBUILD .SRCINFO
+        run: tar -czf "dist/logitech-mouse-battery-$VERSION-aur.tar.gz" -C dist/aur PKGBUILD .SRCINFO logitech-mouse-battery.install
       - name: Write the checksums of every asset
         run: cd dist && sha256sum *.deb *.rpm *.pkg.tar.zst *.tar.gz > SHA256SUMS
       - name: Publish the release

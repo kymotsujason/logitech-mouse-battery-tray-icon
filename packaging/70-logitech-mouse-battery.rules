@@ -1,6 +1,5 @@
-# lets the logged in user read and write the HID++ interface of a Logitech USB device, such as a receiver or a mouse on
-# its cable, that the kernel leaves to hid-generic, when its descriptor passes the app's check, which rejects any
-# keyboard, keypad, or mouse collection and the DJ reports that carry a paired keyboard's keystrokes. Any program the
-# user runs can then send HID++ commands to that device and to the devices paired with it, which can change their
-# settings and pairings
-ACTION!="remove", SUBSYSTEM=="hidraw", KERNELS=="0003:046D:*", DRIVERS=="hid-generic", PROGRAM="/usr/bin/python3 -I -B /usr/share/logitech-mouse-battery/isHidpp.py %S%p", TAG+="uaccess"
+# hands the HID++ interface of a Logitech USB device that the kernel leaves to hid-generic, such as a receiver or a mouse
+# on its cable, to the logitech-mouse-battery group alone, when its descriptor passes the app's check, which rejects any
+# keyboard, keypad, or mouse collection and the DJ reports that carry a paired keyboard's keystrokes. Only the battery
+# service runs in that group, it reads battery levels and nothing else, and udev starts it when such a device shows up
+ACTION!="remove", SUBSYSTEM=="hidraw", KERNELS=="0003:046D:*", DRIVERS=="hid-generic", PROGRAM="/usr/bin/python3 -I -B /usr/share/logitech-mouse-battery/isHidpp.py %S%p", GROUP="logitech-mouse-battery", MODE="0660", TAG+="systemd", ENV{SYSTEMD_WANTS}+="logitech-mouse-battery.service"

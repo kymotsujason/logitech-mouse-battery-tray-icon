@@ -23,10 +23,10 @@ useradd -m builder
 echo "PACKAGER=\"kymotsujason <kymotsujason@gmail.com>\"" > /home/builder/.makepkg.conf
 chown builder /home/builder/.makepkg.conf
 mkdir /build
-cp /repo/packaging/aur/PKGBUILD "/repo/dist/$TARBALL" /build/
+cp /repo/packaging/aur/PKGBUILD /repo/packaging/aur/logitech-mouse-battery.install "/repo/dist/$TARBALL" /build/
 chown -R builder /build
 su builder -c "cd /build && updpkgsums && makepkg --force --nodeps && makepkg --printsrcinfo > .SRCINFO"
 cp /build/*.pkg.tar.zst /repo/dist/
-cp /build/PKGBUILD /build/.SRCINFO /repo/dist/aur/
+cp /build/PKGBUILD /build/.SRCINFO /build/logitech-mouse-battery.install /repo/dist/aur/
 chown -R "$OWNER" /repo/dist
 '

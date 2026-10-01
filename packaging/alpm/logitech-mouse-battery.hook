@@ -1,0 +1,10 @@
+[Trigger]
+Type = Path
+Operation = Install
+Operation = Upgrade
+Target = usr/share/logitech-mouse-battery/*
+
+[Action]
+Description = Setting up the Mouse Battery service...
+When = PostTransaction
+Exec = /usr/share/logitech-mouse-battery/afterInstall.sh

@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import QApplication
 
 import autostart
 import icon
+import serviceState
 import tray
 import version
 
@@ -44,7 +45,7 @@ class DesktopEntryTests(unittest.TestCase):
 
 
 RULE_FILE = "70-logitech-mouse-battery.rules"
-RULE = 'ACTION!="remove", SUBSYSTEM=="hidraw", KERNELS=="0003:046D:*", DRIVERS=="hid-generic", PROGRAM="/usr/bin/python3 -I -B /usr/share/logitech-mouse-battery/isHidpp.py %S%p", TAG+="uaccess"'
+RULE = 'ACTION!="remove", SUBSYSTEM=="hidraw", KERNELS=="0003:046D:*", DRIVERS=="hid-generic", PROGRAM="/usr/bin/python3 -I -B /usr/share/logitech-mouse-battery/isHidpp.py %S%p", GROUP="logitech-mouse-battery", MODE="0660", TAG+="systemd", ENV{SYSTEMD_WANTS}+="logitech-mouse-battery.service"'
 
 
 class UdevRuleTests(unittest.TestCase):
@@ -60,6 +61,107 @@ class UdevRuleTests(unittest.TestCase):
             appDir = next(line.split("=", 1)[1] for line in f.read().splitlines() if line.startswith("APP_DIR="))
         self.assertIn(" " + appDir + "/isHidpp.py ", self.readRule()[0])
         self.assertTrue(os.path.exists(os.path.join(SRC, "isHidpp.py")))
+
+
+USER = "logitech-mouse-battery"
+UNIT_NAME = "logitech-mouse-battery.service"
+SYSUSERS_LINE = 'u logitech-mouse-battery - "Mouse Battery service" - -'
+SANDBOX = {
+    "NoNewPrivileges": "yes",
+    "CapabilityBoundingSet": "",
+    "ProtectSystem": "strict",
+    "ProtectHome": "yes",
+    "PrivateTmp": "yes",
+    "PrivateNetwork": "yes",
+    "RestrictAddressFamilies": "AF_UNIX",
+    "DevicePolicy": "closed",
+    "DeviceAllow": "char-hidraw rw",
+    "ProtectKernelTunables": "yes",
+    "ProtectKernelModules": "yes",
+    "ProtectKernelLogs": "yes",
+    "ProtectControlGroups": "yes",
+    "ProtectClock": "yes",
+    "ProtectHostname": "yes",
+    "RestrictNamespaces": "yes",
+    "RestrictRealtime": "yes",
+    "LockPersonality": "yes",
+    "SystemCallFilter": "@system-service",
+}
+SERVICE_FILES = [
+    ("packaging/systemd/logitech-mouse-battery.service", "/usr/lib/systemd/system/logitech-mouse-battery.service"),
+    ("packaging/dbus/io.github.kymotsujason.LogitechMouseBattery.conf", "/usr/share/dbus-1/system.d/io.github.kymotsujason.LogitechMouseBattery.conf"),
+    ("packaging/dbus/io.github.kymotsujason.LogitechMouseBattery.service", "/usr/share/dbus-1/system-services/io.github.kymotsujason.LogitechMouseBattery.service"),
+    ("packaging/sysusers/logitech-mouse-battery.conf", "/usr/lib/sysusers.d/logitech-mouse-battery.conf"),
+]
+ALLOWED_CALLS = {(serviceState.INTERFACE, "GetState"), (serviceState.INTERFACE, "ReadAll"), ("org.freedesktop.DBus.Introspectable", "Introspect"), ("org.freedesktop.DBus.Peer", "Ping"), ("org.freedesktop.DBus.Peer", "GetMachineId")}
+
+
+def iniSections(path):
+    sections = {}
+    current = None
+    with open(path) as f:
+        for line in f.read().splitlines():
+            if (line.startswith("[") and line.endswith("]")):
+                current = sections.setdefault(line[1:-1], {})
+            elif ("=" in line and not line.startswith("#")):
+                key, value = line.split("=", 1)
+                current[key.strip()] = value.strip()
+    return sections
+
+
+def readText(*parts):
+    with open(os.path.join(REPO, *parts)) as f:
+        return f.read()
+
+
+class ServiceFileTests(unittest.TestCase):
+    def testTheSysusersLineMakesTheUserAndItsGroup(self):
+        self.assertEqual(readText("packaging", "sysusers", "logitech-mouse-battery.conf"), SYSUSERS_LINE + "\n")
+
+    def testThePreinstallMakesTheSameUser(self):
+        self.assertIn("echo '" + SYSUSERS_LINE + "' | systemd-sysusers --replace=/usr/lib/sysusers.d/logitech-mouse-battery.conf -\n", readText("packaging", "preinstall.sh"))
+
+    def testTheUnitRunsTheServiceAsItsOwnUser(self):
+        sections = iniSections(os.path.join(PACKAGING, "systemd", UNIT_NAME))
+        service = sections["Service"]
+        self.assertEqual({key: service[key] for key in ("Type", "BusName", "ExecStart", "User", "Group", "Restart", "RestartSec")}, {"Type": "dbus", "BusName": serviceState.SERVICE_NAME, "ExecStart": "/usr/bin/python3 -B /usr/share/logitech-mouse-battery/service.py", "User": USER, "Group": USER, "Restart": "on-failure", "RestartSec": "2"})
+        self.assertEqual((sections["Unit"]["StartLimitIntervalSec"], sections["Unit"]["StartLimitBurst"]), ("60", "20"))
+        # it starts when udev or a caller wants it, never at boot by itself
+        self.assertNotIn("Install", sections)
+
+    def testTheUnitIsSandboxed(self):
+        service = iniSections(os.path.join(PACKAGING, "systemd", UNIT_NAME))["Service"]
+        self.assertEqual({key: service.get(key) for key in SANDBOX}, SANDBOX)
+        self.assertNotIn("PrivateDevices", service)
+        self.assertNotIn("MemoryDenyWriteExecute", service)
+
+    def testTheBusPolicyLetsOnlyTheServiceUserOwnTheNameAndCallsOnlyItsMethods(self):
+        root = ElementTree.parse(os.path.join(PACKAGING, "dbus", serviceState.SERVICE_NAME + ".conf")).getroot()
+        owners = [(policy.get("user"), rule.get("own")) for policy in root.iter("policy") for rule in policy if rule.get("own") is not None]
+        self.assertEqual(owners, [(USER, serviceState.SERVICE_NAME)])
+        calls = [rule for policy in root.iter("policy") if policy.get("context") == "default" for rule in policy]
+        self.assertTrue(all(rule.tag == "allow" and rule.get("send_destination") == serviceState.SERVICE_NAME and rule.get("send_member") for rule in calls))
+        self.assertEqual({(rule.get("send_interface"), rule.get("send_member")) for rule in calls}, ALLOWED_CALLS)
+
+    def testTheActivationFileStartsTheUnit(self):
+        sections = iniSections(os.path.join(PACKAGING, "dbus", serviceState.SERVICE_NAME + ".service"))
+        self.assertEqual(sections, {"D-BUS Service": {"Name": serviceState.SERVICE_NAME, "Exec": "/bin/false", "User": USER, "SystemdService": UNIT_NAME}})
+
+    def testThePacmanHookRunsAfterTheBusReload(self):
+        name = "logitech-mouse-battery.hook"
+        # pacman runs PostTransaction hooks in file name order, and the bus has to hold the new policy first
+        self.assertLess("dbus-reload.hook", name)
+        self.assertLess("35-systemd-udev-reload.hook", name)
+        lines = readText("packaging", "alpm", name).splitlines()
+        for line in ("Type = Path", "Operation = Install", "Operation = Upgrade", "Target = usr/share/logitech-mouse-battery/*", "When = PostTransaction", "Exec = /usr/share/logitech-mouse-battery/afterInstall.sh"):
+            self.assertIn(line, lines)
+
+    def testTheArchInstallFileStopsTheServiceOnRemoval(self):
+        text = readText("packaging", "aur", "logitech-mouse-battery.install")
+        self.assertIn("pre_remove() {\n    systemctl stop logitech-mouse-battery.service 2>/dev/null || true\n}\n", text)
+
+    def testThePostinstallRunsAfterInstall(self):
+        self.assertEqual(readText("packaging", "postinstall.sh"), "#!/bin/sh\n/usr/share/logitech-mouse-battery/afterInstall.sh\nexit 0\n")
 
 
 SVG = "{http://www.w3.org/2000/svg}"
@@ -139,8 +241,17 @@ class NfpmTests(unittest.TestCase):
     def testRpmAsksForPythonThreeElevenOrLater(self):
         self.assertIn("  rpm:\n    depends:\n      - python3 >= 3.11\n", self.text)
 
-    def testBothScriptsReloadUdev(self):
-        self.assertIn("scripts:\n  postinstall: packaging/reloadUdev.sh\n  postremove: packaging/reloadUdev.sh\n", self.text)
+    def testTheFourScriptsSetUpAndRemoveTheService(self):
+        self.assertIn("scripts:\n  preinstall: packaging/preinstall.sh\n  postinstall: packaging/postinstall.sh\n  preremove: packaging/preremove.sh\n  postremove: packaging/postremove.sh\n", self.text)
+
+    def testEachServiceFileGoesToItsPlace(self):
+        for source, destination in SERVICE_FILES:
+            self.assertIn("  - src: " + source + "\n    dst: " + destination + "\n", self.text)
+        self.assertIn("  - src: packaging/afterInstall.sh\n    dst: /usr/share/logitech-mouse-battery/afterInstall.sh\n    file_info:\n      mode: 0755\n", self.text)
+
+    def testBothPackagesNeedSystemdAndTheDebNeedsItFirst(self):
+        self.assertEqual(self.text.count("      - python3-pyqt6\n      - systemd\n"), 2)
+        self.assertIn("\ndeb:\n  predepends:\n    - systemd\n", self.text)
 
     def testTheLicenseGoesToEachDistrosPlace(self):
         self.assertIn("  - src: LICENSE\n    dst: /usr/share/doc/logitech-mouse-battery/copyright\n    packager: deb\n", self.text)
@@ -162,6 +273,15 @@ class PkgbuildTests(unittest.TestCase):
     def testTheSrcinfoMatchesTheVersion(self):
         with open(os.path.join(PACKAGING, "aur", ".SRCINFO")) as f:
             self.assertIn("\tpkgver = " + version.VERSION + "\n", f.read())
+
+    def testTheServiceFilesAreInstalled(self):
+        for source, destination in SERVICE_FILES + [("packaging/alpm/logitech-mouse-battery.hook", "/usr/share/libalpm/hooks/logitech-mouse-battery.hook")]:
+            self.assertIn('    install -Dm644 ' + source + ' "$pkgdir' + destination + '"\n', self.text)
+        self.assertIn('    install -Dm755 packaging/afterInstall.sh "$pkgdir/usr/share/$pkgname/afterInstall.sh"\n', self.text)
+
+    def testItNeedsSystemdAndRunsItsInstallFile(self):
+        self.assertIn("\ndepends=('python' 'python-pyqt6' 'systemd')\n", self.text)
+        self.assertIn("\ninstall=logitech-mouse-battery.install\n", self.text)
 
 
 class VersionMentionTests(unittest.TestCase):
@@ -223,6 +343,9 @@ class WorkflowTests(unittest.TestCase):
         ci = self.read("ci.yml")
         for script in ("tests/live/checkLateTray.sh", "packaging/tarball.sh", "packaging/build.sh", "packaging/buildArch.sh", "tests/containers/testPackages.sh"):
             self.assertIn("run: " + script + "\n", ci)
+
+    def testTheAurBundleCarriesTheInstallFile(self):
+        self.assertIn('run: tar -czf "dist/logitech-mouse-battery-$VERSION-aur.tar.gz" -C dist/aur PKGBUILD .SRCINFO logitech-mouse-battery.install\n', self.releaseJob())
 
 
 if (__name__ == "__main__"):

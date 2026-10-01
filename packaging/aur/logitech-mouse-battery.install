@@ -1,0 +1,3 @@
+pre_remove() {
+    systemctl stop logitech-mouse-battery.service 2>/dev/null || true
+}

@@ -71,13 +71,19 @@ if [ "$status" -ne 0 ]; then
     exit 1
 fi
 
+archHook=""
+if [ "$kind" = "arch" ]; then
+    archHook=/usr/share/libalpm/hooks/$name.hook
+fi
 missing=""
-for path in /usr/bin/$name $appDir/autostart.py $appDir/check.py $appDir/clearAccess.py $appDir/dbusCalls.py $appDir/exceptionHooks.py $appDir/hidDescriptor.py $appDir/hidpp.py $appDir/icon.py $appDir/installWatch.py $appDir/isHidpp.py $appDir/lowBattery.py $appDir/mice.py $appDir/notify.py $appDir/panelColor.py $appDir/receivers.py $appDir/service.py $appDir/serviceClient.py $appDir/serviceState.py $appDir/tray.py $appDir/trayHost.py $appDir/upower.py $appDir/version.py $appDir/NotoSans-Medium.ttf $appDir/OFL.txt /usr/share/applications/$name.desktop /etc/xdg/autostart/$name.desktop /usr/lib/udev/rules.d/70-$name.rules /usr/share/icons/hicolor/scalable/apps/$name.svg /usr/share/metainfo/io.github.kymotsujason.LogitechMouseBattery.metainfo.xml; do
+for path in /usr/bin/$name $appDir/autostart.py $appDir/check.py $appDir/clearAccess.py $appDir/dbusCalls.py $appDir/exceptionHooks.py $appDir/hidDescriptor.py $appDir/hidpp.py $appDir/icon.py $appDir/installWatch.py $appDir/isHidpp.py $appDir/lowBattery.py $appDir/mice.py $appDir/notify.py $appDir/panelColor.py $appDir/receivers.py $appDir/service.py $appDir/serviceClient.py $appDir/serviceState.py $appDir/tray.py $appDir/trayHost.py $appDir/upower.py $appDir/version.py $appDir/NotoSans-Medium.ttf $appDir/OFL.txt $appDir/afterInstall.sh /usr/share/applications/$name.desktop /etc/xdg/autostart/$name.desktop /usr/lib/udev/rules.d/70-$name.rules /usr/share/icons/hicolor/scalable/apps/$name.svg /usr/share/metainfo/io.github.kymotsujason.LogitechMouseBattery.metainfo.xml /usr/lib/systemd/system/$name.service /usr/share/dbus-1/system.d/io.github.kymotsujason.LogitechMouseBattery.conf /usr/share/dbus-1/system-services/io.github.kymotsujason.LogitechMouseBattery.service /usr/lib/sysusers.d/$name.conf $archHook; do
     if [ ! -f "$path" ]; then
         missing="$missing $path"
     fi
 done
 check "every file lands where the spec puts it" "$missing" ""
+check "the install made the service's user and group" "$(getent passwd logitech-mouse-battery > /dev/null && getent group logitech-mouse-battery > /dev/null && echo yes)" "yes"
+check "afterInstall.sh is executable" "$([ -x $appDir/afterInstall.sh ] && echo yes)" "yes"
 
 check "the launcher prints the version" "$($name --version)" "$version"
 

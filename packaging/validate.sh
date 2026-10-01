@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# checks the desktop entries, the udev rule, and the AppStream data with each format's own validator, inside an
-# Arch container, which has all three tools
+# checks the desktop entries, the udev rule, the service unit, and the AppStream data with each format's own
+# validator, inside an Arch container, which has all four tools
 set -u
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
@@ -9,7 +9,7 @@ if [ "${1:-}" != "--inside" ]; then
     exit $?
 fi
 
-pacman -Syu --noconfirm --needed desktop-file-utils appstream > /tmp/pacman.log 2>&1
+pacman -Syu --noconfirm --needed desktop-file-utils appstream python > /tmp/pacman.log 2>&1
 status=$?
 if [ "$status" -ne 0 ]; then
     echo "FAIL pacman -Syu: expected exit 0, got $status"
@@ -32,7 +32,8 @@ validate() {
 
 validate desktop-file-validate /repo/packaging/logitech-mouse-battery.desktop
 validate desktop-file-validate /repo/packaging/autostart/logitech-mouse-battery.desktop
-validate udevadm verify /repo/packaging/70-logitech-mouse-battery.rules
+validate udevadm verify --resolve-names=never /repo/packaging/70-logitech-mouse-battery.rules
+validate systemd-analyze verify /repo/packaging/systemd/logitech-mouse-battery.service
 validate appstreamcli validate --no-net /repo/packaging/io.github.kymotsujason.LogitechMouseBattery.metainfo.xml
 
 if [ "$failures" -gt 0 ]; then

@@ -116,6 +116,18 @@ contents:
     dst: /usr/share/logitech-mouse-battery/OFL.txt
     file_info:
       mode: 0644
+  - src: packaging/afterInstall.sh
+    dst: /usr/share/logitech-mouse-battery/afterInstall.sh
+    file_info:
+      mode: 0755
+  - src: packaging/systemd/logitech-mouse-battery.service
+    dst: /usr/lib/systemd/system/logitech-mouse-battery.service
+  - src: packaging/dbus/io.github.kymotsujason.LogitechMouseBattery.conf
+    dst: /usr/share/dbus-1/system.d/io.github.kymotsujason.LogitechMouseBattery.conf
+  - src: packaging/dbus/io.github.kymotsujason.LogitechMouseBattery.service
+    dst: /usr/share/dbus-1/system-services/io.github.kymotsujason.LogitechMouseBattery.service
+  - src: packaging/sysusers/logitech-mouse-battery.conf
+    dst: /usr/lib/sysusers.d/logitech-mouse-battery.conf
   - src: packaging/logitech-mouse-battery.desktop
     dst: /usr/share/applications/logitech-mouse-battery.desktop
   - src: packaging/autostart/logitech-mouse-battery.desktop
@@ -144,14 +156,21 @@ contents:
     dst: /usr/share/licenses/logitech-mouse-battery/LICENSE
     packager: rpm
 scripts:
-  postinstall: packaging/reloadUdev.sh
-  postremove: packaging/reloadUdev.sh
+  preinstall: packaging/preinstall.sh
+  postinstall: packaging/postinstall.sh
+  preremove: packaging/preremove.sh
+  postremove: packaging/postremove.sh
 overrides:
   deb:
     depends:
       - python3 (>= 3.11)
       - python3-pyqt6
+      - systemd
   rpm:
     depends:
       - python3 >= 3.11
       - python3-pyqt6
+      - systemd
+deb:
+  predepends:
+    - systemd
