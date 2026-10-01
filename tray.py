@@ -195,7 +195,7 @@ class MouseBatteryApp(QObject):
         self.upower.watchOwner()
         self.upower.start()
         self.hostWatcher = QDBusServiceWatcher(WATCHER_SERVICE, self.sessionBus, QDBusServiceWatcher.WatchModeFlag.WatchForRegistration, self)
-        self.hostWatcher.serviceRegistered.connect(lambda name: self.checkHost())
+        self.hostWatcher.serviceRegistered.connect(self.onWatcherRegistered)
         self.sessionBus.connect("", WATCHER_PATH, WATCHER_SERVICE, "StatusNotifierHostRegistered", self.onHostRegistered)
         self.watchInstallFolder()
         self.watchColors()
@@ -209,8 +209,13 @@ class MouseBatteryApp(QObject):
     def quitApp(self):
         self.app.quit()
 
+    def onWatcherRegistered(self, name):
+        self.hostRetryMs = HOST_RETRY_MS
+        self.checkHost()
+
     @pyqtSlot(QDBusMessage)
     def onHostRegistered(self, message):
+        self.hostRetryMs = HOST_RETRY_MS
         self.checkHost()
 
     def checkHost(self):
@@ -218,7 +223,7 @@ class MouseBatteryApp(QObject):
             return
         # Qt 6.4 caches its first tray check for the whole process, thus the tray icon waits for a registered host
         if (not hostRegistered(self.sessionBus)):
-            # the watcher signals only report a change, so a query that errors or times out has to be asked again
+            # the watcher signals only report a change, and a failed query looks the same as a "no host" answer here, so both are asked again
             self.hostTimer.start(self.hostRetryMs)
             self.hostRetryMs = min(self.hostRetryMs * 2, HOST_RETRY_MAX_MS)
             return

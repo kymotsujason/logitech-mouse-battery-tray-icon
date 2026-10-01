@@ -9,7 +9,7 @@ from unittest import mock
 
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
-from PyQt6.QtDBus import QDBusConnection
+from PyQt6.QtDBus import QDBusConnection, QDBusMessage
 from PyQt6.QtGui import QColor, QPalette
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
@@ -138,6 +138,20 @@ class AppTests(unittest.TestCase):
                     mouseApp.checkHost()
                     intervals.append(mouseApp.hostTimer.interval())
         self.assertEqual(intervals, [10, 20, 40, 40])
+
+    def testWatcherSignalsStartTheBackoffOver(self):
+        with mock.patch.object(tray, "HOST_RETRY_MS", 10), mock.patch.object(tray, "HOST_RETRY_MAX_MS", 40):
+            mouseApp = self.makeApp(False)
+            with mock.patch.object(tray, "hostRegistered", return_value=False):
+                for i in range(3):
+                    mouseApp.checkHost()
+                mouseApp.hostWatcher.serviceRegistered.emit(tray.WATCHER_SERVICE)
+                afterWatcher = mouseApp.hostTimer.interval()
+                for i in range(3):
+                    mouseApp.checkHost()
+                mouseApp.onHostRegistered(QDBusMessage())
+                afterHost = mouseApp.hostTimer.interval()
+        self.assertEqual((afterWatcher, afterHost), (10, 10))
 
     def testTheNoTrayNoticeAsksForTheHostFirst(self):
         mouseApp = self.makeApp(False)
