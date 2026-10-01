@@ -24,7 +24,7 @@ class CheckTests(unittest.TestCase):
             mock.patch.object(hidpp.HidppNode, "open", self.nodes.open),
             mock.patch.object(hidpp, "PING_TIMEOUT", 0.02),
             mock.patch.object(hidpp, "REQUEST_TIMEOUT", 0.1),
-            mock.patch.object(upower, "listMice", return_value=[]),
+            mock.patch.object(upower, "listMice", return_value=([], [])),
         ]
         for patch in self.patches:
             patch.start()
@@ -50,14 +50,22 @@ class CheckTests(unittest.TestCase):
 
     def testPrintsAUPowerMouse(self):
         found = [upower.UPowerMouse("/p", "12ab34cd", "MX Master 3", hidpp.BatteryReading(55, 0))]
-        with mock.patch.object(upower, "listMice", return_value=found):
+        with mock.patch.object(upower, "listMice", return_value=(found, [])):
             self.assertEqual(self.runCheck(), (0, "MX Master 3 (UPower)\n  55%, discharging\n"))
 
     def testOneMouseOnBothPathsShowsWhereEachLineCameFrom(self):
         self.nodes.add("/dev/hidraw18", mouseHandler())
         found = [upower.UPowerMouse("/p", "02bc524c", NAME.decode(), hidpp.BatteryReading(80, 0))]
-        with mock.patch.object(upower, "listMice", return_value=found):
+        with mock.patch.object(upower, "listMice", return_value=(found, [])):
             self.assertEqual(self.runCheck(), (0, NAME.decode() + " (/dev/hidraw18)\n  81%, discharging\n" + NAME.decode() + " (UPower)\n  80%, discharging\n"))
+
+    def testNoUPowerOnTheBusPrintsNothingAboutIt(self):
+        with mock.patch.object(upower, "listMice", return_value=([], ["org.freedesktop.DBus.Error.ServiceUnknown"])):
+            self.assertEqual(self.runCheck(), (1, "No Logitech mouse found.\n"))
+
+    def testAUPowerErrorIsPrintedOnce(self):
+        with mock.patch.object(upower, "listMice", return_value=([], ["org.freedesktop.DBus.Error.NoReply", "org.freedesktop.DBus.Error.NoReply"])):
+            self.assertEqual(self.runCheck(), (1, "UPower answered org.freedesktop.DBus.Error.NoReply\nNo Logitech mouse found.\n"))
 
     def testNothingAtAll(self):
         self.assertEqual(self.runCheck(), (1, "No Logitech mouse found.\n"))

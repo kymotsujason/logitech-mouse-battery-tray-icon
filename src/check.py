@@ -50,9 +50,13 @@ def checkHidpp():
 
 
 def checkUPower():
-    found = upower.listMice()
+    found, errors = upower.listMice()
     for mouse in found:
         printMouse(mouse.name, "UPower", mouse.reading)
+    for error in sorted(set(errors)):
+        # UPower missing from the bus isn't a fault worth printing, since mice it would read just aren't there
+        if (error not in upower.ABSENT_ERRORS):
+            print("UPower answered " + error)
     return len(found)
 
 

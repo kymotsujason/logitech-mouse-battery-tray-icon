@@ -152,6 +152,7 @@ class MouseBatteryApp(QObject):
 
     def stop(self):
         self.trayHost.stop()
+        self.upower.stop()
         self.mouseList.stop()
 
     def quitApp(self):

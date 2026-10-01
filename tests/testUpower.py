@@ -5,10 +5,16 @@ from unittest import mock
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 from PyQt6.QtDBus import QDBusConnection, QDBusMessage, QDBusServiceWatcher, QDBusVariant
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication
 
+import dbusCalls
 import hidpp
 import upower
+from tests.fakes import privateBus
+from tests.fakes.recordingBus import RecordingBus
 
+app = QApplication.instance() or QApplication([])
 PATH = "/org/freedesktop/UPower/devices/mouse_hidpp_battery_0"
 OTHER_PATH = "/org/freedesktop/UPower/devices/mouse_hidpp_battery_1"
 
@@ -23,18 +29,6 @@ class FakeMessage:
 
     def arguments(self):
         return self.argumentsValue
-
-
-class RecordingBus:
-    def __init__(self):
-        self.subscriptions = []
-
-    def connect(self, service, path, interface, name, slot):
-        self.subscriptions.append((service, path, interface, name))
-        return True
-
-    def call(self, message):
-        return QDBusMessage()
 
 
 def mouseProperties(**changes):
@@ -88,6 +82,13 @@ class ReadingTests(unittest.TestCase):
     def testHidppStatusAboveFourIsAChargingError(self):
         self.assertEqual(hidpp.parseUnifiedStatus(bytes([50, 0x04, 5]), True).charging, 4)
 
+    def testANonFinitePercentageIsNoPercentage(self):
+        for value in (float("nan"), float("inf")):
+            self.assertIsNone(upower.mouseFromProperties(PATH, mouseProperties(Percentage=value)).reading.percent)
+
+    def testAModelWithControlCharactersReadsClean(self):
+        self.assertEqual(upower.mouseFromProperties(PATH, mouseProperties(Model="MX\x1b[2J Master")).name, "MX[2J Master")
+
 
 class WatcherRoutingTests(unittest.TestCase):
     def setUp(self):
@@ -138,12 +139,12 @@ class WatcherOwnerTests(unittest.TestCase):
         self.watcher.watchOwner()
         self.assertEqual(self.watcher.ownerWatcher.watchedServices(), [upower.SERVICE])
         self.assertEqual(self.watcher.ownerWatcher.watchMode(), QDBusServiceWatcher.WatchModeFlag.WatchForOwnerChange)
-        with mock.patch.object(upower, "enumeratePaths", return_value=[]):
+        with mock.patch.object(upower, "enumeratePaths", return_value=([], None)):
             self.watcher.ownerWatcher.serviceOwnerChanged.emit(upower.SERVICE, ":1.5", "")
         self.assertEqual(sorted(self.removed), sorted([PATH, OTHER_PATH]))
 
     def testANewOwnerDropsTheOldMiceAndListsAgain(self):
-        with mock.patch.object(upower, "enumeratePaths", return_value=[PATH]):
+        with mock.patch.object(upower, "enumeratePaths", return_value=([PATH], None)):
             self.watcher.onOwnerChanged(upower.SERVICE, ":1.5", ":1.9")
         self.assertEqual(sorted(self.removed), sorted([PATH, OTHER_PATH]))
         self.assertEqual(self.watcher.paths, set())
@@ -166,6 +167,157 @@ class WatcherSubscriptionTests(unittest.TestCase):
             (upower.SERVICE, upower.ROOT_PATH, upower.SERVICE, "DeviceRemoved"),
             (upower.SERVICE, "", upower.PROPERTIES_INTERFACE, "PropertiesChanged"),
         ])
+
+
+class ScriptedBus(RecordingBus):
+    # answers each call through a function, so a test can fail any call it likes
+    def __init__(self, answer):
+        super().__init__()
+        self.answer = answer
+        self.calls = []
+
+    def call(self, message, mode=None, timeout=None):
+        self.calls.append((message.member(), message.path(), timeout))
+        return self.answer(message)
+
+
+def failWith(name):
+    return lambda message: message.createErrorReply(name, "failed on purpose")
+
+
+class RetryTests(unittest.TestCase):
+    def makeWatcher(self, answer):
+        bus = ScriptedBus(answer)
+        watcher = upower.UPowerWatcher(bus)
+        self.addCleanup(watcher.stop)
+        self.removed = []
+        self.changed = []
+        watcher.mouseRemoved.connect(self.removed.append)
+        watcher.mouseChanged.connect(self.changed.append)
+        return bus, watcher
+
+    def testEveryCallHasTheDefaultTimeout(self):
+        bus, watcher = self.makeWatcher(lambda message: message.createReply([[]]))
+        watcher.start()
+        self.assertEqual(bus.calls, [("EnumerateDevices", upower.ROOT_PATH, 2000)])
+
+    def testAFailedListingIsRetried(self):
+        bus, watcher = self.makeWatcher(failWith("org.freedesktop.DBus.Error.NoReply"))
+        watcher.start()
+        self.assertTrue(watcher.enumerateDue and watcher.retryTimer.isActive())
+
+    def testNoUPowerOnTheBusIsntRetried(self):
+        for name in upower.ABSENT_ERRORS:
+            with self.subTest(name=name):
+                bus, watcher = self.makeWatcher(failWith(name))
+                watcher.start()
+                self.assertFalse(watcher.enumerateDue or watcher.retryTimer.isActive())
+
+    def testAFailedGetAllKeepsTheMouseAndRetries(self):
+        bus, watcher = self.makeWatcher(failWith("org.freedesktop.DBus.Error.NoReply"))
+        watcher.paths.add(PATH)
+        watcher.refresh(PATH)
+        self.assertEqual((self.removed, PATH in watcher.paths, PATH in watcher.retryPaths, watcher.retryTimer.isActive()), ([], True, True, True))
+
+    def testAGoneDeviceIsRemoved(self):
+        bus, watcher = self.makeWatcher(failWith("org.freedesktop.DBus.Error.UnknownObject"))
+        watcher.paths.add(PATH)
+        watcher.refresh(PATH)
+        self.assertEqual((self.removed, watcher.retryPaths), ([PATH], set()))
+
+    def testRetriesBackOffUpToACap(self):
+        with mock.patch.object(upower, "RETRY_MS", 10), mock.patch.object(upower, "RETRY_MAX_MS", 40):
+            bus, watcher = self.makeWatcher(failWith("org.freedesktop.DBus.Error.NoReply"))
+            intervals = []
+            for i in range(4):
+                watcher.retryTimer.stop()
+                watcher.refresh(PATH)
+                intervals.append(watcher.retryTimer.interval())
+        self.assertEqual(intervals, [10, 20, 40, 40])
+
+    def testAnOwnerChangeCancelsEveryRetry(self):
+        bus, watcher = self.makeWatcher(failWith("org.freedesktop.DBus.Error.NoReply"))
+        watcher.refresh(PATH)
+        watcher.onOwnerChanged(upower.SERVICE, ":1.5", "")
+        self.assertEqual((watcher.retryPaths, watcher.enumerateDue, watcher.retryTimer.isActive()), (set(), False, False))
+
+    def testStopEndsTheRetries(self):
+        bus, watcher = self.makeWatcher(failWith("org.freedesktop.DBus.Error.NoReply"))
+        watcher.refresh(PATH)
+        watcher.stop()
+        self.assertFalse(watcher.retryTimer.isActive())
+
+
+class BusTests(unittest.TestCase):
+    def setUp(self):
+        privateBus.requireTools(self)
+        self.bus = privateBus.PrivateBus()
+        self.addCleanup(self.bus.close)
+        self.percentFile = os.path.join(self.bus.folder, "percent")
+        with open(self.percentFile, "w") as f:
+            f.write("55")
+        self.log = self.bus.startFake("fakeUPower.py", self.percentFile)
+        self.assertTrue(self.bus.waitForLine(self.log, "owns the upower name"))
+        self.connection = QDBusConnection.connectToBus(self.bus.address, "upowerPrivateBus")
+        self.addCleanup(QDBusConnection.disconnectFromBus, "upowerPrivateBus")
+        # a second connection drives the fake, so the test process never imports PyGObject
+        self.controlBus = QDBusConnection.connectToBus(self.bus.address, "upowerControlBus")
+        self.addCleanup(QDBusConnection.disconnectFromBus, "upowerControlBus")
+        self.changes = []
+        self.removals = []
+
+    def makeWatcher(self):
+        watcher = upower.UPowerWatcher(self.connection)
+        self.addCleanup(watcher.stop)
+        watcher.mouseChanged.connect(self.changes.append)
+        watcher.mouseRemoved.connect(self.removals.append)
+        watcher.start()
+        return watcher
+
+    def control(self, method, value):
+        message = QDBusMessage.createMethodCall(upower.SERVICE, upower.ROOT_PATH, "test.FakeUPower", method)
+        message.setArguments([value])
+        self.assertIsNone(dbusCalls.failure(dbusCalls.call(self.controlBus, message)))
+
+    def waitFor(self, condition, timeout=3.0):
+        for i in range(int(timeout * 50)):
+            if (condition()):
+                return True
+            QTest.qWait(20)
+        return condition()
+
+    def setPercent(self, value):
+        with open(self.percentFile, "w") as f:
+            f.write(value)
+
+    def testListsTheMouseWithAPlainPath(self):
+        self.makeWatcher()
+        self.assertEqual([(mouse.path, type(mouse.path), mouse.key) for mouse in self.changes], [("/org/freedesktop/UPower/devices/mouse_hidpp_battery_0", str, "12ab34cd")])
+
+    def testListMiceReadsTheFake(self):
+        found, errors = upower.listMice(self.connection)
+        self.assertEqual(([mouse.reading.percent for mouse in found], errors), ([55], []))
+
+    def testRemovedAndAddedFollowTheMouse(self):
+        self.makeWatcher()
+        self.control("SetPresent", False)
+        self.assertTrue(self.waitFor(lambda: self.removals == ["/org/freedesktop/UPower/devices/mouse_hidpp_battery_0"]))
+        self.control("SetPresent", True)
+        self.assertTrue(self.waitFor(lambda: len(self.changes) == 2))
+
+    def testAFailedGetAllKeepsTheMouseAndRecovers(self):
+        with mock.patch.object(upower, "RETRY_MS", 50):
+            self.makeWatcher()
+            self.control("FailNextGetAll", "org.freedesktop.DBus.Error.NoReply")
+            self.setPercent("54")
+            self.assertTrue(self.waitFor(lambda: self.changes[-1].reading.percent == 54))
+        self.assertEqual(self.removals, [])
+
+    def testAnUnknownObjectErrorRemovesTheMouse(self):
+        self.makeWatcher()
+        self.control("FailNextGetAll", "org.freedesktop.DBus.Error.UnknownObject")
+        self.setPercent("54")
+        self.assertTrue(self.waitFor(lambda: self.removals == ["/org/freedesktop/UPower/devices/mouse_hidpp_battery_0"]))
 
 
 if (__name__ == "__main__"):
