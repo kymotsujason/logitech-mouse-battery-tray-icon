@@ -32,6 +32,10 @@ contents:
     dst: /usr/share/logitech-mouse-battery/dbusCalls.py
     file_info:
       mode: 0644
+  - src: src/exceptionHooks.py
+    dst: /usr/share/logitech-mouse-battery/exceptionHooks.py
+    file_info:
+      mode: 0644
   - src: src/hidDescriptor.py
     dst: /usr/share/logitech-mouse-battery/hidDescriptor.py
     file_info:
@@ -66,6 +70,10 @@ contents:
       mode: 0644
   - src: src/panelColor.py
     dst: /usr/share/logitech-mouse-battery/panelColor.py
+    file_info:
+      mode: 0644
+  - src: src/serviceState.py
+    dst: /usr/share/logitech-mouse-battery/serviceState.py
     file_info:
       mode: 0644
   - src: src/tray.py

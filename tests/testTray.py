@@ -16,6 +16,7 @@ from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
 
 import autostart
+import exceptionHooks
 import hidpp
 import installWatch
 import mice
@@ -86,12 +87,12 @@ class ProcessTests(unittest.TestCase):
         self.assertEqual(tray.takeLock(""), (True, None))
 
     def testMainInstallsTheExceptionHooks(self):
-        with mock.patch.object(tray.signal, "signal"), mock.patch.object(sys, "excepthook", sys.excepthook), mock.patch.object(tray.threading, "excepthook", tray.threading.excepthook), mock.patch.object(tray, "raiseNiceness"), mock.patch.object(tray, "QApplication"), mock.patch.object(tray, "takeLock", return_value=(False, None)), mock.patch.object(tray, "Notifier"):
+        with mock.patch.object(tray.signal, "signal"), mock.patch.object(sys, "excepthook", sys.excepthook), mock.patch.object(exceptionHooks.threading, "excepthook", exceptionHooks.threading.excepthook), mock.patch.object(tray, "raiseNiceness"), mock.patch.object(tray, "QApplication"), mock.patch.object(tray, "takeLock", return_value=(False, None)), mock.patch.object(tray, "Notifier"):
             self.assertEqual(tray.main(), 0)
-            self.assertEqual((sys.excepthook, tray.threading.excepthook), (tray.printException, tray.printThreadException))
+            self.assertEqual((sys.excepthook, exceptionHooks.threading.excepthook), (exceptionHooks.printException, exceptionHooks.printThreadException))
 
     def testMainLetsCtrlCEndItAndAsksNotToBeRestored(self):
-        with mock.patch.object(tray.signal, "signal") as setSignal, mock.patch.object(sys, "excepthook", sys.excepthook), mock.patch.object(tray.threading, "excepthook", tray.threading.excepthook), mock.patch.object(tray, "raiseNiceness"), mock.patch.object(tray, "QApplication") as application, mock.patch.object(tray, "takeLock", return_value=(False, None)), mock.patch.object(tray, "Notifier"):
+        with mock.patch.object(tray.signal, "signal") as setSignal, mock.patch.object(sys, "excepthook", sys.excepthook), mock.patch.object(exceptionHooks.threading, "excepthook", exceptionHooks.threading.excepthook), mock.patch.object(tray, "raiseNiceness"), mock.patch.object(tray, "QApplication") as application, mock.patch.object(tray, "takeLock", return_value=(False, None)), mock.patch.object(tray, "Notifier"):
             tray.main()
         setSignal.assert_called_once_with(tray.signal.SIGINT, tray.signal.SIG_DFL)
         application.return_value.saveStateRequest.connect.assert_called_once_with(tray.neverRestart)

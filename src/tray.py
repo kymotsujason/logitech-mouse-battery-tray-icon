@@ -3,9 +3,7 @@ import fcntl
 import os
 import signal
 import sys
-import threading
 import time
-import traceback
 
 from PyQt6.QtCore import QFileSystemWatcher, QObject, pyqtSlot
 from PyQt6.QtDBus import QDBusConnection, QDBusMessage
@@ -17,6 +15,7 @@ import dbusCalls
 import hidpp
 import mice
 import panelColor
+from exceptionHooks import installExceptionHooks
 from icon import IconState, makeIcon
 from installWatch import InstallWatcher
 from notify import NO_REPLY, Notifier
@@ -75,20 +74,6 @@ def statusLines(mouseList):
     if (lines):
         return lines
     return [mice.STATUS_TEXT[mouseList.status()]]
-
-
-def printException(kind, value, tb):
-    traceback.print_exception(kind, value, tb)
-
-
-def printThreadException(args):
-    traceback.print_exception(args.exc_type, args.exc_value, args.exc_traceback)
-
-
-def installExceptionHooks():
-    # PyQt6 aborts the whole app on an exception in a slot unless sys.excepthook is replaced, and nothing restarts an app started from autostart
-    sys.excepthook = printException
-    threading.excepthook = printThreadException
 
 
 def raiseNiceness(target=TARGET_NICENESS):
