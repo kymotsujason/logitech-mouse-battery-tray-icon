@@ -55,15 +55,13 @@ GNOME's top bar has no system tray of its own, so Mouse Battery needs the AppInd
 Mouse Battery reads mice in two ways:
 
 - Mice the Linux kernel already drives, such as most Unifying, LIGHTSPEED, and Bluetooth mice, are read through UPower.
-- The PRO X3 SUPERSTRIKE on its receiver (`046d:c54f`) or its USB cable (`046d:c0a9`), which the kernel leaves alone, is read directly over Logitech's HID++ protocol.
+- Mice on a receiver or cable the kernel leaves alone are read directly over Logitech's HID++ protocol. That covers the PRO X3 SUPERSTRIKE's receiver (`046d:c54f`) and USB cable (`046d:c0a9`), and on kernels that don't drive them, receivers such as the LIGHTSPEED `046d:c547` and the Logi Bolt `046d:c548`.
 
-It has only been tested with the PRO X3 SUPERSTRIKE, on its receiver and on its cable (see "Not tested" below).
+It has been tested with the PRO X3 SUPERSTRIKE on its receiver and on its cable, and by one tester with a PRO X Wireless on a `046d:c547` receiver and an MX Master 3S on a Logi Bolt receiver (see "Not tested" below).
 
 ## What the udev rule allows
 
-The rule gives the logged in user read and write access to the HID++ interface of the PRO X3 SUPERSTRIKE's receiver and of its cable, and to no other device. It only applies when the kernel's generic HID driver holds that interface and its report descriptor passes the app's own check, which rejects any interface with a keyboard, keypad, or mouse collection and any receiver interface that carries a paired keyboard's keystrokes. Any program you run can then send HID++ commands to the receiver or cable, the same way Mouse Battery does, and those commands can change the device's settings.
-
-The first release's rule covered every Logitech HID++ interface the check accepted. Access it already gave to another device lasts until you replug that device or restart, the same as after an uninstall.
+The rule gives the logged in user read and write access to the HID++ interface of any Logitech USB receiver or cable that the kernel leaves to its generic HID driver, when that interface's report descriptor passes the app's own check. The check rejects any interface with a keyboard, keypad, or mouse collection and any receiver interface that carries a paired keyboard's keystrokes. Any program you run can then send HID++ commands to those receivers and cables and to the devices paired with them, the same way Mouse Battery does, and those commands can change the devices' settings.
 
 ## Uninstall
 
@@ -76,8 +74,7 @@ Mouse Battery keeps no settings. The one file it can leave behind is `~/.config/
 These haven't been tested yet:
 
 - The GNOME, GNOME Classic, GNOME Flashback, XFCE, Cinnamon, MATE, Budgie, and LXQt desktops
-- Mice other than the PRO X3 SUPERSTRIKE
-- Bolt receivers
+- Mice other than the PRO X3 SUPERSTRIKE, the PRO X Wireless, and the MX Master 3S
 - Any Logitech mouse through UPower
 - Bluetooth mice
 - Light app themes on panels that stay dark outside Plasma and GNOME

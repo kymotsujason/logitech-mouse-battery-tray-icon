@@ -1,7 +1,7 @@
 import unittest
 
 import hidDescriptor
-from tests.fakes.descriptors import C54F_DESCRIPTOR, GENERIC_DESKTOP_DESCRIPTOR
+from tests.fakes.descriptors import BOLT_KEYBOARD_DESCRIPTOR, C54F_DESCRIPTOR, FF00_HIDPP_DESCRIPTOR, GENERIC_DESKTOP_DESCRIPTOR
 
 
 class DescriptorTests(unittest.TestCase):
@@ -10,6 +10,12 @@ class DescriptorTests(unittest.TestCase):
 
     def testGenericDesktopFails(self):
         self.assertFalse(hidDescriptor.isHidppDescriptor(GENERIC_DESKTOP_DESCRIPTOR))
+
+    def testTheLightspeedAndBoltHidppInterfacePasses(self):
+        self.assertTrue(hidDescriptor.isHidppDescriptor(FF00_HIDPP_DESCRIPTOR))
+
+    def testTheBoltKeyboardInterfaceFails(self):
+        self.assertFalse(hidDescriptor.isHidppDescriptor(BOLT_KEYBOARD_DESCRIPTOR))
 
     def testEitherDjReportAloneRejects(self):
         self.assertFalse(hidDescriptor.isHidppDescriptor(C54F_DESCRIPTOR + bytes.fromhex("85 20")))

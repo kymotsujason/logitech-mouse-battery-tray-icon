@@ -5,7 +5,7 @@ import unittest
 from unittest import mock
 
 import hidpp
-from tests.fakes.descriptors import C54F_DESCRIPTOR, GENERIC_DESKTOP_DESCRIPTOR
+from tests.fakes.descriptors import BOLT_KEYBOARD_DESCRIPTOR, C54F_DESCRIPTOR, FF00_HIDPP_DESCRIPTOR, GENERIC_DESKTOP_DESCRIPTOR
 from tests.fakes.fakeDevice import NAME, FakeDevice, deviceError, mouseHandler, receiverError, reply
 
 
@@ -22,16 +22,18 @@ class FindNodeTests(unittest.TestCase):
         fields = hidpp.readUevent("DRIVER=hid-generic\nHID_ID=0003:0000046D:0000C54F\nnoise\n")
         self.assertEqual(fields, {"DRIVER": "hid-generic", "HID_ID": "0003:0000046D:0000C54F"})
 
-    def testFindsOnlyTheTestedProductsHidppNodesOnHidGeneric(self):
+    def testFindsEveryUsbLogitechHidppNodeOnHidGeneric(self):
         with tempfile.TemporaryDirectory() as root:
             self.makeNode(root, "hidraw2", "0003:0000046D:0000C54F", GENERIC_DESKTOP_DESCRIPTOR)
             self.makeNode(root, "hidraw4", "0003:0000046D:0000C54F", C54F_DESCRIPTOR)
             self.makeNode(root, "hidraw5", "0003:0000046D:0000C0A9", C54F_DESCRIPTOR)
             self.makeNode(root, "hidraw6", "0003:00001CA3:00000701", C54F_DESCRIPTOR)
             self.makeNode(root, "hidraw7", "0003:0000046D:0000C52B", C54F_DESCRIPTOR, driver="logitech-djreceiver")
-            self.makeNode(root, "hidraw8", "0003:0000046D:0000C52B", C54F_DESCRIPTOR)
             self.makeNode(root, "hidraw9", "0005:0000046D:0000B034", C54F_DESCRIPTOR)
-            self.assertEqual(hidpp.findHidppNodes(root, "/dev"), ["/dev/hidraw4", "/dev/hidraw5"])
+            self.makeNode(root, "hidraw11", "0003:0000046D:0000C547", FF00_HIDPP_DESCRIPTOR)
+            self.makeNode(root, "hidraw14", "0003:0000046D:0000C548", BOLT_KEYBOARD_DESCRIPTOR)
+            self.makeNode(root, "hidraw16", "0003:0000046D:0000C548", FF00_HIDPP_DESCRIPTOR)
+            self.assertEqual(hidpp.findHidppNodes(root, "/dev"), ["/dev/hidraw11", "/dev/hidraw16", "/dev/hidraw4", "/dev/hidraw5"])
 
     def testMissingDirectoryGivesNoNodes(self):
         self.assertEqual(hidpp.findHidppNodes("/nonexistent/hidraw", "/dev"), [])
