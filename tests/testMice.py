@@ -58,7 +58,7 @@ class WorkerTests(unittest.TestCase):
         self.startWorker(mouseHandler())
         time.sleep(0.2)
         self.worker.queueWork(("read", 1, FEATURE))
-        self.assertEqual(nextMessage(self.messages, "read"), ("read", PATH, 1, hidpp.BatteryReading(81, 0)))
+        self.assertEqual(nextMessage(self.messages, "read"), ("read", PATH, 1, (hidpp.ANSWER, hidpp.BatteryReading(81, 0))))
 
     def testSearchResultIsPosted(self):
         self.startWorker(mouseHandler())

@@ -376,11 +376,12 @@ class MouseList(QObject):
             if (mouse.nodePath is not None):
                 self.readMouse(mouse)
 
-    def onRead(self, path, slot, reading):
+    def onRead(self, path, slot, result):
         mouse = self.findByNode(path, slot)
         if (mouse is None):
             return
-        self.applyReading(mouse, reading)
+        outcome, reading = result
+        self.applyReading(mouse, reading if outcome == hidpp.ANSWER else None)
         self.changed.emit()
 
     def onWake(self, mouse):

@@ -109,6 +109,35 @@ class RequestTests(unittest.TestCase):
         os.set_blocking(self.device.appSide.fileno(), False)
         self.assertIsNone(self.device.node().readReport())
 
+    def testAShortReportIsDropped(self):
+        self.device = FakeDevice(lambda request: [bytes([0x11, 1, 0, request[3], 7]), reply(request, [9])])
+        self.assertEqual(self.device.node().request(1, 0x00, 0, bytes([0x10, 0x04]))[0], 9)
+
+    def testAReportWithAnUnknownIdIsDropped(self):
+        self.device = FakeDevice(lambda request: [])
+        os.set_blocking(self.device.appSide.fileno(), False)
+        self.device.send(bytes([0x20, 1, 0, 0, 0, 0, 0]).ljust(15, b"\x00"))
+        time.sleep(0.05)
+        self.assertIsNone(self.device.node().readReport())
+
+    def testALateErrorForAnEarlierRequestDoesntEndTheCurrentOne(self):
+        # guards the featureIndex and funcSw match on errors in requestOutcome
+        def handle(request):
+            if (len(self.device.requests) == 1):
+                return []
+            first = self.device.requests[0]
+            return [receiverError(first), reply(request, [7])]
+
+        self.device = FakeDevice(handle)
+        node = self.device.node()
+        self.assertIsNone(node.request(1, 0x00, 0, bytes([0x10, 0x04]), timeout=0.05))
+        self.assertEqual(node.request(1, 0x00, 0, bytes([0x10, 0x04]))[0], 7)
+
+    def testTheSoftwareIdStartsAtARandomPoint(self):
+        with mock.patch.object(hidpp.random, "randrange", return_value=5) as randrange:
+            node = hidpp.HidppNode(-1)
+        self.assertEqual((randrange.call_args.args, node.nextSwId()), ((len(hidpp.SW_IDS),), hidpp.SW_IDS[5]))
+
 
 class DeviceTests(unittest.TestCase):
     def setUp(self):
@@ -145,7 +174,7 @@ class DeviceTests(unittest.TestCase):
     def testUnifiedBatteryReading(self):
         self.device = FakeDevice(mouseHandler())
         feature = hidpp.BatteryFeature(1, hidpp.FEATURE_UNIFIED_BATTERY, 5, True)
-        self.assertEqual(hidpp.readBattery(self.device.node(), feature), hidpp.BatteryReading(81, 0))
+        self.assertEqual(hidpp.readBattery(self.device.node(), feature), (hidpp.ANSWER, hidpp.BatteryReading(81, 0)))
 
     def testUnifiedBatteryWithoutPercent(self):
         answers = {(5, 0): [0x0F, 0x00], (5, 1): [0, 0x04, 1, 1]}
@@ -153,14 +182,14 @@ class DeviceTests(unittest.TestCase):
         node = self.device.node()
         kind, feature = hidpp.findBattery(node, 1)
         self.assertFalse(feature.hasPercent)
-        self.assertEqual(hidpp.readBattery(node, feature), hidpp.BatteryReading(None, 1))
+        self.assertEqual(hidpp.readBattery(node, feature), (hidpp.ANSWER, hidpp.BatteryReading(None, 1, level="good")))
 
     def testBatteryStatusFeature(self):
         self.device = FakeDevice(mouseHandler(features={0x0005: 2, 0x1000: 6}, answers={(6, 0): [55, 50, 1]}))
         node = self.device.node()
         kind, feature = hidpp.findBattery(node, 1)
         self.assertEqual(feature, hidpp.BatteryFeature(1, hidpp.FEATURE_BATTERY_STATUS, 6, True))
-        self.assertEqual(hidpp.readBattery(node, feature), hidpp.BatteryReading(55, 1))
+        self.assertEqual(hidpp.readBattery(node, feature), (hidpp.ANSWER, hidpp.BatteryReading(55, 1)))
 
     def testBatteryStatusLevelZeroIsOnlyAReadingWhileDischarging(self):
         answers = {}
@@ -170,12 +199,21 @@ class DeviceTests(unittest.TestCase):
         for status, expected in ((1, hidpp.BatteryReading(None, 1)), (3, hidpp.BatteryReading(100, 3)), (0, hidpp.BatteryReading(0, 0))):
             with self.subTest(status=status):
                 answers[(6, 0)] = [0, 0, status]
-                self.assertEqual(hidpp.readBattery(node, feature), expected)
+                self.assertEqual(hidpp.readBattery(node, feature), (hidpp.ANSWER, expected))
 
-    def testFailedReadGivesNone(self):
+    def testAReceiverErrorMeansTheDeviceIsUnreachable(self):
         self.device = FakeDevice(lambda request: [receiverError(request)])
         feature = hidpp.BatteryFeature(1, hidpp.FEATURE_UNIFIED_BATTERY, 5, True)
-        self.assertIsNone(hidpp.readBattery(self.device.node(), feature))
+        self.assertEqual(hidpp.readBattery(self.device.node(), feature), (hidpp.UNREACHABLE, None))
+
+    def testABusyReceiverIsAnErrorFromAnAwakeDevice(self):
+        self.device = FakeDevice(lambda request: [receiverError(request, code=hidpp.BUSY_ERROR)])
+        feature = hidpp.BatteryFeature(1, hidpp.FEATURE_UNIFIED_BATTERY, 5, True)
+        self.assertEqual(hidpp.readBattery(self.device.node(), feature), (hidpp.ERROR, None))
+
+    def testAControlCharacterNameReadsClean(self):
+        self.device = FakeDevice(mouseHandler(name=b"A\x1b[2J&<B\x07"))
+        self.assertEqual(hidpp.readName(self.device.node(), 1), "A[2J&<B")
 
 
 def pingOnly(slot=1):
@@ -204,6 +242,9 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(node.requestOutcome(1, 0x00, 0, bytes([0x10, 0x04]))[0], hidpp.ANSWER)
         self.assertEqual(node.requestOutcome(1, 0x09, 1), (hidpp.ERROR, None))
         self.assertEqual(node.requestOutcome(2, 0x00, 0), (hidpp.TIMEOUT, None))
+        unreachable = FakeDevice(lambda request: [receiverError(request)])
+        self.addCleanup(unreachable.close)
+        self.assertEqual(unreachable.node().requestOutcome(1, 0x00, 0), (hidpp.UNREACHABLE, None))
 
     def testLookupFeatureOutcomes(self):
         self.device = FakeDevice(mouseHandler())
@@ -296,6 +337,11 @@ class EventTests(unittest.TestCase):
         report = bytes([0x11, 1, 5, 0x00, 64, 0x04, 1, 1]).ljust(20, b"\x00")
         self.assertEqual(hidpp.parseEvent(report, self.feature), (hidpp.EVENT_BATTERY, hidpp.BatteryReading(64, 1)))
 
+    def testVoltageEvent(self):
+        feature = hidpp.BatteryFeature(1, hidpp.FEATURE_BATTERY_VOLTAGE, 7, False)
+        report = bytes([0x11, 1, 7, 0x00, 0x0F, 0x3C, 0x80]).ljust(20, b"\x00")
+        self.assertEqual(hidpp.parseEvent(report, feature), (hidpp.EVENT_BATTERY, hidpp.BatteryReading(None, hidpp.CHARGING_CHARGING, 3900)))
+
     def testLinkDownAndUp(self):
         down = bytes([0x10, 1, 0x41, 0x10, 0x40, 0x00, 0x00])
         up = bytes([0x10, 1, 0x41, 0x10, 0x00, 0x00, 0x00])
@@ -339,6 +385,14 @@ class EventTests(unittest.TestCase):
 
 
 class TextTests(unittest.TestCase):
+    def testUnifiedLevelNames(self):
+        names = {flags: hidpp.unifiedLevelName(flags) for flags in (0x01, 0x02, 0x04, 0x08, 0x0C, 0x00)}
+        self.assertEqual(names, {0x01: "critical", 0x02: "low", 0x04: "good", 0x08: "full", 0x0C: "full", 0x00: None})
+
+    def testCleanText(self):
+        self.assertEqual(hidpp.cleanText(" PRO\x00 X3\x1b[31m\n"), "PRO X3[31m")
+        self.assertIsNone(hidpp.cleanText(None))
+
     def testDescribeReading(self):
         self.assertEqual(hidpp.describeReading(hidpp.BatteryReading(81, 0)), "81%, discharging")
         self.assertEqual(hidpp.describeReading(hidpp.BatteryReading(None, 1, 3900)), "3900 mV, charging")

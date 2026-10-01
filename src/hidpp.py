@@ -1,6 +1,8 @@
 import os
+import random
 import select
 import time
+import unicodedata
 from dataclasses import dataclass
 
 from hidDescriptor import isHidppDescriptor
@@ -16,6 +18,10 @@ SW_IDS = range(0x08, 0x10)
 RECEIVER_ERROR = 0x8F
 DEVICE_ERROR = 0xFF
 REQUEST_TIMEOUT = 1.0
+SHORT_REPORT = 0x10
+REPORT_LENGTHS = {SHORT_REPORT: 7, LONG_REPORT: 20}
+# unified battery level flags, highest first, since the highest set flag names the level
+LEVEL_FLAGS = [(0x08, "full"), (0x04, "good"), (0x02, "low"), (0x01, "critical")]
 FEATURE_ROOT = 0x0000
 FEATURE_NAME = 0x0005
 FEATURE_BATTERY_STATUS = 0x1000
@@ -28,6 +34,9 @@ MOUSE_KINDS = (3, 4, 5)
 ANSWER = 0
 ERROR = 1
 TIMEOUT = 2
+UNREACHABLE = 3
+# HID++ 1.0's busy code, which a receiver sends while the device is there but occupied
+BUSY_ERROR = 0x07
 
 FOUND = "mouse"
 SKIP = "skip"
@@ -79,6 +88,7 @@ class FoundMouse:
     name: str | None
     feature: BatteryFeature
     reading: BatteryReading | None
+    outcome: int = ANSWER
 
 
 @dataclass(frozen=True)
@@ -129,7 +139,8 @@ class HidppNode:
     def __init__(self, fd, onEvent=None):
         self.fd = fd
         self.onEvent = onEvent
-        self.requestCount = 0
+        # a random start keeps two programs on one node from moving through the same ids in step
+        self.requestCount = random.randrange(len(SW_IDS))
 
     def nextSwId(self):
         # a new software id per request keeps a late reply from answering the next request
@@ -154,6 +165,10 @@ class HidppNode:
             return None
         if (not report):
             raise OSError("HID++ node closed")
+        # a report shorter than its id's full length, or with an id HID++ doesn't use, can't be parsed safely, so it counts as no data
+        length = REPORT_LENGTHS.get(report[0])
+        if (length is None or len(report) < length):
+            return None
         return report
 
     def writeReport(self, deviceIndex, featureIndex, funcSw, params=b""):
@@ -178,6 +193,9 @@ class HidppNode:
                 continue
             if (len(reply) >= 5 and reply[1] == deviceIndex):
                 if (reply[2] in (RECEIVER_ERROR, DEVICE_ERROR) and reply[3] == featureIndex and reply[4] == funcSw):
+                    # a receiver error means it couldn't reach the device, except for busy, where the device is there
+                    if (reply[2] == RECEIVER_ERROR and reply[5] != BUSY_ERROR):
+                        return (UNREACHABLE, None)
                     return (ERROR, None)
                 if (reply[2] == featureIndex and reply[3] == funcSw):
                     return (ANSWER, reply[4:])
@@ -213,7 +231,7 @@ def readName(node, deviceIndex):
         if (not chunk):
             return None
         name += chunk
-    return name.decode("utf-8", "replace").strip("\x00").strip()
+    return cleanText(name.decode("utf-8", "replace"))
 
 
 def lookupFeature(node, deviceIndex, featureId):
@@ -311,8 +329,8 @@ def identifySlot(node, slot):
     if (kind != ANSWER):
         return (UNKNOWN, None)
     name = readName(node, slot)
-    reading = readBattery(node, feature)
-    return (FOUND, FoundMouse(slot, unitId, name, feature, reading))
+    outcome, reading = readBattery(node, feature)
+    return (FOUND, FoundMouse(slot, unitId, name, feature, reading, outcome))
 
 
 def searchNode(node, skipped=frozenset(), pingTimeout=None):
@@ -364,24 +382,30 @@ def parseBatteryStatus(level, status):
     return BatteryReading(min(level, 100), statusCharging(status))
 
 
+def unifiedLevelName(flags):
+    for flag, name in LEVEL_FLAGS:
+        if (flags & flag):
+            return name
+    return None
+
+
 def parseUnifiedStatus(params, hasPercent):
-    percent = min(params[0], 100) if hasPercent else None
     charging = params[2] if params[2] < HIDPP_STATUS_COUNT else CHARGING_ERROR
-    return BatteryReading(percent, charging)
+    if (hasPercent):
+        return BatteryReading(min(params[0], 100), charging)
+    return BatteryReading(None, charging, level=unifiedLevelName(params[1]))
 
 
 def readBattery(node, feature):
+    function = 1 if feature.featureId == FEATURE_UNIFIED_BATTERY else 0
+    kind, reply = node.requestOutcome(feature.deviceIndex, feature.featureIndex, function)
+    if (kind != ANSWER):
+        return (kind, None)
     if (feature.featureId == FEATURE_UNIFIED_BATTERY):
-        reply = node.request(feature.deviceIndex, feature.featureIndex, 1)
-        if (reply is None):
-            return None
-        return parseUnifiedStatus(reply, feature.hasPercent)
-    reply = node.request(feature.deviceIndex, feature.featureIndex, 0)
-    if (reply is None):
-        return None
+        return (ANSWER, parseUnifiedStatus(reply, feature.hasPercent))
     if (feature.featureId == FEATURE_BATTERY_STATUS):
-        return parseBatteryStatus(reply[0], reply[2])
-    return BatteryReading(None, voltageCharging(reply[2]), (reply[0] << 8) | reply[1])
+        return (ANSWER, parseBatteryStatus(reply[0], reply[2]))
+    return (ANSWER, BatteryReading(None, voltageCharging(reply[2]), (reply[0] << 8) | reply[1]))
 
 
 def isReply(report):
@@ -411,6 +435,8 @@ def parseEvent(report, feature):
             return (EVENT_BATTERY, parseUnifiedStatus(report[4:], feature.hasPercent))
         if (feature.featureId == FEATURE_BATTERY_STATUS):
             return (EVENT_BATTERY, parseBatteryStatus(report[4], report[6]))
+        if (feature.featureId == FEATURE_BATTERY_VOLTAGE):
+            return (EVENT_BATTERY, BatteryReading(None, voltageCharging(report[6]), (report[4] << 8) | report[5]))
     return (EVENT_OTHER, None)
 
 
@@ -432,3 +458,10 @@ def levelText(reading):
 
 def describeReading(reading):
     return levelText(reading) + ", " + chargingName(reading.charging)
+
+
+def cleanText(text):
+    # device strings reach the menu, notices, and the terminal, so control characters such as an escape are dropped
+    if (text is None):
+        return None
+    return "".join(character for character in text if not unicodedata.category(character).startswith("C")).strip()

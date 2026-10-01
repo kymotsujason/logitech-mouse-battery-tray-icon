@@ -36,6 +36,10 @@ def checkHidpp():
         except OSError as error:
             print("Lost " + path + " while reading it: " + str(error))
             continue
+        except Exception as error:
+            # a device that answers in a way the protocol code doesn't expect shouldn't end the check for every other one
+            print("Couldn't read " + path + ": " + str(error))
+            continue
         finally:
             node.close()
         searched += 1

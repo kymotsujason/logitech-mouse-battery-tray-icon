@@ -13,15 +13,15 @@ def reply(request, params):
     return (bytes(request[:4]) + bytes(params)).ljust(20, b"\x00")
 
 
-def receiverError(request):
-    return bytes([0x10, request[1], 0x8F, request[2], request[3], 0x09, 0x00])
+def receiverError(request, code=0x09):
+    return bytes([0x10, request[1], 0x8F, request[2], request[3], code, 0x00])
 
 
 def deviceError(request):
     return bytes([0x11, request[1], 0xFF, request[2], request[3], 0x05]).ljust(20, b"\x00")
 
 
-def mouseHandler(slot=1, features=None, answers=None, kind=3, unitId=UNIT_ID):
+def mouseHandler(slot=1, features=None, answers=None, kind=3, unitId=UNIT_ID, name=NAME):
     # answers like the X3 does: device information at index 3, name at index 2, unified battery at index 5
     if (features is None):
         features = {0x0003: 3, 0x0005: 2, 0x1004: 5}
@@ -40,9 +40,9 @@ def mouseHandler(slot=1, features=None, answers=None, kind=3, unitId=UNIT_ID):
             featureId = (request[4] << 8) | request[5]
             return [reply(request, [features.get(featureId, 0)])]
         if (featureIndex == 2 and function == 0):
-            return [reply(request, [len(NAME)])]
+            return [reply(request, [len(name)])]
         if (featureIndex == 2 and function == 1):
-            return [reply(request, NAME[request[4]:request[4] + 16])]
+            return [reply(request, name[request[4]:request[4] + 16])]
         if (featureIndex == 2 and function == 2):
             return [reply(request, [kind])]
         if (0x0003 in features and featureIndex == features[0x0003] and function == 0):
