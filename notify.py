@@ -42,6 +42,9 @@ class LowBatteryWarner:
         if (percent <= CRITICAL_PERCENT):
             sent.add(CRITICAL_PERCENT)
 
+    def forget(self, key):
+        self.sent.pop(key, None)
+
 
 def uintArgument(value):
     variant = QVariant(value)

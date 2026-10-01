@@ -468,6 +468,31 @@ class MouseListTests(unittest.TestCase):
         QTest.qWait(300)
         self.assertEqual(warnings, [("02bc524c", NAME.decode(), 9)])
 
+    def testARemovedUPowerMouseForgetsItsWarnings(self):
+        warnings = []
+
+        def onLowBattery(key, name, percent):
+            warnings.append(percent)
+            self.mice.warner.markSent(key, percent)
+
+        self.mice.lowBattery.connect(onLowBattery)
+        path = "/org/freedesktop/UPower/devices/mouse_hidpp_battery_1"
+        lowMouse = upower.UPowerMouse(path, "12ab34cd", "MX Master 3", hidpp.BatteryReading(9, 0))
+        self.mice.applyUPower(lowMouse)
+        self.mice.removeUPower(path)
+        self.assertEqual(self.mice.warner.sent, {})
+        self.mice.applyUPower(lowMouse)
+        self.assertEqual(warnings, [9, 9])
+
+    def testAMouseDroppedWithItsNodeForgetsItsWarnings(self):
+        self.mice.lowBattery.connect(lambda key, name, percent: self.mice.warner.markSent(key, percent))
+        self.nodes.add(RECEIVER, mouseHandler(answers={(5, 0): [0x0F, 0x02], (5, 1): [9, 0x02, 0, 0]}))
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: "02bc524c" in self.mice.warner.sent))
+        self.nodes.remove(RECEIVER)
+        self.assertTrue(waitUntil(lambda: self.keys() == []))
+        self.assertEqual(self.mice.warner.sent, {})
+
     def testAUPowerMouseMergesWithTheSameHidppMouse(self):
         self.nodes.add(RECEIVER, mouseHandler())
         self.mice.start()

@@ -335,6 +335,7 @@ class MouseList(QObject):
             mouse.wakeTimer = None
         if (mouse.upowerPath is None and mouse in self.mice):
             self.mice.remove(mouse)
+            self.warner.forget(mouse.key)
 
     def applyReading(self, mouse, reading, woke=False):
         now = time.time()
@@ -431,6 +432,7 @@ class MouseList(QObject):
                 mouse.upowerPath = None
                 if (mouse.nodePath is None):
                     self.mice.remove(mouse)
+                    self.warner.forget(mouse.key)
         self.changed.emit()
 
     def shownMouse(self):
