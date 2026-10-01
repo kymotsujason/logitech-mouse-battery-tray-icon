@@ -72,6 +72,10 @@ contents:
     dst: /usr/share/logitech-mouse-battery/panelColor.py
     file_info:
       mode: 0644
+  - src: src/receivers.py
+    dst: /usr/share/logitech-mouse-battery/receivers.py
+    file_info:
+      mode: 0644
   - src: src/serviceState.py
     dst: /usr/share/logitech-mouse-battery/serviceState.py
     file_info:
