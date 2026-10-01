@@ -1,3 +1,4 @@
+import errno
 import io
 import os
 import queue
@@ -683,9 +684,9 @@ class MouseListTests(unittest.TestCase):
             if (request[1] != 2):
                 return []
             if (keyboardFirst[0] and request[2] == 2 and (request[3] >> 4) == 2):
-                # slot 2 answers keyboard, and a new pairing's notice for it follows during the same search
+                # a new pairing's notice for slot 2 comes in ahead of the keyboard reply, so the worker reads it during the same search
                 keyboardFirst[0] = False
-                return keyboard(request) + [bytes([0x10, 2, 0x41, 0x10, 0x00, 0x00, 0x00])]
+                return [bytes([0x10, 2, 0x41, 0x10, 0x00, 0x00, 0x00])] + keyboard(request)
             return (keyboard if keyboardFirst[0] else mouse)(request)
 
         self.nodes.add(RECEIVER, handler)
@@ -755,6 +756,32 @@ class MouseListTests(unittest.TestCase):
         self.nodes.remove(RECEIVER)
         self.assertTrue(waitUntil(lambda: self.keys() == []))
         self.assertIn("Lost " + RECEIVER + ": HID++ node closed\n", self.errors.getvalue())
+
+    def testAnOpenErrorAfterALossWithTheSameErrnoIsStillPrinted(self):
+        receiver = self.nodes.add(RECEIVER, mouseHandler())
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"]))
+        self.nodes.failOnce(RECEIVER)
+        worker = self.mice.nodes[RECEIVER].worker
+        with mock.patch.object(worker.node, "readReport", side_effect=OSError(errno.EIO, "Input/output error")):
+            receiver.send(OTHER_REPORT)
+            self.assertTrue(waitUntil(lambda: RECEIVER not in self.mice.nodes or self.mice.nodes[RECEIVER].worker is not worker))
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"] and self.mice.denied == set()))
+        self.assertEqual(self.errors.getvalue(), "Lost " + RECEIVER + ": EIO\nCouldn't open " + RECEIVER + ": EIO\n")
+
+    def testAFailedFirstSearchRedrawsAndStopsLooking(self):
+        self.nodes.add(RECEIVER, silent)
+        changes = []
+
+        def failingSearch(node, skipped=frozenset(), pingTimeout=None):
+            raise ValueError("boom")
+
+        with mock.patch.object(hidpp, "searchNode", failingSearch), mock.patch.object(mice.traceback, "print_exc"):
+            self.mice.start()
+            self.assertEqual(self.mice.status(), mice.STATUS_SEARCHING)
+            self.mice.changed.connect(lambda: changes.append(1))
+            self.assertTrue(waitUntil(lambda: changes))
+        self.assertEqual((self.mice.nodes[RECEIVER].searching, self.mice.status()), (False, mice.STATUS_WAITING))
 
     def testAMessageFromAReplacedWorkerIsIgnored(self):
         self.nodes.add(RECEIVER, mouseHandler())

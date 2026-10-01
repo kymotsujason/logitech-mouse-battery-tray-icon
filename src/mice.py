@@ -243,12 +243,12 @@ class MouseList(QObject):
         self.requestSearch(path)
 
     def reportError(self, path, what, error):
-        # an errno name tells a missing ACL from a failing device or from running out of fds, and printing it once per path keeps a retry loop quiet
+        # an errno name tells a missing ACL from a failing device or from running out of fds, and printing each message once per path keeps a retry loop quiet
         detail = errno.errorcode.get(error.errno) if (isinstance(error, OSError) and error.errno) else None
         detail = detail or str(error) or type(error).__name__
-        if ((path, detail) in self.reportedErrors):
+        if ((path, what, detail) in self.reportedErrors):
             return
-        self.reportedErrors.add((path, detail))
+        self.reportedErrors.add((path, what, detail))
         print(what + " " + path + ": " + detail, file=sys.stderr)
 
     def forgetErrors(self, path):
@@ -354,6 +354,8 @@ class MouseList(QObject):
         kind = item[0]
         if (kind == "search"):
             self.finishSearch(state)
+            # a first search that raises would otherwise leave the menu saying it's looking until the next change in /dev
+            self.changed.emit()
         elif (kind == "read"):
             self.settleRead(state, item[1])
         elif (kind == "identify"):
