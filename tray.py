@@ -288,7 +288,7 @@ class MouseBatteryApp(QObject):
 
     def onLowBattery(self, key, name, percent):
         notificationId, error = self.notifier.send("Mouse battery low", name + " has " + str(percent) + "% left.")
-        # a call that timed out already reached the server, and sending it again would block for the timeout on every reading
+        # NoReply means the bus already handed the message to the server (or is starting the server for it), and asking again after a timeout would block every reading
         if (notificationId is None and error != NO_REPLY):
             return
         self.mice.warner.markSent(key, percent)
