@@ -1,4 +1,5 @@
 import os
+import re
 import unittest
 import xml.etree.ElementTree as ElementTree
 
@@ -27,7 +28,7 @@ def entryKeys(path):
 
 class DesktopEntryTests(unittest.TestCase):
     def testTheMenuEntryIsNamedForThePortalAppId(self):
-        # the xdg portal finds the app by this file name, thus a renamed id without a renamed file brings its warning back
+        # the xdg portal finds the app by this file name, so a renamed id without a renamed file brings its warning back
         firstLine, keys = entryKeys(os.path.join(PACKAGING, tray.APP_ID + ".desktop"))
         self.assertEqual(firstLine, "[Desktop Entry]")
         self.assertEqual((keys["Name"], keys["Exec"], keys["Icon"]), ("Mouse Battery", "logitech-mouse-battery", "logitech-mouse-battery"))
@@ -163,6 +164,19 @@ class PkgbuildTests(unittest.TestCase):
             self.assertIn("\tpkgver = " + version.VERSION + "\n", f.read())
 
 
+class VersionMentionTests(unittest.TestCase):
+    def testTheReadmesPackageNamesCarryTheVersion(self):
+        with open(os.path.join(REPO, "README.md")) as f:
+            found = re.findall(r"logitech-mouse-battery[_-](\d+\.\d+\.\d+)[_-]", f.read())
+        self.assertGreater(len(found), 0)
+        self.assertEqual(set(found), {version.VERSION})
+
+    def testTheSrcinfoSourceCarriesTheVersion(self):
+        with open(os.path.join(PACKAGING, "aur", ".SRCINFO")) as f:
+            source = next(line for line in f.read().splitlines() if line.strip().startswith("source = "))
+        self.assertEqual(set(re.findall(r"\d+\.\d+\.\d+", source)), {version.VERSION})
+
+
 WORKFLOWS = os.path.join(REPO, ".github", "workflows")
 CHECKOUT = "uses: actions/checkout@v7\n        with:\n          persist-credentials: false\n"
 
@@ -202,6 +216,8 @@ class WorkflowTests(unittest.TestCase):
         publish = release.split("gh release create", 1)[1].split("\n", 1)[0]
         self.assertTrue(publish.endswith(" dist/SHA256SUMS"), publish)
         self.assertLess(release.index("checkLateTray.sh"), release.index("gh release create"))
+        self.assertLess(release.index("-aur.tar.gz"), release.index("> SHA256SUMS"))
+        self.assertLess(release.index("> SHA256SUMS"), release.index("gh release create"))
 
     def testCiRunsTheLateTrayCheckAndEveryBuild(self):
         ci = self.read("ci.yml")

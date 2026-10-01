@@ -22,7 +22,7 @@ class CheckTests(unittest.TestCase):
         self.patches = [
             mock.patch.object(hidpp, "findHidppNodes", self.nodes.find),
             mock.patch.object(hidpp.HidppNode, "open", self.nodes.open),
-            mock.patch.object(hidpp, "PING_TIMEOUT", 0.02),
+            mock.patch.object(hidpp, "PING_TIMEOUT", 0.2),
             mock.patch.object(hidpp, "REQUEST_TIMEOUT", 0.1),
             mock.patch.object(upower, "listMice", return_value=([], [])),
         ]

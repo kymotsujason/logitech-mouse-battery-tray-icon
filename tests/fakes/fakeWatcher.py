@@ -61,7 +61,7 @@ def onCall(conn, sender, path, interface, method, params, invocation):
     items.append(service + itemPath)
     invocation.return_value(None)
     log("registered " + service + " fill " + fillPixel(service, itemPath))
-    # KStatusNotifierItem publishes the item from its own bus connection, thus listen to that name and not the caller
+    # KStatusNotifierItem publishes the item from its own bus connection, so listen to that name and not the caller
     conn.signal_subscribe(service, ITEM_INTERFACE, "NewIcon", itemPath, None, Gio.DBusSignalFlags.NONE, onNewIcon, service)
 
 

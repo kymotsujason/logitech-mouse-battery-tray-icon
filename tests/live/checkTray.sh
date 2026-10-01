@@ -54,7 +54,7 @@ waitForMore() {
 }
 
 waitForIconColor() {
-    # right after a start the item can still be the empty startup outline, thus this waits past a registered
+    # right after a start the item can still be the empty startup outline, so this waits past a registered
     # or newIcon line for the one whose fill actually matches, instead of trusting whichever line comes first
     for i in $(seq 50); do
         line=$(grep -E " registered | newIcon " "$1" | awk -v c="$2" '$6 == c {print; exit}')
@@ -86,12 +86,12 @@ textColor() {
     kreadconfig6 --file "/usr/share/color-schemes/$1.colors" --group Colors:Window --key ForegroundNormal
 }
 
-# read once up front, thus an empty read fails the color checks instead of matching an empty result
+# read once up front, so an empty read fails the color checks instead of matching an empty result
 darkColor=$(textColor BreezeDark)
 lightColor=$(textColor BreezeLight)
 
 startBus() {
-    # no servicedir, thus nothing gets started on demand on these buses, such as a second kded6 or portal
+    # no servicedir, so nothing gets started on demand on these buses, such as a second kded6 or portal
     cat > "$work/$1.conf" <<EOF
 <!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
  "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
@@ -125,7 +125,7 @@ session=$(sed -n 1p "$work/session.info")
 system=$(sed -n 1p "$work/system.info")
 echo 81 > "$work/percent"
 echo 55 > "$work/upowerPercent"
-# the installed app holds its lock in the real runtime folder, thus the test copy gets its own
+# the installed app holds its lock in the real runtime folder, so the test copy gets its own
 privateEnv=(-E "DBUS_SESSION_BUS_ADDRESS=$session" -E "DBUS_SYSTEM_BUS_ADDRESS=$system" -E "XDG_CONFIG_HOME=$work/config" -E "XDG_CACHE_HOME=$work/cache" -E "XDG_STATE_HOME=$work/state" -E "XDG_DATA_HOME=$work/data" -E "XDG_RUNTIME_DIR=$work/runtime")
 appEnv=("${privateEnv[@]}" -E QT_QPA_PLATFORM=offscreen -E QT_QPA_PLATFORMTHEME=kde -E "LIVE_PERCENT_FILE=$work/percent")
 
@@ -157,6 +157,10 @@ echo 10 > "$work/percent"
 python3 "$here/itemTool.py" "$session" "$item" menuOpened
 check "opening the menu reads the HID++ mouse" "$(waitForOutput "MX Master 3, 54%|PRO X3 SUPERSTRIKE, 10%" python3 "$here/itemTool.py" "$session" "$item" tooltip)" "MX Master 3, 54%|PRO X3 SUPERSTRIKE, 10%"
 check "a reading at 10% sends a low battery notice" "$(waitForLine "$work/notifications.log" "Mouse battery low")" "notify Mouse battery low|PRO X3 SUPERSTRIKE has 10% left.|"
+# a second low reading has to reach the warner before the count means anything
+echo 9 > "$work/percent"
+python3 "$here/itemTool.py" "$session" "$item" menuOpened
+check "a second low reading reaches the tooltip" "$(waitForOutput "MX Master 3, 54%|PRO X3 SUPERSTRIKE, 9%" python3 "$here/itemTool.py" "$session" "$item" tooltip)" "MX Master 3, 54%|PRO X3 SUPERSTRIKE, 9%"
 check "the low battery notice is sent once" "$(grep -c "Mouse battery low" "$work/notifications.log")" "1"
 
 systemd-run --user --quiet --unit="$unit-second" "${appEnv[@]}" python3 "$here/runTray.py"

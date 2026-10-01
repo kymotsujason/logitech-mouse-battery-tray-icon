@@ -8,7 +8,7 @@ PKGBUILD = "packaging/aur/PKGBUILD"
 SRCINFO = "packaging/aur/.SRCINFO"
 METAINFO = "packaging/io.github.kymotsujason.LogitechMouseBattery.metainfo.xml"
 VERSION_FILE = "src/version.py"
-VERSION_FORMAT =re.compile(r"^\d+\.\d+\.\d+$")
+VERSION_FORMAT = re.compile(r"^\d+\.\d+\.\d+$")
 
 
 def readFile(name):
@@ -35,7 +35,7 @@ def requireReplace(old, new, text, name):
 
 
 def bumpedFiles(old, new, today):
-    # every new text is worked out before anything is written, thus a file that doesn't match leaves all of them as they were
+    # every new text is worked out before anything is written, so a file that doesn't match leaves all of them as they were
     files = {}
     files[VERSION_FILE] = requireSub(r'^VERSION = "' + re.escape(old) + '"$', 'VERSION = "' + new + '"', readFile(VERSION_FILE), VERSION_FILE)
     pkgbuild = requireSub(r"^pkgver=" + re.escape(old) + "$", "pkgver=" + new, readFile(PKGBUILD), PKGBUILD)
@@ -57,12 +57,12 @@ def main(argv):
     new = argv[1]
     old = readVersion()
     if (old is None or new == old):
-        print("version.py holds " + str(old) + ", thus there's nothing to bump to " + new, file=sys.stderr)
+        print("src/version.py holds " + str(old) + ", so there's nothing to bump to " + new, file=sys.stderr)
         return 1
     try:
         files = bumpedFiles(old, new, datetime.date.today().isoformat())
     except ValueError as error:
-        print(str(error) + ", thus nothing was changed", file=sys.stderr)
+        print(str(error) + ", so nothing was changed", file=sys.stderr)
         return 1
     for name, text in files.items():
         with open(os.path.join(REPO, name), "w") as f:

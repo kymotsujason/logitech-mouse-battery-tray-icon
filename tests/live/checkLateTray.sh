@@ -56,7 +56,7 @@ EOF
     env -u QT_QPA_PLATFORMTHEME DISPLAY=:99 QT_QPA_PLATFORM=xcb DBUS_SESSION_BUS_ADDRESS="$address" DBUS_SYSTEM_BUS_ADDRESS="$address" XDG_RUNTIME_DIR="/tmp/$name/runtime" XDG_CONFIG_HOME="/tmp/$name/config" LIVE_EARLY_TRAY="$early" python3 -B /tmp/app/tests/live/runTray.py > "/tmp/$name/app.log" 2>&1 &
     local appPid=$!
     sleep 9
-    # a crashed app never registers either, thus both cases also report whether the app is still running
+    # a crashed app never registers either, so both cases also report whether the app is still running
     local state=exited
     if kill -0 "$appPid" 2>/dev/null; then
         state=running

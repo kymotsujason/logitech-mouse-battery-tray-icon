@@ -5,9 +5,9 @@ from PyQt6.QtCore import QPointF, QRectF, Qt
 from PyQt6.QtGui import QColor, QFont, QFontDatabase, QFontMetricsF, QIcon, QImage, QPainter, QPainterPath, QPixmap
 
 ICON_SIZES = [16, 22, 24, 32, 44, 48, 64, 96, 128]
-# below this size the digits don't read, thus the icon keeps its fill and drops the number
+# below this size the digits don't read, so the icon keeps its fill and drops the number
 NUMBER_MIN_SIZE = 22
-# up to this size antialiased digits read faint, thus they're drawn crisp
+# up to this size antialiased digits read faint, so they're drawn crisp
 CRISP_MAX_SIZE = 22
 RED_PERCENT = 20
 GREEN = "#30D158"
@@ -55,7 +55,7 @@ def markColor(state, baseColor):
 
 
 def numberColor(state, baseColor):
-    # at 5% the red fill is a single row, thus the number turns red with it
+    # at 5% the red fill is a single row, so the number turns red with it
     if (not (state.asleep or state.empty or state.charging) and state.percent is not None and state.percent <= RED_PERCENT):
         return QColor(RED)
     return markColor(state, baseColor)
@@ -77,7 +77,7 @@ def drawMarks(painter, state, k, color, textColor):
     font = QFont(digitFamily())
     font.setWeight(QFont.Weight.Medium)
     if (size <= CRISP_MAX_SIZE):
-        # antialiased digits at tray size only partly cover their pixels and read faint, thus draw them crisp
+        # antialiased digits at tray size only partly cover their pixels and read faint, so draw them crisp
         font.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
         font.setStyleStrategy(QFont.StyleStrategy.NoAntialias)
     font.setPointSizeF(pixelSize * 72.0 / painter.device().logicalDpiY())

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# builds the release tarball from the last commit, which the Arch package and the AUR recipe build from, and which
-# comes out the same bytes on every run, thus its checksum holds
+# builds the release tarball from the last commit, which the Arch package and the AUR recipe build from. The AUR
+# recipe's checksum holds since buildArch.sh hashes this same file and the release publishes it
 set -eu
 
 repo=$(cd "$(dirname "$0")/.." && pwd)

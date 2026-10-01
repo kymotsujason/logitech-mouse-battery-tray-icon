@@ -279,7 +279,7 @@ def readUnitId(node, deviceIndex):
 
 
 def pingSlots(node, slots=None, timeout=None):
-    # every ping goes out before any answer is read, thus silent slots cost one wait in total
+    # every ping goes out before any answer is read, so silent slots cost one wait in total
     if (slots is None):
         slots = DEVICE_SLOTS
     if (timeout is None):
@@ -407,7 +407,7 @@ def readBattery(node, feature):
 
 
 def isReply(report):
-    # the device sends its own events with software id 0, thus anything else answers some program's request
+    # the device sends its own events with software id 0, so anything else answers some program's request
     if (len(report) < 5):
         return False
     if (report[2] in (RECEIVER_ERROR, DEVICE_ERROR)):

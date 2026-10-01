@@ -33,7 +33,7 @@ def readEntry(path):
 
 
 def writeText(path, text):
-    # the new text replaces the old file only once it's all on disk, thus a failed write leaves the old override whole
+    # the new text replaces the old file only once it's all on disk, so a failed write leaves the old override whole
     path = os.path.realpath(path)
     oldMode = None
     if (os.path.exists(path)):

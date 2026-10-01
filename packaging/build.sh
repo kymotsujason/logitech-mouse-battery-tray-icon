@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # builds the .deb and .rpm into dist/ with nfpm's own image, which avoids installing nfpm, and runs it as the
-# calling user, thus the packages in dist/ aren't owned by root
+# calling user, so the packages in dist/ aren't owned by root
 set -eu
 
 repo=$(cd "$(dirname "$0")/.." && pwd)

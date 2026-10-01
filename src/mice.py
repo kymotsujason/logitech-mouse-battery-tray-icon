@@ -354,7 +354,7 @@ class MouseList(QObject):
         kind = item[0]
         if (kind == "search"):
             self.finishSearch(state)
-            # a first search that raises would otherwise leave the menu saying it's looking until the next change in /dev
+            # a first search that raises would otherwise leave the menu saying it's looking until something else redraws it
             self.changed.emit()
         elif (kind == "read"):
             self.settleRead(state, item[1])

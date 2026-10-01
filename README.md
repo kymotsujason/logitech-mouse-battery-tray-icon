@@ -1,6 +1,6 @@
 # Mouse Battery
 
-Mouse Battery shows the battery level of your Logitech mouse in the system tray on Linux. It warns you once at 10% and once more at 5% on each charge, and when you have more than one mouse it follows the one you're using.
+Mouse Battery shows the battery level of your Logitech mouse in the system tray on Linux. It warns you once at 10% and once more at 5% on each charge, and once more after a login or an update while the mouse is still low. When you have more than one mouse, it follows the one you're using.
 
 ![The tray icon and its menu](docs/screenshot.png)
 
@@ -61,7 +61,7 @@ It has been tested with the PRO X3 SUPERSTRIKE on its receiver and on its cable,
 
 ## What the udev rule allows
 
-The rule gives the logged in user read and write access to the HID++ interface of any Logitech USB receiver or cable that the kernel leaves to its generic HID driver, when that interface's report descriptor passes the app's own check. The check rejects any interface with a keyboard, keypad, or mouse collection and any receiver interface that carries a paired keyboard's keystrokes. Any program you run can then send HID++ commands to those receivers and cables and to the devices paired with them, the same way Mouse Battery does, and those commands can change the devices' settings.
+The rule gives the logged in user read and write access to the HID++ interface of any Logitech USB device, such as a receiver or a mouse on its cable, that the kernel leaves to its generic HID driver, when that interface's report descriptor passes the app's own check. The check rejects any interface with a keyboard, keypad, or mouse collection and any receiver interface that carries a paired keyboard's keystrokes. Any program you run can then send HID++ commands to those devices and to the devices paired with them, the same way Mouse Battery does, and those commands can change their settings and pairings.
 
 ## Uninstall
 
@@ -82,7 +82,30 @@ These haven't been tested yet:
 - An Open at Login override that another tool wrote with GNOME's `X-GNOME-Autostart-enabled` key
 - The `.deb` and `.rpm` on a real Debian, Ubuntu, or Fedora machine, including the rule applying without a replug (only clean containers have run them)
 
-Apart from these, one limit is known. A mouse that reports its battery without a percentage draws a full icon and never warns, while its menu line shows what it reported instead, such as a level name.
+Apart from these, two limits are known. A mouse that reports its battery without a percentage draws a full icon and never warns, while its menu line shows what it reported instead, such as a level name. A mouse on a receiver the kernel leaves alone also keeps showing its last reading after it's turned off, until the app next reads it (every 5 minutes, or when you open the menu or click the icon), since those receivers don't announce a mouse turning off.
+
+## Code layout
+
+The app is the flat set of modules in `src/`, which the packages install side by side in `/usr/share/logitech-mouse-battery/`:
+
+- `tray.py` starts the app and owns the tray icon, its menu and tooltip, Open at Login, and About.
+- `trayHost.py` waits for a system tray and sends a notice when none shows up.
+- `installWatch.py` quits the app when it's uninstalled and restarts it into a new version after an update.
+- `mice.py` keeps the list of mice, with a worker thread for each HID++ node.
+- `hidpp.py` speaks Logitech's HID++ protocol over hidraw.
+- `hidDescriptor.py` checks a HID report descriptor, for discovery and for the udev rule.
+- `isHidpp.py` is the check the udev rule runs.
+- `upower.py` reads the mice the kernel drives through UPower.
+- `lowBattery.py` decides when a mouse gets a low battery warning.
+- `notify.py` sends desktop notifications.
+- `dbusCalls.py` makes every blocking D-Bus call, each with a timeout.
+- `panelColor.py` works out the color the icon is drawn in, from the desktop's theme.
+- `icon.py` draws the tray icon.
+- `autostart.py` turns Open at Login on and off.
+- `check.py` is the terminal check.
+- `version.py` holds the version.
+
+`packaging/` holds the launcher, the desktop entries, the udev rule, the package configs, and the build scripts. `tests/` holds the unit tests, with the fake devices and D-Bus services in `tests/fakes/`, the checks that run the real tray on private buses in `tests/live/`, and the container checks in `tests/containers/`.
 
 ## Build from source
 

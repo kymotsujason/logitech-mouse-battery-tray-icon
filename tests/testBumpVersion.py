@@ -31,7 +31,7 @@ class BumpVersionTests(unittest.TestCase):
             f.write(text)
 
     def bump(self, *args):
-        # the copy of the script finds the files next to it, thus it only ever edits the temporary copies
+        # the copy of the script finds the files next to it, so it only ever edits the temporary copies
         return subprocess.run([sys.executable, "-B", os.path.join(self.root, "packaging", "bumpVersion.py"), *args], capture_output=True, text=True).returncode
 
     def testANewVersionReachesEveryFileThatCarriesIt(self):

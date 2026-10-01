@@ -22,7 +22,7 @@ class LauncherTests(unittest.TestCase):
         shutil.copy(os.path.join(REPO, "src", "version.py"), self.appDir)
         with open(LAUNCHER) as f:
             text = f.read()
-        # the copy runs against a stand in app folder, thus the real folder line has to be there to replace
+        # the copy runs against a stand in app folder, so the real folder line has to be there to replace
         self.assertIn(APP_DIR_LINE + "\n", text)
         self.launcher = os.path.join(temp.name, "launcher")
         with open(self.launcher, "w") as f:

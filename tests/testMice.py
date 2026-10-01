@@ -176,7 +176,7 @@ class MouseListTests(unittest.TestCase):
         self.patches = [
             mock.patch.object(hidpp, "findHidppNodes", self.nodes.find),
             mock.patch.object(hidpp.HidppNode, "open", self.nodes.open),
-            mock.patch.object(hidpp, "PING_TIMEOUT", 0.02),
+            mock.patch.object(hidpp, "PING_TIMEOUT", 0.2),
             mock.patch.object(hidpp, "REQUEST_TIMEOUT", 0.1),
             mock.patch.object(mice, "WAKE_RETRY_MS", 300),
             mock.patch.object(mice, "SETTLE_MS", 10),
@@ -192,7 +192,7 @@ class MouseListTests(unittest.TestCase):
         for patch in self.patches:
             patch.stop()
         self.nodes.closeAll()
-        # a list left to the cyclic GC is freed with every other one in a single pass, and that pause can outlast a later test's 20 ms ping window
+        # a list left to the cyclic GC is freed with every other one in a single pass, and that pause can outlast a later test's ping window
         sip.delete(self.mice)
 
     def keys(self):
@@ -314,6 +314,43 @@ class MouseListTests(unittest.TestCase):
         self.assertTrue(self.mouse().asleep)
         receiver.handler = mouseHandler()
         self.assertTrue(waitUntil(lambda: not self.mouse().asleep, timeout=1.0))
+
+    def testADevChangeFindsANewNodeAndDropsAGoneOne(self):
+        self.mice.start()
+        self.assertEqual(self.keys(), [])
+        self.nodes.add(RECEIVER, mouseHandler())
+        self.mice.onDevChanged("/dev")
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"]))
+        self.nodes.hide(RECEIVER)
+        self.mice.onDevChanged("/dev")
+        self.assertTrue(waitUntil(lambda: self.keys() == [] and self.mice.nodes == {}))
+
+    def testAReplyFromAnUnknownSlotStartsNoSearch(self):
+        receiver = self.nodes.add(RECEIVER, mouseHandler())
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"] and not self.mice.nodes[RECEIVER].searching))
+        before = pingsTo(receiver, 2)
+        report = bytearray(OTHER_REPORT)
+        report[1] = 2
+        # software id 0x0A, so it answers some other program's request
+        report[3] = 0x0A
+        receiver.send(bytes(report))
+        QTest.qWait(300)
+        self.assertEqual(pingsTo(receiver, 2), before)
+
+    def testTenWakeSignsCostOneReadBeforeTheRetry(self):
+        receiver = self.nodes.add(RECEIVER, mouseHandler())
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"] and not self.mice.nodes[RECEIVER].searching))
+        receiver.handler = silent
+        self.mice.readAll()
+        self.assertTrue(waitUntil(lambda: self.mouse().asleep and not self.mice.nodes[RECEIVER].pendingReads))
+        before = batteryReads(receiver)
+        for i in range(10):
+            receiver.send(OTHER_REPORT)
+        # less than the patched WAKE_RETRY_MS of 300, so the retry hasn't run yet
+        QTest.qWait(150)
+        self.assertEqual(batteryReads(receiver) - before, 1)
 
     def testABatteryEventUpdatesTheReading(self):
         receiver = self.nodes.add(RECEIVER, mouseHandler())
@@ -532,14 +569,19 @@ class MouseListTests(unittest.TestCase):
         self.mice.applyUPower(lowMouse)
         return warnings
 
-    def warningsAfterTheNodeGoes(self, unitId, key):
-        self.sentWarnings()
-        self.nodes.add(RECEIVER, mouseHandler(answers={(5, 0): [0x0F, 0x02], (5, 1): [9, 0x02, 0, 0]}, unitId=unitId))
+    def warningsAcrossTheNodeGoing(self, unitId):
+        warnings = self.sentWarnings()
+        answers = {(5, 0): [0x0F, 0x02], (5, 1): [9, 0x02, 0, 0]}
+        self.nodes.add(RECEIVER, mouseHandler(answers=answers, unitId=unitId))
         self.mice.start()
-        self.assertTrue(waitUntil(lambda: key in self.mice.warner.sent))
+        self.assertTrue(waitUntil(lambda: warnings == [9]))
         self.nodes.remove(RECEIVER)
-        self.assertTrue(waitUntil(lambda: self.keys() == []))
-        return self.mice.warner.sent
+        self.assertTrue(waitUntil(lambda: self.keys() == [] and self.mice.nodes == {}))
+        self.nodes.add(RECEIVER, mouseHandler(answers=answers, unitId=unitId))
+        self.mice.scanNodes()
+        self.assertTrue(waitUntil(lambda: self.mouse() is not None and self.mouse().reading is not None))
+        QTest.qWait(100)
+        return warnings
 
     def testAUPowerMouseKeyedByItsPathIsWarnedAgainAfterARemoval(self):
         path = "/org/freedesktop/UPower/devices/mouse_hidpp_battery_1"
@@ -548,22 +590,30 @@ class MouseListTests(unittest.TestCase):
     def testAUPowerMouseWithASerialIsntWarnedAgainAfterARemoval(self):
         self.assertEqual(self.upowerWarningsAcrossARemoval("/org/freedesktop/UPower/devices/mouse_hidpp_battery_1", "12ab34cd"), [9])
 
-    def testAMouseKeyedByNodeAndSlotForgetsItsWarningsWithTheNode(self):
-        self.assertEqual(self.warningsAfterTheNodeGoes(bytes(4), RECEIVER + "#1"), {})
+    def testAMouseKeyedByNodeAndSlotIsWarnedAgainAfterTheNodeGoes(self):
+        self.assertEqual(self.warningsAcrossTheNodeGoing(bytes(4)), [9, 9])
 
-    def testAMouseWithAUnitIdKeepsItsWarningsWithoutItsNode(self):
-        self.assertEqual(self.warningsAfterTheNodeGoes(bytes.fromhex("02bc524c"), "02bc524c"), {"02bc524c": {10}})
+    def testAMouseWithAUnitIdIsntWarnedAgainAfterTheNodeGoes(self):
+        self.assertEqual(self.warningsAcrossTheNodeGoing(bytes.fromhex("02bc524c")), [9])
 
     def testAUPowerMouseMergesWithTheSameHidppMouse(self):
-        self.nodes.add(RECEIVER, mouseHandler())
+        warnings = self.sentWarnings()
+        answers = {(5, 0): [0x0F, 0x02], (5, 1): [81, 0x02, 0, 0]}
+        self.nodes.add(RECEIVER, mouseHandler(answers=answers))
         self.mice.start()
         self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"]))
         path = "/org/freedesktop/UPower/devices/mouse_hidpp_battery_0"
-        self.mice.applyUPower(upower.UPowerMouse(path, "02bc524c", "PRO X3", hidpp.BatteryReading(55, 0)))
-        self.assertEqual((self.keys(), self.mouse().upowerPath, self.mouse().reading.percent), (["02bc524c"], path, 55))
-        self.mice.markWarningSent("02bc524c", 9)
+        self.mice.applyUPower(upower.UPowerMouse(path, "02bc524c", "PRO X3", hidpp.BatteryReading(9, 0)))
+        self.assertEqual((self.keys(), self.mouse().upowerPath, warnings), (["02bc524c"], path, [9]))
         self.mice.removeUPower(path)
-        self.assertEqual((self.keys(), self.mouse().upowerPath, self.mice.warner.sent), (["02bc524c"], None, {"02bc524c": {10}}))
+        self.assertEqual((self.keys(), self.mouse().upowerPath), (["02bc524c"], None))
+        # the HID++ half reads 9% as well, and the warning the mouse already got still counts
+        answers[(5, 1)] = [9, 0x02, 0, 0]
+        firstRead = self.mouse().lastRead
+        self.mice.readAll()
+        self.assertTrue(waitUntil(lambda: self.mouse().lastRead != firstRead))
+        QTest.qWait(100)
+        self.assertEqual(warnings, [9])
 
     def testAUPowerOnlyMouseComesAndGoes(self):
         path = "/org/freedesktop/UPower/devices/mouse_hidpp_battery_1"

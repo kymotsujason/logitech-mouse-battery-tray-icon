@@ -110,6 +110,7 @@ class FakeNodes:
         self.everyDevice = []
         self.denied = set()
         self.failing = set()
+        self.hidden = set()
 
     def add(self, path, handler):
         device = FakeDevice(handler)
@@ -121,11 +122,15 @@ class FakeNodes:
         self.devices.pop(path).unplug()
 
     def replace(self, path, handler):
-        # the new device goes in first, thus discovery still lists the path when the old one errors
+        # the new device goes in first, so discovery still lists the path when the old one errors
         old = self.devices[path]
         device = self.add(path, handler)
         old.unplug()
         return device
+
+    def hide(self, path):
+        # the device stays connected, so only a rescan can tell the app it's gone
+        self.hidden.add(path)
 
     def failOnce(self, path):
         self.failing.add(path)
@@ -138,7 +143,7 @@ class FakeNodes:
         return self.add(path, handler)
 
     def find(self, sysRoot="/sys/class/hidraw", devRoot="/dev"):
-        return sorted(set(self.devices) | self.denied)
+        return sorted((set(self.devices) | self.denied) - self.hidden)
 
     def open(self, path, onEvent=None):
         if (path in self.denied):

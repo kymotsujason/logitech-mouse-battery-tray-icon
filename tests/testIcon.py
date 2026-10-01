@@ -34,13 +34,13 @@ class IconTests(unittest.TestCase):
         self.assertTrue(all(a <= 10 or a >= 245 for a in area))
 
     def testNumberOverTheTrackIsSolid(self):
-        # at 18% the fill starts at row 17, thus rows 11 to 16 of the number sit on the track
+        # at 18% the fill starts at row 17, so rows 11 to 16 of the number sit on the track
         area = alphas(renderImage(IconState(percent=18), 22, WHITE), 7, 11, 15, 17)
         self.assertTrue(any(a >= 200 for a in area))
         self.assertFalse(any(a < 40 for a in area))
 
     def testLowNumberIsRed(self):
-        # at 5% the fill is one thin row, thus the number itself has to carry the warning
+        # at 5% the fill is one thin row, so the number itself has to carry the warning
         for percent in (5, 18, 20):
             image = renderImage(IconState(percent=percent), 22, WHITE)
             solid = [image.pixelColor(x, y) for y in range(11, 17) for x in range(7, 15) if image.pixelColor(x, y).alpha() >= 200]
@@ -110,7 +110,7 @@ class IconTests(unittest.TestCase):
         self.assertTrue(os.path.exists(icon.FONT_FILE))
         fontId = QFontDatabase.addApplicationFont(icon.FONT_FILE)
         self.assertGreaterEqual(fontId, 0)
-        # the bundled family and the fallback share a name, thus the fallback gets one no font has
+        # the bundled family and the fallback share a name, so the fallback gets one no font has
         with mock.patch.object(icon, "FALLBACK_FAMILY", "No Such Family 0x7f3a"), mock.patch.object(icon, "digitFamilyName", None):
             self.assertEqual(icon.digitFamily(), QFontDatabase.applicationFontFamilies(fontId)[0])
 
