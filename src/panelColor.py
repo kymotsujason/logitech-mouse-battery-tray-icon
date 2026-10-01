@@ -9,6 +9,7 @@ WHITE = QColor(255, 255, 255)
 PORTAL_SERVICE = "org.freedesktop.portal.Desktop"
 PORTAL_PATH = "/org/freedesktop/portal/desktop"
 SETTINGS_INTERFACE = "org.freedesktop.portal.Settings"
+UNKNOWN_METHOD = "org.freedesktop.DBus.Error.UnknownMethod"
 APPEARANCE = "org.freedesktop.appearance"
 PREFER_LIGHT = 2
 
@@ -81,11 +82,18 @@ def baseColor(env, configHome, dirs, portalScheme, paletteColor):
 
 
 def readPortalColorScheme(bus):
+    error = None
     for method in ("ReadOne", "Read"):
         message = QDBusMessage.createMethodCall(PORTAL_SERVICE, PORTAL_PATH, SETTINGS_INTERFACE, method)
         message.setArguments([APPEARANCE, "color-scheme"])
-        reply = bus.call(message)
-        if (reply.type() == QDBusMessage.MessageType.ReplyMessage and reply.arguments()):
+        reply = dbusCalls.call(bus, message)
+        error = dbusCalls.failure(reply)
+        if (error is None):
+            if (not reply.arguments()):
+                return (0, None)
             value = dbusCalls.plain(reply.arguments()[0])
-            return value if isinstance(value, int) else 0
-    return 0
+            return (value if isinstance(value, int) else 0, None)
+        # only a portal older than ReadOne gets asked with Read
+        if (error != UNKNOWN_METHOD):
+            return (0, error)
+    return (0, error)

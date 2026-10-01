@@ -25,7 +25,6 @@ def readVersion(folder):
 class InstallWatcher(QObject):
     # every later version takes over from the one installed before it through this watch, so the app folder keeps tray.py and version.py's VERSION line at its top
     removed = pyqtSignal()
-    restarting = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -56,5 +55,8 @@ class InstallWatcher(QObject):
         if (check.returncode != 0):
             print("Version " + newVersion + " didn't import, so " + VERSION + " keeps running", file=sys.stderr)
             return
-        self.restarting.emit()
-        os.execv(sys.executable, [sys.executable, "-B", os.path.join(APP_FOLDER, "tray.py")])
+        # the hidraw fds, the wake pipes, and the lock file are opened without inheritance (PEP 446), so the exec closes them and the new version takes the lock
+        try:
+            os.execv(sys.executable, [sys.executable, "-B", os.path.join(APP_FOLDER, "tray.py")])
+        except OSError as error:
+            print("Version " + newVersion + " couldn't start (" + str(error) + "), so " + VERSION + " keeps running", file=sys.stderr)

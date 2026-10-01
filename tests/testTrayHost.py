@@ -1,4 +1,7 @@
+import contextlib
+import io
 import os
+import subprocess
 import unittest
 from unittest import mock
 
@@ -39,6 +42,19 @@ class TrayHostTests(unittest.TestCase):
             self.host.dontOpenAtLogin.connect(lambda: self.leaves.append(1))
             self.host.start()
         return self.host
+
+    def testAnExtensionCheckThatTimesOutMovesOnToTheNext(self):
+        answers = [subprocess.TimeoutExpired(["gnome-extensions"], 5), mock.Mock(returncode=0)]
+        with mock.patch.object(trayHost.shutil, "which", return_value="/usr/bin/gnome-extensions"), mock.patch.object(trayHost.subprocess, "run", side_effect=answers):
+            self.assertEqual(trayHost.installedExtension(), trayHost.EXTENSION_UUIDS[1])
+
+    def testTurnOnThatFailsSaysWhy(self):
+        host = self.makeHost(False)
+        host.extensionUuid = "ubuntu-appindicators@ubuntu.com"
+        errors = io.StringIO()
+        with mock.patch.object(trayHost.subprocess, "run", return_value=mock.Mock(returncode=2)), contextlib.redirect_stderr(errors):
+            host.onNoticeAction("turnOn")
+        self.assertEqual(errors.getvalue(), "Couldn't turn on ubuntu-appindicators@ubuntu.com: gnome-extensions enable exited with 2\n")
 
     def notices(self, host):
         sent = []

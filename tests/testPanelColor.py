@@ -2,9 +2,41 @@ import os
 import tempfile
 import unittest
 
+from PyQt6.QtDBus import QDBusVariant
 from PyQt6.QtGui import QColor
 
 import panelColor
+
+
+class PortalBus:
+    # answers ReadOne and Read with what a test gives, an error name or a value, and keeps what it was asked
+    def __init__(self, answers):
+        self.answers = answers
+        self.asked = []
+
+    def call(self, message, mode=None, timeout=None):
+        self.asked.append((message.member(), timeout))
+        answer = self.answers[message.member()]
+        if (isinstance(answer, str)):
+            return message.createErrorReply(answer, "failed on purpose")
+        return message.createReply([QDBusVariant(answer)])
+
+
+class PortalReadTests(unittest.TestCase):
+    def testReadOneAnswersWithTheDefaultTimeout(self):
+        bus = PortalBus({"ReadOne": 1})
+        self.assertEqual(panelColor.readPortalColorScheme(bus), (1, None))
+        self.assertEqual(bus.asked, [("ReadOne", 2000)])
+
+    def testAnOlderPortalFallsBackToRead(self):
+        bus = PortalBus({"ReadOne": panelColor.UNKNOWN_METHOD, "Read": 2})
+        self.assertEqual(panelColor.readPortalColorScheme(bus), (2, None))
+        self.assertEqual([member for member, timeout in bus.asked], ["ReadOne", "Read"])
+
+    def testAnyOtherErrorIsReturnedWithoutTryingRead(self):
+        bus = PortalBus({"ReadOne": "org.freedesktop.DBus.Error.NoReply"})
+        self.assertEqual(panelColor.readPortalColorScheme(bus), (0, "org.freedesktop.DBus.Error.NoReply"))
+        self.assertEqual([member for member, timeout in bus.asked], ["ReadOne"])
 
 
 class PanelColorTests(unittest.TestCase):

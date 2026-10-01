@@ -44,7 +44,10 @@ def installedExtension():
     for uuid in EXTENSION_UUIDS:
         try:
             result = subprocess.run(["gnome-extensions", "info", uuid], capture_output=True, timeout=5)
-        except (OSError, subprocess.TimeoutExpired):
+        except subprocess.TimeoutExpired:
+            # a slow answer for one uuid says nothing about the next one
+            continue
+        except OSError:
             return None
         if (result.returncode == 0):
             return uuid
@@ -120,9 +123,12 @@ class TrayHost(QObject):
     def onNoticeAction(self, key):
         if (key == "turnOn" and self.extensionUuid is not None):
             try:
-                subprocess.run(["gnome-extensions", "enable", self.extensionUuid], timeout=10)
+                result = subprocess.run(["gnome-extensions", "enable", self.extensionUuid], capture_output=True, timeout=10)
             except (OSError, subprocess.TimeoutExpired) as error:
                 print("Couldn't turn on " + self.extensionUuid + ": " + str(error), file=sys.stderr)
+                return
+            if (result.returncode != 0):
+                print("Couldn't turn on " + self.extensionUuid + ": gnome-extensions enable exited with " + str(result.returncode), file=sys.stderr)
         elif (key == "getExtension"):
             QDesktopServices.openUrl(QUrl(EXTENSION_URL))
         elif (key == "dontOpen"):

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import fcntl
 import os
+import signal
 import sys
 import threading
 import time
@@ -8,7 +9,7 @@ import traceback
 
 from PyQt6.QtCore import QFileSystemWatcher, QObject, pyqtSlot
 from PyQt6.QtDBus import QDBusConnection, QDBusMessage
-from PyQt6.QtGui import QAction, QIcon, QPalette
+from PyQt6.QtGui import QAction, QIcon, QPalette, QSessionManager
 from PyQt6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
 import autostart
@@ -28,6 +29,9 @@ APP_NAME = "Mouse Battery"
 LOCK_NAME = "logitech-mouse-battery.lock"
 TARGET_NICENESS = 10
 PROJECT_URL = "https://github.com/kymotsujason/logitech-mouse-battery-tray-icon"
+PORTAL_RETRY_MS = 10 * 1000
+# the menu is in English, so a date in it is too, whatever the locale
+MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 
 def iconStateFor(mouse):
@@ -37,16 +41,31 @@ def iconStateFor(mouse):
     return IconState(percent=reading.percent, charging=(reading.charging in hidpp.EXTERNAL_POWER), asleep=mouse.asleep)
 
 
-def mouseLine(name, mouse):
+def readingTime(stamp, now):
+    local = time.localtime(stamp)
+    clock = time.strftime("%H:%M", local)
+    if (local[:3] == time.localtime(now)[:3]):
+        return "at " + clock
+    return "on " + MONTH_NAMES[local.tm_mon - 1] + " " + str(local.tm_mday) + " at " + clock
+
+
+def mouseLine(name, mouse, now=None):
     if (mouse.reading is None):
         return name + ", no reading yet"
     level = hidpp.levelText(mouse.reading)
     if (mouse.asleep):
-        return name + ", asleep, " + level + " at " + time.strftime("%H:%M", time.localtime(mouse.lastRead))
-    if (mouse.reading.charging in (hidpp.CHARGING_CHARGING, hidpp.CHARGING_SLOW)):
+        return name + ", asleep, " + level + " " + readingTime(mouse.lastRead, time.time() if now is None else now)
+    charging = mouse.reading.charging
+    if (charging in (hidpp.CHARGING_CHARGING, hidpp.CHARGING_SLOW)):
         return name + ", charging, " + level
-    if (mouse.reading.charging == hidpp.CHARGING_FULL):
+    if (charging == hidpp.CHARGING_FULL):
         return name + ", full, " + level
+    if (charging == hidpp.CHARGING_ERROR):
+        return name + ", charging error, " + level
+    if (charging == hidpp.CHARGING_PENDING):
+        return name + ", pending charge, " + level
+    if (charging == hidpp.CHARGING_UNKNOWN):
+        return name + ", unknown state, " + level
     return name + ", " + level
 
 
@@ -116,10 +135,14 @@ class MouseBatteryApp(QObject):
         self.statusActions = []
         self.portalScheme = 0
         self.colorErrors = set()
+        self.cachedColor = None
+        self.aboutBox = None
         self.noticeErrors = set()
         self.mouseList = mice.MouseList()
         self.mouseList.changed.connect(self.updateTray)
         self.mouseList.lowBattery.connect(self.onLowBattery)
+        # the 300 s read also looks at the panel color again, which catches a plasmarc made after the app started
+        self.mouseList.readTimer.timeout.connect(self.onColorsChanged)
         self.upower = UPowerWatcher(self.systemBus)
         self.upower.mouseChanged.connect(self.mouseList.applyUPower)
         self.upower.mouseRemoved.connect(self.mouseList.removeUPower)
@@ -129,7 +152,6 @@ class MouseBatteryApp(QObject):
         self.trayHost.dontOpenAtLogin.connect(self.onDontOpenAtLogin)
         self.installWatcher = InstallWatcher()
         self.installWatcher.removed.connect(self.quitApp)
-        self.installWatcher.restarting.connect(self.mouseList.stop)
         self.menu = QMenu()
         self.menu.aboutToShow.connect(self.onMenuShown)
         self.separator = self.menu.addSeparator()
@@ -140,6 +162,7 @@ class MouseBatteryApp(QObject):
         self.menu.addAction("About Mouse Battery").triggered.connect(lambda: self.showAbout())
         self.menu.addAction("Quit").triggered.connect(lambda: self.quitApp())
         self.plasmarcWatcher = QFileSystemWatcher(self)
+        self.portalTimer = mice.singleShotTimer(self, PORTAL_RETRY_MS, self.onPortalRetry)
         self.updateTray()
 
     def start(self):
@@ -153,6 +176,7 @@ class MouseBatteryApp(QObject):
     def stop(self):
         self.trayHost.stop()
         self.upower.stop()
+        self.portalTimer.stop()
         self.mouseList.stop()
 
     def quitApp(self):
@@ -174,7 +198,11 @@ class MouseBatteryApp(QObject):
         self.tray.show()
 
     def onDontOpenAtLogin(self):
-        self.onLoginToggled(False)
+        enabled, error = self.onLoginToggled(False)
+        if (enabled):
+            # quitting now would bring the app back at the next login with no word why
+            self.notifier.send(APP_NAME, "Couldn't turn off Open at Login." + ("" if error is None else " " + error))
+            return
         self.quitApp()
 
     def onMenuShown(self):
@@ -186,11 +214,15 @@ class MouseBatteryApp(QObject):
             self.mouseList.readAll()
 
     def onLoginToggled(self, checked):
+        error = None
         try:
             autostart.setEnabled(self.configHome, checked)
-        except OSError as error:
-            print("Couldn't change Open at Login: " + str(error), file=sys.stderr)
-        self.loginAction.setChecked(autostart.isEnabled(self.configHome))
+        except OSError as failure:
+            error = str(failure)
+            print("Couldn't change Open at Login: " + error, file=sys.stderr)
+        enabled = autostart.isEnabled(self.configHome)
+        self.loginAction.setChecked(enabled)
+        return (enabled, error)
 
     def onLowBattery(self, key, name, percent):
         notificationId, error = self.notifier.send("Mouse battery low", name + " has " + str(percent) + "% left.")
@@ -204,7 +236,13 @@ class MouseBatteryApp(QObject):
         self.mouseList.markWarningSent(key, percent)
 
     def showAbout(self):
-        QMessageBox.about(None, "About Mouse Battery", "Mouse Battery " + VERSION + "\n\nShows the battery of Logitech mice in the system tray.\n\n" + PROJECT_URL + "\n\nLicensed under the GNU GPL, version 3 or later.\nNot affiliated with Logitech.")
+        # a second click brings the open box forward instead of stacking another one
+        if (self.aboutBox is None):
+            self.aboutBox = QMessageBox(QMessageBox.Icon.NoIcon, "About Mouse Battery", "Mouse Battery " + VERSION + "\n\nShows the battery of Logitech mice in the system tray.\n\n" + PROJECT_URL + "\n\nLicensed under the GNU GPL, version 3 or later.\nNot affiliated with Logitech.", QMessageBox.StandardButton.Ok)
+            self.aboutBox.setIconPixmap(self.app.windowIcon().pixmap(64, 64))
+        self.aboutBox.show()
+        self.aboutBox.raise_()
+        self.aboutBox.activateWindow()
 
     def updateStatusActions(self, lines):
         while (len(self.statusActions) < len(lines)):
@@ -213,14 +251,22 @@ class MouseBatteryApp(QObject):
             self.menu.insertAction(self.separator, action)
             self.statusActions.append(action)
         while (len(self.statusActions) > len(lines)):
-            self.menu.removeAction(self.statusActions.pop())
+            action = self.statusActions.pop()
+            self.menu.removeAction(action)
+            action.deleteLater()
         for action, line in zip(self.statusActions, lines):
-            action.setText(line)
+            # a single & in menu text marks a shortcut key, while the tooltip shows text as written
+            action.setText(line.replace("&", "&&"))
+
+    def clearColor(self):
+        self.cachedColor = None
 
     def baseColor(self):
+        if (self.cachedColor is not None):
+            return self.cachedColor
         palette = self.app.palette().color(QPalette.ColorRole.WindowText)
         try:
-            return panelColor.baseColor(os.environ, self.configHome, panelColor.dataDirs(os.environ), self.portalScheme, palette)
+            self.cachedColor = panelColor.baseColor(os.environ, self.configHome, panelColor.dataDirs(os.environ), self.portalScheme, palette)
         except Exception as error:
             # every redraw asks again, so each error is printed only the first time
             message = "Couldn't read the panel color: " + str(error)
@@ -228,6 +274,7 @@ class MouseBatteryApp(QObject):
                 self.colorErrors.add(message)
                 print(message, file=sys.stderr)
             return palette
+        return self.cachedColor
 
     def updateTray(self, *args):
         lines = statusLines(self.mouseList)
@@ -250,8 +297,15 @@ class MouseBatteryApp(QObject):
         self.plasmarcWatcher.fileChanged.connect(self.onColorsChanged)
         self.watchPlasmarc()
         if ("GNOME" in panelColor.desktopNames(os.environ)):
-            self.portalScheme = panelColor.readPortalColorScheme(self.sessionBus)
             self.sessionBus.connect(panelColor.PORTAL_SERVICE, panelColor.PORTAL_PATH, panelColor.SETTINGS_INTERFACE, "SettingChanged", self.onPortalSetting)
+            self.portalScheme, error = panelColor.readPortalColorScheme(self.sessionBus)
+            # the portal can still be starting at login, so a read that got no answer gets one more try
+            if (error == NO_REPLY):
+                self.portalTimer.start()
+
+    def onPortalRetry(self):
+        self.portalScheme, error = panelColor.readPortalColorScheme(self.sessionBus)
+        self.onColorsChanged()
 
     def watchPlasmarc(self):
         # KDE replaces plasmarc on every save, so the watch is added again after each change
@@ -260,6 +314,7 @@ class MouseBatteryApp(QObject):
             self.plasmarcWatcher.addPath(path)
 
     def onColorsChanged(self, *args):
+        self.clearColor()
         self.watchPlasmarc()
         self.updateTray()
 
@@ -269,15 +324,24 @@ class MouseBatteryApp(QObject):
         if (len(arguments) >= 3 and arguments[0] == panelColor.APPEARANCE and arguments[1] == "color-scheme"):
             value = dbusCalls.plain(arguments[2])
             self.portalScheme = value if isinstance(value, int) else 0
+            self.clearColor()
             self.updateTray()
+
+
+def neverRestart(manager):
+    # autostart opens the app at login, so a restored session would start a second copy
+    manager.setRestartHint(QSessionManager.RestartHint.RestartNever)
 
 
 def main():
     installExceptionHooks()
+    # Python's handler only raises KeyboardInterrupt in the next slot, where the exception hook prints it, so Ctrl+C never ended the app
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
     raiseNiceness()
     # the xdg portal registers the app by this name once the tray icon starts, and it needs a desktop file to match
     QApplication.setDesktopFileName(APP_ID)
     app = QApplication(sys.argv)
+    app.saveStateRequest.connect(neverRestart)
     app.setApplicationName(APP_ID)
     app.setApplicationDisplayName(APP_NAME)
     app.setWindowIcon(QIcon.fromTheme(APP_ID))

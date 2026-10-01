@@ -27,9 +27,7 @@ class InstallWatchTests(unittest.TestCase):
     def setUp(self):
         self.watcher = installWatch.InstallWatcher()
         self.removals = []
-        self.restarts = []
         self.watcher.removed.connect(lambda: self.removals.append(1))
-        self.watcher.restarting.connect(lambda: self.restarts.append(1))
 
     def testReadVersion(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -51,7 +49,15 @@ class InstallWatchTests(unittest.TestCase):
                 self.watcher.onChanged()
         self.assertEqual(run.call_args.args[0], [sys.executable, "-B", "-c", "import tray"])
         self.assertEqual(execv.call_args.args[1], [sys.executable, "-B", os.path.join(folder, "tray.py")])
-        self.assertEqual((errors.getvalue(), self.restarts), ("", [1]))
+        self.assertEqual(errors.getvalue(), "")
+
+    def testAFailedExecKeepsRunning(self):
+        with tempfile.TemporaryDirectory() as folder:
+            installedCopy(folder, "9.9.9")
+            errors = io.StringIO()
+            with mock.patch.object(installWatch, "APP_FOLDER", folder), mock.patch.object(installWatch.subprocess, "run", return_value=mock.Mock(returncode=0)), mock.patch.object(installWatch.os, "execv", side_effect=OSError(8, "Exec format error")), contextlib.redirect_stderr(errors):
+                self.watcher.onChanged()
+        self.assertEqual(errors.getvalue(), "Version 9.9.9 couldn't start ([Errno 8] Exec format error), so " + installWatch.VERSION + " keeps running\n")
 
     def testANewVersionThatDoesntImportKeepsRunning(self):
         with tempfile.TemporaryDirectory() as folder:
