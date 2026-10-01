@@ -49,6 +49,10 @@ class LauncherTests(unittest.TestCase):
         self.writeScript("check", "import sys\nsys.exit(1)\n")
         self.assertEqual(self.launch("check"), (1, ""))
 
+    def testAnythingElsePrintsTheUsageAndExitsTwo(self):
+        result = subprocess.run(["sh", self.launcher, "--help"], capture_output=True, text=True)
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (2, "", "Usage: logitech-mouse-battery [check | --version]\n"))
+
     def testTheLauncherIsExecutable(self):
         self.assertTrue(os.access(LAUNCHER, os.X_OK))
 

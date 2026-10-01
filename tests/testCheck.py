@@ -81,12 +81,12 @@ class CheckTests(unittest.TestCase):
     def testANodeThatFailsToOpenSaysToReplug(self):
         self.nodes.add("/dev/hidraw18", mouseHandler())
         self.nodes.failOnce("/dev/hidraw18")
-        self.assertEqual(self.runCheck(), (1, "Couldn't open /dev/hidraw18: [Errno 5] Input/output error: '/dev/hidraw18'\nCan't read the receiver. Unplug it and plug it back in.\n"))
+        self.assertEqual(self.runCheck(), (1, "Couldn't open /dev/hidraw18: [Errno 5] Input/output error: '/dev/hidraw18'\nCan't read the receiver or cable. Unplug it and plug it back in.\n"))
 
     def testANodeThatRaisesSomethingElseIsReportedAndSkipped(self):
         self.nodes.add("/dev/hidraw18", mouseHandler())
         with mock.patch.object(hidpp, "searchNode", side_effect=ValueError("bad reply")):
-            self.assertEqual(self.runCheck(), (1, "Couldn't read /dev/hidraw18: bad reply\nCan't read the receiver. Unplug it and plug it back in.\n"))
+            self.assertEqual(self.runCheck(), (1, "Couldn't read /dev/hidraw18: bad reply\nCan't read the receiver or cable. Unplug it and plug it back in.\n"))
 
 
 if (__name__ == "__main__"):

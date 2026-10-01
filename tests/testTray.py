@@ -162,7 +162,7 @@ class AppTests(unittest.TestCase):
 
     def testMenuLinesAndTooltipFollowTheMice(self):
         mouseApp = self.makeApp(True)
-        self.assertEqual([action.text() for action in mouseApp.statusActions], ["No Logitech mouse found"])
+        self.assertEqual([action.text() for action in mouseApp.statusActions], ["No Logitech mouse found."])
         mouseApp.mouseList.applyUPower(upower.UPowerMouse(PATH, "12ab34cd", "MX Master 3", hidpp.BatteryReading(55, 0)))
         self.assertEqual([action.text() for action in mouseApp.statusActions], ["MX Master 3, 55%"])
         self.assertEqual(mouseApp.shownTooltip, "MX Master 3, 55%")

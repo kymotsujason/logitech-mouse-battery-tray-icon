@@ -41,7 +41,8 @@ class AutostartTests(unittest.TestCase):
             f.write("[Desktop Entry]\nType=Application\nName=Mouse Battery\nHidden=true\nX-GNOME-Autostart-enabled=false\nExec=logitech-mouse-battery\n")
         autostart.setEnabled(self.configHome, True)
         self.assertIn("Hidden=false", self.read())
-        self.assertIn("X-GNOME-Autostart-enabled=false", self.read())
+        self.assertIn("X-GNOME-Autostart-enabled=true", self.read())
+        self.assertNotIn("X-GNOME-Autostart-enabled=false", self.read())
         self.assertNotIn("Hidden=true", self.read())
         self.assertTrue(autostart.isEnabled(self.configHome))
 
@@ -52,6 +53,31 @@ class AutostartTests(unittest.TestCase):
         autostart.setEnabled(self.configHome, False)
         self.assertIn("X-Custom=1", self.read())
         self.assertFalse(autostart.isEnabled(self.configHome))
+
+    def testTheGnomeKeyAloneCanTurnItOff(self):
+        os.makedirs(os.path.dirname(self.path))
+        with open(self.path, "w") as f:
+            f.write("[Desktop Entry]\nType=Application\nName=Mouse Battery\nX-GNOME-Autostart-enabled=false\nExec=logitech-mouse-battery\n")
+        self.assertFalse(autostart.isEnabled(self.configHome))
+
+    def testTurningItOffSetsTheGnomeKeyWhereItIs(self):
+        os.makedirs(os.path.dirname(self.path))
+        with open(self.path, "w") as f:
+            f.write("[Desktop Entry]\nType=Application\nName=Mouse Battery\nX-GNOME-Autostart-enabled=true\nExec=logitech-mouse-battery\n")
+        autostart.setEnabled(self.configHome, False)
+        self.assertIn("X-GNOME-Autostart-enabled=false", self.read())
+        self.assertIn("Hidden=true", self.read())
+        self.assertFalse(autostart.isEnabled(self.configHome))
+
+    def testAnOverrideAnotherUserOwnsIsLeftUnchanged(self):
+        os.makedirs(os.path.dirname(self.path))
+        original = "[Desktop Entry]\nType=Application\nName=Mouse Battery\nExec=logitech-mouse-battery\n"
+        with open(self.path, "w") as f:
+            f.write(original)
+        with mock.patch.object(autostart.os, "getuid", return_value=os.getuid() + 1):
+            with self.assertRaises(PermissionError):
+                autostart.setEnabled(self.configHome, False)
+        self.assertEqual(self.read(), original)
 
     def testTurningItOnDeletesAnOverrideWithoutExec(self):
         os.makedirs(os.path.dirname(self.path))

@@ -26,8 +26,8 @@ STATUS_NONE = "none"
 STATUS_TEXT = {
     STATUS_SEARCHING: "Looking for mice...",
     STATUS_WAITING: "Move your mouse to wake it.",
-    STATUS_DENIED: "Can't read the receiver. Unplug it and plug it back in.",
-    STATUS_NONE: "No Logitech mouse found",
+    STATUS_DENIED: "Can't read the receiver or cable. Unplug it and plug it back in.",
+    STATUS_NONE: "No Logitech mouse found.",
 }
 
 

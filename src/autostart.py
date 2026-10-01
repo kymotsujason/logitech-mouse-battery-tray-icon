@@ -5,6 +5,8 @@ import stat
 
 FILE_NAME = "logitech-mouse-battery.desktop"
 OWN_KEYS = {"Type": "Application", "Name": "Mouse Battery", "Hidden": "true"}
+# gnome-session reads this key too, so an override can turn the app off with it in place of Hidden
+GNOME_KEY = "X-GNOME-Autostart-enabled"
 
 
 def overridePath(configHome):
@@ -35,8 +37,10 @@ def writeText(path, text):
     path = os.path.realpath(path)
     oldMode = None
     if (os.path.exists(path)):
-        oldMode = os.stat(path).st_mode
-        if ((oldMode & stat.S_IWUSR) == 0):
+        info = os.stat(path)
+        oldMode = info.st_mode
+        # root passes os.access for a 0400 file, so the owner's write bit and the owner are checked directly
+        if ((oldMode & stat.S_IWUSR) == 0 or info.st_uid != os.getuid()):
             raise PermissionError(errno.EACCES, "Permission denied", path)
     temp = path + ".new"
     try:
@@ -58,10 +62,12 @@ def isEnabled(configHome):
         keys = readEntry(overridePath(configHome))
     except OSError:
         return True
-    return (keys is None or keys.get("Hidden", "").lower() != "true")
+    if (keys is None):
+        return True
+    return (keys.get("Hidden", "").lower() != "true" and keys.get(GNOME_KEY, "").lower() != "false")
 
 
-def setHidden(path, value):
+def setHidden(path, value, gnomeEnabled):
     with open(path, encoding="utf-8", errors="surrogateescape") as f:
         lines = f.read().splitlines()
     result = []
@@ -69,15 +75,19 @@ def setHidden(path, value):
     written = False
     for line in lines:
         stripped = line.strip()
+        key = stripped.partition("=")[0].strip()
         if (stripped.startswith("[")):
             if (inEntry and not written):
                 result.append("Hidden=" + value)
                 written = True
             inEntry = (stripped == "[Desktop Entry]")
-        elif (inEntry and stripped.partition("=")[0].strip() == "Hidden"):
+        elif (inEntry and key == "Hidden"):
             if (not written):
                 result.append("Hidden=" + value)
                 written = True
+            continue
+        elif (inEntry and key == GNOME_KEY):
+            result.append(GNOME_KEY + "=" + gnomeEnabled)
             continue
         result.append(line)
     if (not written):
@@ -96,10 +106,10 @@ def setEnabled(configHome, enabled):
         if ("Exec" not in keys):
             os.remove(path)
             return
-        setHidden(path, "false")
+        setHidden(path, "false", "true")
         return
     if (keys is None):
         os.makedirs(os.path.dirname(path), exist_ok=True)
         writeText(path, "[Desktop Entry]\n" + "".join(key + "=" + value + "\n" for key, value in OWN_KEYS.items()))
         return
-    setHidden(path, "true")
+    setHidden(path, "true", "false")

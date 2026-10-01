@@ -68,12 +68,13 @@ def main():
     if (found):
         return
     if (nodes == 0):
-        print("No Logitech mouse found.")
+        print(mice.STATUS_TEXT[mice.STATUS_NONE])
     elif (searched > 0):
+        # the tray's waiting text has no "run this again", so the terminal keeps its own line
         print("No mouse answered. Move your mouse to wake it, then run this again.")
     elif (denied < nodes):
-        # every node that wasn't denied failed to open or dropped out, thus waking the mouse can't help
-        print("Can't read the receiver. Unplug it and plug it back in.")
+        # every node that wasn't denied failed to open or dropped out, so waking the mouse can't help
+        print(mice.STATUS_TEXT[mice.STATUS_DENIED])
     sys.exit(1)
 
 
