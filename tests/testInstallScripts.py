@@ -69,6 +69,11 @@ class InstallScriptTests(unittest.TestCase):
         self.assertEqual((code, calls), (0, CHECKS + STEPS))
         self.assertEqual(output.count("that step failed. Unplug the receiver or cable and plug it back in, or reboot."), 4)
 
+    def testAResetFailedThatFailsIsntReported(self):
+        code, output, calls = self.runScript("afterInstall.sh", fail="systemctl")
+        self.assertEqual((code, calls), (0, CHECKS + STEPS))
+        self.assertEqual(output.count("that step failed."), 3)
+
     def testAfterInstallSkipsAChroot(self):
         code, output, calls = self.runScript("afterInstall.sh", chroot="1")
         self.assertEqual((code, calls), (0, CHECKS[:1]))

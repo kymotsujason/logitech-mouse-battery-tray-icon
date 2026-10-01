@@ -23,6 +23,11 @@ step() {
     fi
 }
 
+# a unit nothing has started yet isn't loaded, and reset-failed fails on it with nothing to clear
+clearFailedStarts() {
+    systemctl reset-failed "$UNIT" 2>/dev/null || true
+}
+
 step "reloading systemd" systemctl daemon-reload
 # the trigger below can start the service, so this waits until the bus holds the new policy
 step "reloading the system bus" systemctl reload dbus.service
@@ -31,7 +36,7 @@ step "applying the rule to plugged in receivers and cables" udevadm trigger --su
 step "waiting for udev" udevadm settle
 # until the trigger settles a node can still carry the old uaccess tag, which would put its ACL back
 step "closing the access 1.0.x gave" python3 -I -B "$APP_DIR/clearAccess.py"
-step "clearing the service's failed starts" systemctl reset-failed "$UNIT"
+step "clearing the service's failed starts" clearFailedStarts
 # nothing after this depends on it, and a service that fails to start would fail a call that waits
 step "restarting the service if it runs" systemctl try-restart --no-block "$UNIT"
 exit 0
