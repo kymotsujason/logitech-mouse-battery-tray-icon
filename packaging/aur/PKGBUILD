@@ -13,7 +13,7 @@ sha256sums=('SKIP')
 package() {
     cd "$pkgname-$pkgver"
     install -Dm755 packaging/logitech-mouse-battery "$pkgdir/usr/bin/logitech-mouse-battery"
-    install -Dm644 -t "$pkgdir/usr/share/$pkgname" src/autostart.py src/check.py src/hidpp.py src/icon.py src/isHidpp.py src/mice.py src/notify.py src/panelColor.py src/tray.py src/upower.py src/version.py src/NotoSans-Medium.ttf src/OFL.txt
+    install -Dm644 -t "$pkgdir/usr/share/$pkgname" src/autostart.py src/check.py src/hidpp.py src/icon.py src/installWatch.py src/isHidpp.py src/mice.py src/notify.py src/panelColor.py src/tray.py src/trayHost.py src/upower.py src/version.py src/NotoSans-Medium.ttf src/OFL.txt
     install -Dm644 packaging/logitech-mouse-battery.desktop "$pkgdir/usr/share/applications/logitech-mouse-battery.desktop"
     install -Dm644 packaging/autostart/logitech-mouse-battery.desktop "$pkgdir/etc/xdg/autostart/logitech-mouse-battery.desktop"
     install -Dm644 packaging/70-logitech-mouse-battery.rules "$pkgdir/usr/lib/udev/rules.d/70-logitech-mouse-battery.rules"

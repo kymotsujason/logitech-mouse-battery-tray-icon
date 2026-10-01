@@ -18,6 +18,7 @@ import autostart
 import hidpp
 import mice
 import tray
+import trayHost
 import upower
 from icon import IconState
 
@@ -69,12 +70,10 @@ class ProcessTests(unittest.TestCase):
         self.assertEqual(tray.takeLock(None), (True, None))
         self.assertEqual(tray.takeLock(""), (True, None))
 
-    def testReadVersion(self):
-        with tempfile.TemporaryDirectory() as folder:
-            self.assertIsNone(tray.readVersion(folder))
-            with open(os.path.join(folder, "version.py"), "w") as f:
-                f.write("VERSION = \"1.2.3\"\n")
-            self.assertEqual(tray.readVersion(folder), "1.2.3")
+    def testMainInstallsTheExceptionHooks(self):
+        with mock.patch.object(sys, "excepthook", sys.excepthook), mock.patch.object(tray.threading, "excepthook", tray.threading.excepthook), mock.patch.object(tray, "raiseNiceness"), mock.patch.object(tray, "QApplication"), mock.patch.object(tray, "takeLock", return_value=(False, None)), mock.patch.object(tray, "Notifier"):
+            self.assertEqual(tray.main(), 0)
+            self.assertEqual((sys.excepthook, tray.threading.excepthook), (tray.printException, tray.printThreadException))
 
     def testNicenessIsOnlyToppedUp(self):
         for current, expected in ((0, [mock.call(0), mock.call(10)]), (10, [mock.call(0)]), (12, [mock.call(0)])):
@@ -106,72 +105,16 @@ class AppTests(unittest.TestCase):
         self.temp.cleanup()
 
     def makeApp(self, hostUp):
-        with mock.patch.object(tray, "hostRegistered", return_value=hostUp):
+        with mock.patch.object(trayHost, "hostRegistered", return_value=hostUp):
             self.mouseApp = tray.MouseBatteryApp(app, self.bus, self.bus)
             self.mouseApp.start()
         return self.mouseApp
 
-    def notices(self, mouseApp):
-        sent = []
-        return sent, mock.patch.object(mouseApp.notifier, "send", lambda summary, body, actions=(), onAction=None: sent.append((body, list(actions))))
-
-    def testNoTrayIconUntilAHostIsRegistered(self):
-        mouseApp = self.makeApp(False)
-        self.assertIsNone(mouseApp.tray)
-        with mock.patch.object(tray, "hostRegistered", return_value=True):
-            mouseApp.checkHost()
-        self.assertIsNotNone(mouseApp.tray)
-
-    def testAFailedHostQueryIsAskedAgain(self):
-        with mock.patch.object(tray, "HOST_RETRY_MS", 10):
-            mouseApp = self.makeApp(False)
-        with mock.patch.object(tray, "hostRegistered", return_value=True):
-            QTest.qWait(200)
-        self.assertIsNotNone(mouseApp.tray)
-
-    def testHostRetriesBackOffUpToACap(self):
-        with mock.patch.object(tray, "HOST_RETRY_MS", 10), mock.patch.object(tray, "HOST_RETRY_MAX_MS", 40):
-            mouseApp = self.makeApp(False)
-            intervals = [mouseApp.hostTimer.interval()]
-            with mock.patch.object(tray, "hostRegistered", return_value=False):
-                for i in range(3):
-                    mouseApp.checkHost()
-                    intervals.append(mouseApp.hostTimer.interval())
-        self.assertEqual(intervals, [10, 20, 40, 40])
-
-    def testWatcherSignalsStartTheBackoffOver(self):
-        with mock.patch.object(tray, "HOST_RETRY_MS", 10), mock.patch.object(tray, "HOST_RETRY_MAX_MS", 40):
-            mouseApp = self.makeApp(False)
-            with mock.patch.object(tray, "hostRegistered", return_value=False):
-                for i in range(3):
-                    mouseApp.checkHost()
-                mouseApp.hostWatcher.serviceRegistered.emit(tray.WATCHER_SERVICE)
-                afterWatcher = mouseApp.hostTimer.interval()
-                for i in range(3):
-                    mouseApp.checkHost()
-                mouseApp.onHostRegistered(QDBusMessage())
-                afterHost = mouseApp.hostTimer.interval()
-        self.assertEqual((afterWatcher, afterHost), (10, 10))
-
-    def testStopEndsTheHostAndNoticeTimers(self):
-        mouseApp = self.makeApp(False)
-        self.assertEqual((mouseApp.hostTimer.isActive(), mouseApp.noticeTimer.isActive()), (True, True))
-        mouseApp.stop()
-        self.assertEqual((mouseApp.hostTimer.isActive(), mouseApp.noticeTimer.isActive()), (False, False))
-
-    def testTheNoTrayNoticeAsksForTheHostFirst(self):
-        mouseApp = self.makeApp(False)
-        sent, patch = self.notices(mouseApp)
-        with patch, mock.patch.object(tray, "hostRegistered", return_value=True):
-            mouseApp.onNoTray()
-        self.assertIsNotNone(mouseApp.tray)
-        self.assertEqual(sent, [])
-
     def testAPanelColorErrorStillShowsTheIconInThePaletteColor(self):
         mouseApp = self.makeApp(False)
         errors = io.StringIO()
-        with mock.patch.object(tray.panelColor, "baseColor", side_effect=ValueError("embedded null byte")), mock.patch.object(tray, "hostRegistered", return_value=True), contextlib.redirect_stderr(errors):
-            mouseApp.checkHost()
+        with mock.patch.object(tray.panelColor, "baseColor", side_effect=ValueError("embedded null byte")), mock.patch.object(trayHost, "hostRegistered", return_value=True), contextlib.redirect_stderr(errors):
+            mouseApp.trayHost.checkHost()
             mouseApp.onColorsChanged()
         self.assertTrue(mouseApp.tray.isVisible())
         self.assertEqual(mouseApp.shownColor, app.palette().color(QPalette.ColorRole.WindowText))
@@ -186,15 +129,15 @@ class AppTests(unittest.TestCase):
             realUpdate()
             raise RuntimeError("update failed")
 
-        with mock.patch.object(mouseApp, "updateTray", failingUpdate), mock.patch.object(tray, "hostRegistered", return_value=True), mock.patch.object(tray.sys, "excepthook", lambda *info: hooked.append(info[0])):
-            mouseApp.checkHost()
+        with mock.patch.object(mouseApp, "updateTray", failingUpdate), mock.patch.object(trayHost, "hostRegistered", return_value=True), mock.patch.object(tray.sys, "excepthook", lambda *info: hooked.append(info[0])):
+            mouseApp.trayHost.checkHost()
         self.assertTrue(mouseApp.tray.isVisible())
         self.assertEqual(hooked, [RuntimeError])
 
     def testMenuLinesAndTooltipFollowTheMice(self):
         mouseApp = self.makeApp(True)
         self.assertEqual([action.text() for action in mouseApp.statusActions], ["No Logitech mouse found"])
-        mouseApp.mice.applyUPower(upower.UPowerMouse(PATH, "12ab34cd", "MX Master 3", hidpp.BatteryReading(55, 0)))
+        mouseApp.mouseList.applyUPower(upower.UPowerMouse(PATH, "12ab34cd", "MX Master 3", hidpp.BatteryReading(55, 0)))
         self.assertEqual([action.text() for action in mouseApp.statusActions], ["MX Master 3, 55%"])
         self.assertEqual(mouseApp.shownTooltip, "MX Master 3, 55%")
 
@@ -202,7 +145,7 @@ class AppTests(unittest.TestCase):
         mouseApp = self.makeApp(True)
         with mock.patch.object(mouseApp.notifier, "send", side_effect=replies) as send:
             for percent in (9, 8, 7):
-                mouseApp.mice.applyUPower(upower.UPowerMouse(PATH, "12ab34cd", "MX Master 3", hidpp.BatteryReading(percent, 0)))
+                mouseApp.mouseList.applyUPower(upower.UPowerMouse(PATH, "12ab34cd", "MX Master 3", hidpp.BatteryReading(percent, 0)))
         return [each.args[1] for each in send.call_args_list]
 
     def testALowBatteryNoticeThatFailsIsSentAgain(self):
@@ -213,7 +156,7 @@ class AppTests(unittest.TestCase):
 
     def testThemeChangeRedrawsTheIcon(self):
         mouseApp = self.makeApp(True)
-        mouseApp.mice.applyUPower(upower.UPowerMouse(PATH, "12ab34cd", "MX Master 3", hidpp.BatteryReading(81, 0)))
+        mouseApp.mouseList.applyUPower(upower.UPowerMouse(PATH, "12ab34cd", "MX Master 3", hidpp.BatteryReading(81, 0)))
         original = QPalette(app.palette())
         self.addCleanup(app.setPalette, original)
         palette = QPalette(original)
@@ -231,93 +174,24 @@ class AppTests(unittest.TestCase):
         self.assertFalse(autostart.isEnabled(self.temp.name))
         self.assertFalse(mouseApp.loginAction.isChecked())
 
-    def testNoTrayNoticeOnGnomeOffersTheExtension(self):
-        mouseApp = self.makeApp(False)
-        sent, patch = self.notices(mouseApp)
-        with patch, mock.patch.object(tray, "nameHasOwner", return_value=True), mock.patch.object(tray, "installedExtension", return_value="ubuntu-appindicators@ubuntu.com"):
-            mouseApp.onNoTray()
-        self.assertEqual(sent, [("Mouse Battery needs the AppIndicator extension to show in the top bar.", [("turnOn", "Turn On"), ("dontOpen", "Don't Open at Login")])])
-
-    def testNoTrayNoticeOnGnomeFlashbackOffersOnlyTheWayOut(self):
-        mouseApp = self.makeApp(False)
-        sent, patch = self.notices(mouseApp)
-        with patch, mock.patch.object(tray, "nameHasOwner", return_value=True), mock.patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": "GNOME-Flashback:GNOME"}):
-            mouseApp.onNoTray()
-        self.assertEqual(sent, [("Mouse Battery needs a system tray with StatusNotifierItem support to show its icon.", [("dontOpen", "Don't Open at Login")])])
-
-    def testNoTrayNoticeWithoutTheExtensionLinksToIt(self):
-        mouseApp = self.makeApp(False)
-        sent, patch = self.notices(mouseApp)
-        with patch, mock.patch.object(tray, "nameHasOwner", return_value=True), mock.patch.object(tray, "installedExtension", return_value=None):
-            mouseApp.onNoTray()
-        self.assertEqual(sent[0][1], [("getExtension", "Get Extension"), ("dontOpen", "Don't Open at Login")])
-
-    def testNoTrayNoticeElsewhereOffersOnlyTheWayOut(self):
-        mouseApp = self.makeApp(False)
-        sent, patch = self.notices(mouseApp)
-        with patch, mock.patch.object(tray, "nameHasOwner", return_value=False):
-            mouseApp.onNoTray()
-        self.assertEqual(sent, [("Mouse Battery needs a system tray with StatusNotifierItem support to show its icon.", [("dontOpen", "Don't Open at Login")])])
-
     def testDontOpenAtLoginWritesTheOverrideAndQuits(self):
         mouseApp = self.makeApp(False)
         with mock.patch.object(mouseApp, "quitApp") as quitApp:
-            mouseApp.onNoticeAction("dontOpen")
+            mouseApp.onDontOpenAtLogin()
         self.assertFalse(autostart.isEnabled(self.temp.name))
         self.assertTrue(quitApp.called)
 
-    def testRemovedFilesQuitTheApp(self):
-        mouseApp = self.makeApp(True)
-        with tempfile.TemporaryDirectory() as folder, mock.patch.object(tray, "APP_FOLDER", folder), mock.patch.object(mouseApp, "quitApp") as quitApp:
-            mouseApp.onInstallChanged()
-        self.assertTrue(quitApp.called)
+    def testTheTrayShowsOnceTheHostIsReady(self):
+        mouseApp = self.makeApp(False)
+        self.assertIsNone(mouseApp.tray)
+        with mock.patch.object(trayHost, "hostRegistered", return_value=True):
+            mouseApp.trayHost.checkHost()
+        self.assertIsNotNone(mouseApp.tray)
 
-    def installedCopy(self, folder, version):
-        with open(os.path.join(folder, "tray.py"), "w") as f:
-            f.write("")
-        with open(os.path.join(folder, "version.py"), "w") as f:
-            f.write("VERSION = \"" + version + "\"\n")
-
-    def testANewVersionThatImportsRestartsTheApp(self):
-        mouseApp = self.makeApp(True)
-        with tempfile.TemporaryDirectory() as folder:
-            self.installedCopy(folder, "9.9.9")
-            errors = io.StringIO()
-            with mock.patch.object(tray, "APP_FOLDER", folder), mock.patch.object(tray.subprocess, "run", return_value=mock.Mock(returncode=0)) as run, mock.patch.object(tray.os, "execv") as execv, contextlib.redirect_stderr(errors):
-                mouseApp.onInstallChanged()
-        self.assertEqual(run.call_args.args[0], [sys.executable, "-B", "-c", "import tray"])
-        self.assertEqual(execv.call_args.args[1], [sys.executable, "-B", os.path.join(folder, "tray.py")])
-        self.assertEqual(errors.getvalue(), "")
-
-    def testANewVersionThatDoesntImportKeepsRunning(self):
-        mouseApp = self.makeApp(True)
-        with tempfile.TemporaryDirectory() as folder:
-            self.installedCopy(folder, "9.9.9")
-            errors = io.StringIO()
-            with mock.patch.object(tray, "APP_FOLDER", folder), mock.patch.object(tray.subprocess, "run", return_value=mock.Mock(returncode=1)), mock.patch.object(tray.os, "execv") as execv, contextlib.redirect_stderr(errors):
-                mouseApp.onInstallChanged()
-        self.assertFalse(execv.called)
-        self.assertEqual(errors.getvalue(), "Version 9.9.9 didn't import, thus " + tray.VERSION + " keeps running\n")
-
-    def testAVersionCheckThatCantFinishKeepsRunning(self):
-        mouseApp = self.makeApp(True)
-        with tempfile.TemporaryDirectory() as folder:
-            self.installedCopy(folder, "9.9.9")
-            for error in (tray.subprocess.TimeoutExpired([sys.executable], 60), OSError("exec failed")):
-                with self.subTest(error=type(error).__name__):
-                    errors = io.StringIO()
-                    with mock.patch.object(tray, "APP_FOLDER", folder), mock.patch.object(tray.subprocess, "run", side_effect=error), mock.patch.object(tray.os, "execv") as execv, contextlib.redirect_stderr(errors):
-                        mouseApp.onInstallChanged()
-                    self.assertFalse(execv.called)
-                    self.assertEqual(errors.getvalue(), "Version 9.9.9 couldn't be checked (" + str(error) + "), thus " + tray.VERSION + " keeps running\n")
-
-    def testTheSameVersionDoesNothing(self):
-        mouseApp = self.makeApp(True)
-        with tempfile.TemporaryDirectory() as folder:
-            self.installedCopy(folder, tray.VERSION)
-            with mock.patch.object(tray, "APP_FOLDER", folder), mock.patch.object(tray.subprocess, "run") as run:
-                mouseApp.onInstallChanged()
-        self.assertFalse(run.called)
+    def testStopEndsTheHostTimers(self):
+        mouseApp = self.makeApp(False)
+        mouseApp.stop()
+        self.assertEqual((mouseApp.trayHost.hostTimer.isActive(), mouseApp.trayHost.noticeTimer.isActive()), (False, False))
 
     def testUPowersOwnerIsWatched(self):
         mouseApp = self.makeApp(True)

@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.join(repo, "src"))
 
 import hidpp
 import tray
+import trayHost
 from tests.fakes.fakeDevice import FakeDevice, mouseHandler
 
 percentFile = os.environ.get("LIVE_PERCENT_FILE")
@@ -29,8 +30,8 @@ device = FakeDevice(handler)
 hidpp.findHidppNodes = lambda *args, **kwargs: ["/dev/hidrawFake"]
 hidpp.HidppNode.open = staticmethod(lambda path, onEvent=None: device.node(onEvent))
 if (os.environ.get("LIVE_NOTICE_MS")):
-    tray.NO_TRAY_NOTICE_MS = int(os.environ["LIVE_NOTICE_MS"])
+    trayHost.NO_TRAY_NOTICE_MS = int(os.environ["LIVE_NOTICE_MS"])
 if (os.environ.get("LIVE_EARLY_TRAY")):
     # the control for checkLateTray.sh builds the tray icon before any host, the way Qt 6.4's cached check breaks it
-    tray.hostRegistered = lambda bus: True
+    trayHost.hostRegistered = lambda bus: True
 sys.exit(tray.main())

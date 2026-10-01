@@ -1,17 +1,14 @@
 #!/usr/bin/env python3
 import fcntl
 import os
-import re
-import shutil
-import subprocess
 import sys
 import threading
 import time
 import traceback
 
-from PyQt6.QtCore import QFileSystemWatcher, QObject, QTimer, QUrl, pyqtSlot
-from PyQt6.QtDBus import QDBus, QDBusConnection, QDBusMessage, QDBusServiceWatcher
-from PyQt6.QtGui import QAction, QDesktopServices, QIcon, QPalette
+from PyQt6.QtCore import QFileSystemWatcher, QObject, pyqtSlot
+from PyQt6.QtDBus import QDBusConnection, QDBusMessage
+from PyQt6.QtGui import QAction, QIcon, QPalette
 from PyQt6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
 import autostart
@@ -19,25 +16,17 @@ import hidpp
 import mice
 import panelColor
 from icon import IconState, makeIcon
+from installWatch import InstallWatcher
 from notify import NO_REPLY, Notifier
+from trayHost import TrayHost
 from upower import UPowerWatcher
 from version import VERSION
 
 APP_ID = "logitech-mouse-battery"
 APP_NAME = "Mouse Battery"
 LOCK_NAME = "logitech-mouse-battery.lock"
-WATCHER_SERVICE = "org.kde.StatusNotifierWatcher"
-WATCHER_PATH = "/StatusNotifierWatcher"
-NO_TRAY_NOTICE_MS = 10 * 1000
-HOST_RETRY_MS = 2 * 1000
-HOST_RETRY_MAX_MS = 60 * 1000
-INSTALL_SETTLE_MS = 2 * 1000
-CALL_TIMEOUT_MS = 2000
 TARGET_NICENESS = 10
-EXTENSION_UUIDS = ["appindicatorsupport@rgcjonas.gmail.com", "ubuntu-appindicators@ubuntu.com"]
-EXTENSION_URL = "https://extensions.gnome.org/extension/615/appindicator-support/"
 PROJECT_URL = "https://github.com/kymotsujason/logitech-mouse-battery-tray-icon"
-APP_FOLDER = os.path.dirname(os.path.abspath(__file__))
 STATUS_TEXT = {
     mice.STATUS_WAITING: "Move your mouse to wake it.",
     mice.STATUS_DENIED: "Can't read the receiver. Unplug it and plug it back in.",
@@ -81,8 +70,14 @@ def printThreadException(args):
     traceback.print_exception(args.exc_type, args.exc_value, args.exc_traceback)
 
 
+def installExceptionHooks():
+    # PyQt6 aborts the whole app on an exception in a slot unless sys.excepthook is replaced, and nothing restarts an app started from autostart
+    sys.excepthook = printException
+    threading.excepthook = printThreadException
+
+
 def raiseNiceness(target=TARGET_NICENESS):
-    # os.nice adds to the current value and niceness carries across exec, thus it's only topped up
+    # os.nice adds to the current value and niceness carries across exec, so it's only topped up
     current = os.nice(0)
     if (current < target):
         os.nice(target - current)
@@ -101,45 +96,6 @@ def takeLock(runtimeDir):
         handle.close()
         return (False, None)
     return (True, handle)
-
-
-def readVersion(folder):
-    try:
-        with open(os.path.join(folder, "version.py")) as f:
-            text = f.read()
-    except OSError:
-        return None
-    match = re.search(r'VERSION = "([^"]*)"', text)
-    return match.group(1) if match else None
-
-
-def hostRegistered(bus):
-    message = QDBusMessage.createMethodCall(WATCHER_SERVICE, WATCHER_PATH, "org.freedesktop.DBus.Properties", "Get")
-    message.setArguments([WATCHER_SERVICE, "IsStatusNotifierHostRegistered"])
-    reply = bus.call(message, QDBus.CallMode.Block, CALL_TIMEOUT_MS)
-    if (reply.type() != QDBusMessage.MessageType.ReplyMessage or not reply.arguments()):
-        return False
-    return bool(panelColor.plain(reply.arguments()[0]))
-
-
-def nameHasOwner(bus, name):
-    message = QDBusMessage.createMethodCall("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "NameHasOwner")
-    message.setArguments([name])
-    reply = bus.call(message, QDBus.CallMode.Block, CALL_TIMEOUT_MS)
-    return (reply.type() == QDBusMessage.MessageType.ReplyMessage and bool(reply.arguments() and reply.arguments()[0]))
-
-
-def installedExtension():
-    if (shutil.which("gnome-extensions") is None):
-        return None
-    for uuid in EXTENSION_UUIDS:
-        try:
-            result = subprocess.run(["gnome-extensions", "info", uuid], capture_output=True, timeout=5)
-        except (OSError, subprocess.TimeoutExpired):
-            return None
-        if (result.returncode == 0):
-            return uuid
-    return None
 
 
 def configFolder(env):
@@ -162,17 +118,21 @@ class MouseBatteryApp(QObject):
         self.shownColor = None
         self.shownTooltip = None
         self.statusActions = []
-        self.extensionUuid = None
         self.portalScheme = 0
-        self.hostWatcher = None
         self.colorErrors = set()
-        self.mice = mice.MouseList()
-        self.mice.changed.connect(self.updateTray)
-        self.mice.lowBattery.connect(self.onLowBattery)
+        self.mouseList = mice.MouseList()
+        self.mouseList.changed.connect(self.updateTray)
+        self.mouseList.lowBattery.connect(self.onLowBattery)
         self.upower = UPowerWatcher(self.systemBus)
-        self.upower.mouseChanged.connect(self.mice.applyUPower)
-        self.upower.mouseRemoved.connect(self.mice.removeUPower)
+        self.upower.mouseChanged.connect(self.mouseList.applyUPower)
+        self.upower.mouseRemoved.connect(self.mouseList.removeUPower)
         self.notifier = Notifier(self.sessionBus)
+        self.trayHost = TrayHost(self.sessionBus, self.notifier)
+        self.trayHost.ready.connect(self.showTray)
+        self.trayHost.dontOpenAtLogin.connect(self.onDontOpenAtLogin)
+        self.installWatcher = InstallWatcher()
+        self.installWatcher.removed.connect(self.quitApp)
+        self.installWatcher.restarting.connect(self.mouseList.stop)
         self.menu = QMenu()
         self.menu.aboutToShow.connect(self.onMenuShown)
         self.separator = self.menu.addSeparator()
@@ -182,54 +142,27 @@ class MouseBatteryApp(QObject):
         self.loginAction.triggered.connect(self.onLoginToggled)
         self.menu.addAction("About Mouse Battery").triggered.connect(lambda: self.showAbout())
         self.menu.addAction("Quit").triggered.connect(lambda: self.quitApp())
-        self.noticeTimer = mice.singleShotTimer(self, NO_TRAY_NOTICE_MS, self.onNoTray)
-        self.hostRetryMs = HOST_RETRY_MS
-        self.hostTimer = mice.singleShotTimer(self, HOST_RETRY_MS, self.checkHost)
-        self.installTimer = mice.singleShotTimer(self, INSTALL_SETTLE_MS, self.onInstallChanged)
-        self.installWatcher = QFileSystemWatcher(self)
         self.plasmarcWatcher = QFileSystemWatcher(self)
         self.updateTray()
 
     def start(self):
-        self.mice.start()
+        self.mouseList.start()
         self.upower.watchOwner()
         self.upower.start()
-        self.hostWatcher = QDBusServiceWatcher(WATCHER_SERVICE, self.sessionBus, QDBusServiceWatcher.WatchModeFlag.WatchForRegistration, self)
-        self.hostWatcher.serviceRegistered.connect(self.onWatcherRegistered)
-        self.sessionBus.connect("", WATCHER_PATH, WATCHER_SERVICE, "StatusNotifierHostRegistered", self.onHostRegistered)
-        self.watchInstallFolder()
+        self.installWatcher.start()
         self.watchColors()
-        self.noticeTimer.start()
-        self.checkHost()
+        self.trayHost.start()
 
     def stop(self):
-        self.noticeTimer.stop()
-        self.hostTimer.stop()
-        self.mice.stop()
+        self.trayHost.stop()
+        self.mouseList.stop()
 
     def quitApp(self):
         self.app.quit()
 
-    def onWatcherRegistered(self, name):
-        self.hostRetryMs = HOST_RETRY_MS
-        self.checkHost()
-
-    @pyqtSlot(QDBusMessage)
-    def onHostRegistered(self, message):
-        self.hostRetryMs = HOST_RETRY_MS
-        self.checkHost()
-
-    def checkHost(self):
+    def showTray(self):
         if (self.tray is not None):
             return
-        # Qt 6.4 caches its first tray check for the whole process, thus the tray icon waits for a registered host
-        if (not hostRegistered(self.sessionBus)):
-            # the watcher signals only report a change, and a failed query looks the same as a "no host" answer here, so both are asked again
-            self.hostTimer.start(self.hostRetryMs)
-            self.hostRetryMs = min(self.hostRetryMs * 2, HOST_RETRY_MAX_MS)
-            return
-        self.hostTimer.stop()
-        self.noticeTimer.stop()
         self.tray = QSystemTrayIcon(self)
         self.tray.setContextMenu(self.menu)
         self.tray.activated.connect(self.onActivated)
@@ -242,42 +175,17 @@ class MouseBatteryApp(QObject):
             sys.excepthook(*sys.exc_info())
         self.tray.show()
 
-    def onNoTray(self):
-        self.checkHost()
-        if (self.tray is not None):
-            return
-        actions = []
-        if (nameHasOwner(self.sessionBus, "org.gnome.Shell") and "GNOME-FLASHBACK" not in panelColor.desktopNames(os.environ)):
-            body = "Mouse Battery needs the AppIndicator extension to show in the top bar."
-            self.extensionUuid = installedExtension()
-            if (self.extensionUuid is not None):
-                actions.append(("turnOn", "Turn On"))
-            else:
-                actions.append(("getExtension", "Get Extension"))
-        else:
-            body = "Mouse Battery needs a system tray with StatusNotifierItem support to show its icon."
-        actions.append(("dontOpen", "Don't Open at Login"))
-        self.notifier.send(APP_NAME, body, actions, self.onNoticeAction)
-
-    def onNoticeAction(self, key):
-        if (key == "turnOn" and self.extensionUuid is not None):
-            try:
-                subprocess.run(["gnome-extensions", "enable", self.extensionUuid], timeout=10)
-            except (OSError, subprocess.TimeoutExpired) as error:
-                print("Couldn't turn on " + self.extensionUuid + ": " + str(error), file=sys.stderr)
-        elif (key == "getExtension"):
-            QDesktopServices.openUrl(QUrl(EXTENSION_URL))
-        elif (key == "dontOpen"):
-            self.onLoginToggled(False)
-            self.quitApp()
+    def onDontOpenAtLogin(self):
+        self.onLoginToggled(False)
+        self.quitApp()
 
     def onMenuShown(self):
-        self.mice.readAll()
+        self.mouseList.readAll()
         self.loginAction.setChecked(autostart.isEnabled(self.configHome))
 
     def onActivated(self, reason):
         if (reason == QSystemTrayIcon.ActivationReason.Trigger):
-            self.mice.readAll()
+            self.mouseList.readAll()
 
     def onLoginToggled(self, checked):
         try:
@@ -291,7 +199,7 @@ class MouseBatteryApp(QObject):
         # NoReply means the bus already handed the message to the server (or is starting the server for it), and asking again after a timeout would block every reading
         if (notificationId is None and error != NO_REPLY):
             return
-        self.mice.warner.markSent(key, percent)
+        self.mouseList.warner.markSent(key, percent)
 
     def showAbout(self):
         QMessageBox.about(None, "About Mouse Battery", "Mouse Battery " + VERSION + "\n\nShows the battery of Logitech mice in the system tray.\n\n" + PROJECT_URL + "\n\nLicensed under the GNU GPL, version 3 or later.\nNot affiliated with Logitech.")
@@ -312,7 +220,7 @@ class MouseBatteryApp(QObject):
         try:
             return panelColor.baseColor(os.environ, self.configHome, panelColor.dataDirs(os.environ), self.portalScheme, palette)
         except Exception as error:
-            # every redraw asks again, thus each error is printed only the first time
+            # every redraw asks again, so each error is printed only the first time
             message = "Couldn't read the panel color: " + str(error)
             if (message not in self.colorErrors):
                 self.colorErrors.add(message)
@@ -320,11 +228,11 @@ class MouseBatteryApp(QObject):
             return palette
 
     def updateTray(self, *args):
-        lines = statusLines(self.mice)
+        lines = statusLines(self.mouseList)
         self.updateStatusActions(lines)
         if (self.tray is None):
             return
-        state = iconStateFor(self.mice.shownMouse())
+        state = iconStateFor(self.mouseList.shownMouse())
         color = self.baseColor()
         if (state != self.shownState or color != self.shownColor):
             self.tray.setIcon(makeIcon(state, color))
@@ -344,7 +252,7 @@ class MouseBatteryApp(QObject):
             self.sessionBus.connect("", panelColor.PORTAL_PATH, panelColor.SETTINGS_INTERFACE, "SettingChanged", self.onPortalSetting)
 
     def watchPlasmarc(self):
-        # KDE replaces plasmarc on every save, thus the watch is added again after each change
+        # KDE replaces plasmarc on every save, so the watch is added again after each change
         path = os.path.join(self.configHome, "plasmarc")
         if (os.path.exists(path) and path not in self.plasmarcWatcher.files()):
             self.plasmarcWatcher.addPath(path)
@@ -361,37 +269,9 @@ class MouseBatteryApp(QObject):
             self.portalScheme = value if isinstance(value, int) else 0
             self.updateTray()
 
-    def watchInstallFolder(self):
-        self.installWatcher.directoryChanged.connect(lambda path: self.installTimer.start())
-        self.installWatcher.fileChanged.connect(lambda path: self.installTimer.start())
-        self.installWatcher.addPath(APP_FOLDER)
-        self.installWatcher.addPath(os.path.join(APP_FOLDER, "version.py"))
-
-    def onInstallChanged(self):
-        versionPath = os.path.join(APP_FOLDER, "version.py")
-        if (os.path.exists(versionPath) and versionPath not in self.installWatcher.files()):
-            self.installWatcher.addPath(versionPath)
-        if (not os.path.exists(os.path.join(APP_FOLDER, "tray.py"))):
-            self.quitApp()
-            return
-        newVersion = readVersion(APP_FOLDER)
-        if (newVersion is None or newVersion == VERSION):
-            return
-        try:
-            check = subprocess.run([sys.executable, "-B", "-c", "import tray"], cwd=APP_FOLDER, capture_output=True, timeout=60)
-        except (OSError, subprocess.TimeoutExpired) as error:
-            print("Version " + newVersion + " couldn't be checked (" + str(error) + "), thus " + VERSION + " keeps running", file=sys.stderr)
-            return
-        if (check.returncode != 0):
-            print("Version " + newVersion + " didn't import, thus " + VERSION + " keeps running", file=sys.stderr)
-            return
-        self.mice.stop()
-        os.execv(sys.executable, [sys.executable, "-B", os.path.join(APP_FOLDER, "tray.py")])
-
 
 def main():
-    sys.excepthook = printException
-    threading.excepthook = printThreadException
+    installExceptionHooks()
     raiseNiceness()
     # the xdg portal registers the app by this name once the tray icon starts, and it needs a desktop file to match
     QApplication.setDesktopFileName(APP_ID)

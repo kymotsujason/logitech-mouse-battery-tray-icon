@@ -28,6 +28,8 @@ contents:
     dst: /usr/share/logitech-mouse-battery/hidpp.py
   - src: src/icon.py
     dst: /usr/share/logitech-mouse-battery/icon.py
+  - src: src/installWatch.py
+    dst: /usr/share/logitech-mouse-battery/installWatch.py
   - src: src/isHidpp.py
     dst: /usr/share/logitech-mouse-battery/isHidpp.py
   - src: src/mice.py
@@ -38,6 +40,8 @@ contents:
     dst: /usr/share/logitech-mouse-battery/panelColor.py
   - src: src/tray.py
     dst: /usr/share/logitech-mouse-battery/tray.py
+  - src: src/trayHost.py
+    dst: /usr/share/logitech-mouse-battery/trayHost.py
   - src: src/upower.py
     dst: /usr/share/logitech-mouse-battery/upower.py
   - src: src/version.py
