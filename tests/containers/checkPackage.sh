@@ -85,7 +85,7 @@ output=$($name check 2>&1)
 status=$?
 lastLine=$(echo "$output" | tail -1)
 case "$lastLine" in
-    "No Logitech mouse found."|"No mouse answered. Move your mouse to wake it, then run this again."|"Can't read the receiver or cable. Unplug it and plug it back in.") known=yes ;;
+    "No Logitech mouse found."|"No mouse answered. Move your mouse to wake it, then run this again."|"Can't read the receiver or cable. Unplug it and plug it back in."|"Can't reach the battery service.") known=yes ;;
     *) known="no ($lastLine)" ;;
 esac
 check "the terminal check exits 1" "$status" "1"
