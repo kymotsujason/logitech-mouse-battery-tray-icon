@@ -63,7 +63,7 @@ It has been tested with the PRO X3 SUPERSTRIKE on its receiver and on its cable,
 
 The rule hands the HID++ interface of any Logitech USB device that the kernel leaves to its generic HID driver, such as a receiver or a mouse on its cable, to the `logitech-mouse-battery` group, when that interface's report descriptor passes the app's own check. The check rejects any interface with a keyboard, keypad, or mouse collection and any receiver interface that carries a paired keyboard's keystrokes. Only Mouse Battery's service runs in that group, as its own system user in a systemd sandbox, and it offers nothing but battery readings on the system bus. Any local user may read those readings and ask for a new read, which the service runs at most once a second, but nothing this package installs lets a program you run open the receiver or cable, or send it HID++ commands.
 
-Another package's udev rule can still give your account access of its own, as Solaar's does for every Logitech receiver, and installing Mouse Battery leaves that access in place.
+Another package's udev rule can still give your account access of its own, as Solaar's does for every Logitech receiver. A current Solaar keeps that access when Mouse Battery is installed. However, the older Solaar that Debian 12 and Ubuntu 24.04 ship loses it until the receiver is plugged in again or the computer restarts.
 
 One limit stays after an upgrade from 1.0.x. A program that already had a receiver or cable open when the upgrade was installed keeps that open handle until it closes it, since Linux checks access when a file is opened. Closing that program, replugging the receiver or cable, or restarting the computer closes the handle.
 
