@@ -24,8 +24,10 @@ class ClearAccessTests(unittest.TestCase):
         self.root = tempfile.mkdtemp()
         self.sysRoot = os.path.join(self.root, "sys")
         self.devRoot = os.path.join(self.root, "dev")
+        self.udevRoot = os.path.join(self.root, "udev")
         os.makedirs(self.sysRoot)
         os.makedirs(self.devRoot)
+        os.makedirs(self.udevRoot)
         self.removed = []
         self.owners = []
         self.failures = {}
@@ -52,9 +54,12 @@ class ClearAccessTests(unittest.TestCase):
     def changeOwner(self, path, uid, gid):
         self.owners.append((path, uid, gid))
 
-    def addNode(self, name, hidId="0003:0000046D:0000C54F", driver="hid-generic", descriptor=C54F_HIDPP, present=True):
+    def addNode(self, name, hidId="0003:0000046D:0000C54F", driver="hid-generic", descriptor=C54F_HIDPP, present=True, number=None):
         device = os.path.join(self.sysRoot, name, "device")
         os.makedirs(device)
+        if (number is not None):
+            with open(os.path.join(self.sysRoot, name, "dev"), "w") as f:
+                f.write(number + "\n")
         with open(os.path.join(device, "uevent"), "w") as f:
             f.write("DRIVER=" + driver + "\nHID_ID=" + hidId + "\n")
         with open(os.path.join(device, "report_descriptor"), "wb") as f:
@@ -66,10 +71,14 @@ class ClearAccessTests(unittest.TestCase):
             os.chmod(path, 0o666)
         return path
 
+    def addUdevEntry(self, number, lines):
+        with open(os.path.join(self.udevRoot, "c" + number), "w") as f:
+            f.write("\n".join(lines) + "\n")
+
     def runClear(self):
         output = io.StringIO()
         with redirect_stdout(output):
-            code = clearAccess.main(self.sysRoot, self.devRoot)
+            code = clearAccess.main(self.sysRoot, self.devRoot, self.udevRoot)
         return (code, output.getvalue())
 
     def mode(self, path):
@@ -114,6 +123,29 @@ class ClearAccessTests(unittest.TestCase):
         with mock.patch.object(clearAccess.grp, "getgrnam", side_effect=KeyError("getgrnam(): name not found: 'logitech-mouse-battery'")):
             code, output = self.runClear()
         self.assertEqual((code, output.count("Couldn't close access to "), self.owners), (1, 2, []))
+
+    def testANodeAnotherRuleGivesTheSeatKeepsItsAclButGetsItsOwnerAndMode(self):
+        path = self.addNode("hidraw4", number="243:4")
+        self.addUdevEntry("243:4", ["E:DRIVER=hid-generic", "G:seat", "G:systemd", "G:uaccess", "Q:seat", "Q:systemd", "Q:uaccess", "V:1"])
+        self.assertEqual(self.runClear(), (0, "Kept the seat's access to " + path + ", since another package's udev rule gives it\n"))
+        self.assertEqual((self.removed, self.owners, self.mode(path)), ([], [(path, 0, GROUP_ID)], 0o660))
+
+    def testATagTheNodeOnlyOnceHadDoesntKeepItsAcl(self):
+        path = self.addNode("hidraw4", number="243:4")
+        self.addUdevEntry("243:4", ["G:seat", "G:systemd", "G:uaccess", "Q:seat", "Q:systemd", "V:1"])
+        self.assertEqual(self.runClear(), (0, "Closed access to " + path + "\n"))
+        self.assertEqual((self.removed, self.owners), ([(path, "system.posix_acl_access")], [(path, 0, GROUP_ID)]))
+
+    def testANodeWithNoUdevEntryIsClosed(self):
+        path = self.addNode("hidraw4", number="243:4")
+        self.assertEqual(self.runClear(), (0, "Closed access to " + path + "\n"))
+        self.assertEqual(self.removed, [(path, "system.posix_acl_access")])
+
+    def testANodeWithNoDevFileIsClosed(self):
+        path = self.addNode("hidraw4")
+        self.addUdevEntry("243:4", ["Q:uaccess", "V:1"])
+        self.assertEqual(self.runClear(), (0, "Closed access to " + path + "\n"))
+        self.assertEqual(self.removed, [(path, "system.posix_acl_access")])
 
     def testItImportsInIsolatedModeWithoutRunning(self):
         # -I leaves the script's folder off sys.path, so the module has to put it back for its hidpp import
