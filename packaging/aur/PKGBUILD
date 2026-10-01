@@ -1,6 +1,6 @@
 # Maintainer: kymotsujason <kymotsujason@gmail.com>
 pkgname=logitech-mouse-battery
-pkgver=1.0.0
+pkgver=1.0.1
 pkgrel=1
 pkgdesc="Logitech mouse battery in the system tray"
 arch=('any')

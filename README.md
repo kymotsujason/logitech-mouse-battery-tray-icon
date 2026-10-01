@@ -11,19 +11,19 @@ Mouse Battery isn't affiliated with Logitech.
 On Ubuntu and Debian, download the `.deb` from the [latest release](https://github.com/kymotsujason/logitech-mouse-battery-tray-icon/releases/latest) and double click it, or install it from a terminal:
 
 ```bash
-sudo apt install ./logitech-mouse-battery_1.0.0_all.deb
+sudo apt install ./logitech-mouse-battery_1.0.1_all.deb
 ```
 
 On Fedora, download the `.rpm` from the same page:
 
 ```bash
-sudo dnf install ./logitech-mouse-battery-1.0.0-1.noarch.rpm
+sudo dnf install ./logitech-mouse-battery-1.0.1-1.noarch.rpm
 ```
 
 On Arch, download the `.pkg.tar.zst` from the same page and install it with pacman:
 
 ```bash
-sudo pacman -U ./logitech-mouse-battery-1.0.0-1-any.pkg.tar.zst
+sudo pacman -U ./logitech-mouse-battery-1.0.1-1-any.pkg.tar.zst
 ```
 
 An AUR package is ready and will follow once the AUR opens account registrations again.
@@ -122,12 +122,12 @@ To install from a clone instead of a release, build the package for your distro 
 ```bash
 packaging/tarball.sh
 packaging/buildArch.sh
-sudo pacman -U dist/logitech-mouse-battery-1.0.0-1-any.pkg.tar.zst
+sudo pacman -U dist/logitech-mouse-battery-1.0.1-1-any.pkg.tar.zst
 ```
 
-On Debian, Ubuntu, or Fedora, run `packaging/build.sh` and install `dist/logitech-mouse-battery_1.0.0_all.deb` with `sudo apt install` or `dist/logitech-mouse-battery-1.0.0-1.noarch.rpm` with `sudo dnf install`, giving the path with a leading `./`.
+On Debian, Ubuntu, or Fedora, run `packaging/build.sh` and install `dist/logitech-mouse-battery_1.0.1_all.deb` with `sudo apt install` or `dist/logitech-mouse-battery-1.0.1-1.noarch.rpm` with `sudo dnf install`, giving the path with a leading `./`.
 
-To release a new version, run `python3 packaging/bumpVersion.py <VERSION>`, where `<VERSION>` is the new number such as `1.0.1`. It updates every file that carries the version, and the tests fail if any of them disagree. Then commit and push to `main`, and the release workflow builds, tests, and publishes `v<VERSION>` with the packages attached, since that version has no release yet. A push that keeps the version publishes nothing.
+To release a new version, run `python3 packaging/bumpVersion.py <VERSION>`, where `<VERSION>` is the new number such as `1.1.0`. It updates every file that carries the version, and the tests fail if any of them disagree. Then commit and push to `main`, and the release workflow builds, tests, and publishes `v<VERSION>` with the packages attached, since that version has no release yet. A push that keeps the version publishes nothing.
 
 ## License
 
