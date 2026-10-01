@@ -29,14 +29,18 @@ class LowBatteryWarner:
         if (reading.percent > REARM_PERCENT):
             self.sent.pop(key, None)
             return None
-        sent = self.sent.setdefault(key, set())
+        sent = self.sent.get(key, set())
         if (reading.percent <= CRITICAL_PERCENT and CRITICAL_PERCENT not in sent):
-            sent.update((LOW_PERCENT, CRITICAL_PERCENT))
             return reading.percent
         if (reading.percent <= LOW_PERCENT and LOW_PERCENT not in sent):
-            sent.add(LOW_PERCENT)
             return reading.percent
         return None
+
+    def markSent(self, key, percent):
+        sent = self.sent.setdefault(key, set())
+        sent.add(LOW_PERCENT)
+        if (percent <= CRITICAL_PERCENT):
+            sent.add(CRITICAL_PERCENT)
 
 
 def uintArgument(value):

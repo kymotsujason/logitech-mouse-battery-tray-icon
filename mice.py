@@ -144,7 +144,7 @@ class NodeState:
 class MouseList(QObject):
     changed = pyqtSignal()
     message = pyqtSignal(object)
-    lowBattery = pyqtSignal(str, int)
+    lowBattery = pyqtSignal(str, str, int)
 
     def __init__(self):
         super().__init__()
@@ -348,7 +348,7 @@ class MouseList(QObject):
             mouse.lastRead = now
         percent = self.warner.update(mouse.key, mouse.reading, mouse.asleep)
         if (percent is not None):
-            self.lowBattery.emit(self.displayNames()[mouse.key], percent)
+            self.lowBattery.emit(mouse.key, self.displayNames()[mouse.key], percent)
 
     def readMouse(self, mouse):
         state = self.nodes.get(mouse.nodePath)

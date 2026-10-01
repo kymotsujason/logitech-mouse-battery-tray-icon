@@ -178,6 +178,13 @@ class AppTests(unittest.TestCase):
         self.assertEqual([action.text() for action in mouseApp.statusActions], ["MX Master 3, 55%"])
         self.assertEqual(mouseApp.shownTooltip, "MX Master 3, 55%")
 
+    def testALowBatteryNoticeThatFailsIsSentAgain(self):
+        mouseApp = self.makeApp(True)
+        with mock.patch.object(mouseApp.notifier, "send", side_effect=[None, 7, 7]) as send:
+            for percent in (9, 8, 7):
+                mouseApp.mice.applyUPower(upower.UPowerMouse(PATH, "12ab34cd", "MX Master 3", hidpp.BatteryReading(percent, 0)))
+        self.assertEqual([each.args[1] for each in send.call_args_list], ["MX Master 3 has 9% left.", "MX Master 3 has 8% left."])
+
     def testThemeChangeRedrawsTheIcon(self):
         mouseApp = self.makeApp(True)
         mouseApp.mice.applyUPower(upower.UPowerMouse(PATH, "12ab34cd", "MX Master 3", hidpp.BatteryReading(81, 0)))

@@ -280,8 +280,10 @@ class MouseBatteryApp(QObject):
             print("Couldn't change Open at Login: " + str(error), file=sys.stderr)
         self.loginAction.setChecked(autostart.isEnabled(self.configHome))
 
-    def onLowBattery(self, name, percent):
-        self.notifier.send("Mouse battery low", name + " has " + str(percent) + "% left.")
+    def onLowBattery(self, key, name, percent):
+        if (self.notifier.send("Mouse battery low", name + " has " + str(percent) + "% left.") is None):
+            return
+        self.mice.warner.markSent(key, percent)
 
     def showAbout(self):
         QMessageBox.about(None, "About Mouse Battery", "Mouse Battery " + VERSION + "\n\nShows the battery of Logitech mice in the system tray.\n\n" + PROJECT_URL + "\n\nLicensed under the GNU GPL, version 3 or later.\nNot affiliated with Logitech.")

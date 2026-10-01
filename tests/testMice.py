@@ -451,16 +451,22 @@ class MouseListTests(unittest.TestCase):
 
     def testLowBatteryIsSignalled(self):
         warnings = []
-        self.mice.lowBattery.connect(lambda name, percent: warnings.append((name, percent)))
+
+        def onLowBattery(key, name, percent):
+            warnings.append((key, name, percent))
+            # the tray marks a warning sent once its notification goes out
+            self.mice.warner.markSent(key, percent)
+
+        self.mice.lowBattery.connect(onLowBattery)
         self.nodes.add(RECEIVER, mouseHandler(answers={(5, 0): [0x0F, 0x02], (5, 1): [9, 0x02, 0, 0]}))
         self.mice.start()
-        self.assertTrue(waitUntil(lambda: warnings == [(NAME.decode(), 9)]))
+        self.assertTrue(waitUntil(lambda: warnings == [("02bc524c", NAME.decode(), 9)]))
         # a second reading at 9% has to reach the warner before the count means anything
         firstRead = self.mouse().lastRead
         self.mice.readAll()
         self.assertTrue(waitUntil(lambda: self.mouse().lastRead != firstRead))
         QTest.qWait(300)
-        self.assertEqual(warnings, [(NAME.decode(), 9)])
+        self.assertEqual(warnings, [("02bc524c", NAME.decode(), 9)])
 
     def testAUPowerMouseMergesWithTheSameHidppMouse(self):
         self.nodes.add(RECEIVER, mouseHandler())
