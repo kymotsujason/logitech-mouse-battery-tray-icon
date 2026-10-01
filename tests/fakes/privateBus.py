@@ -44,11 +44,14 @@ def requireTools(testCase):
 
 
 class PrivateBus:
-    def __init__(self):
+    def __init__(self, serviceDir=None):
         self.folder = tempfile.mkdtemp()
         config = os.path.join(self.folder, "bus.conf")
+        text = CONFIG.replace("FOLDER", self.folder)
+        if (serviceDir is not None):
+            text = text.replace("  <auth>EXTERNAL</auth>\n", "  <auth>EXTERNAL</auth>\n  <servicedir>" + serviceDir + "</servicedir>\n")
         with open(config, "w") as f:
-            f.write(CONFIG.replace("FOLDER", self.folder))
+            f.write(text)
         lines = subprocess.run(["dbus-daemon", "--config-file=" + config, "--fork", "--print-address=1", "--print-pid=1"], capture_output=True, text=True, check=True).stdout.splitlines()
         self.address = lines[0]
         self.pid = int(lines[1])

@@ -80,6 +80,10 @@ contents:
     dst: /usr/share/logitech-mouse-battery/service.py
     file_info:
       mode: 0644
+  - src: src/serviceClient.py
+    dst: /usr/share/logitech-mouse-battery/serviceClient.py
+    file_info:
+      mode: 0644
   - src: src/serviceState.py
     dst: /usr/share/logitech-mouse-battery/serviceState.py
     file_info:
