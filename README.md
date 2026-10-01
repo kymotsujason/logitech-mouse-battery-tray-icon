@@ -28,7 +28,7 @@ sudo pacman -U ./logitech-mouse-battery-1.1.0-1-any.pkg.tar.zst
 
 An AUR package is ready and will follow once the AUR opens account registrations again.
 
-The package also installs a udev rule that lets you read your receiver or cable without root, and applies it to devices that are already plugged in, so there's no need to replug anything.
+The package also installs a udev rule that hands your receiver or cable to Mouse Battery's service, and applies it to devices that are already plugged in, so there's no need to replug anything.
 
 ## Use
 
@@ -61,9 +61,9 @@ It has been tested with the PRO X3 SUPERSTRIKE on its receiver and on its cable,
 
 ## What the udev rule allows
 
-The rule hands the HID++ interface of any Logitech USB device that the kernel leaves to its generic HID driver, such as a receiver or a mouse on its cable, to the `logitech-mouse-battery` group, when that interface's report descriptor passes the app's own check. The check rejects any interface with a keyboard, keypad, or mouse collection and any receiver interface that carries a paired keyboard's keystrokes. Only Mouse Battery's service runs in that group, as its own system user in a systemd sandbox, and it offers nothing but battery readings on the system bus. Any local user may read those readings and ask for a new read, which the service runs at most once a second, but no program you run can open the receiver or send it HID++ commands.
+The rule hands the HID++ interface of any Logitech USB device that the kernel leaves to its generic HID driver, such as a receiver or a mouse on its cable, to the `logitech-mouse-battery` group, when that interface's report descriptor passes the app's own check. The check rejects any interface with a keyboard, keypad, or mouse collection and any receiver interface that carries a paired keyboard's keystrokes. Only Mouse Battery's service runs in that group, as its own system user in a systemd sandbox, and it offers nothing but battery readings on the system bus. Any local user may read those readings and ask for a new read, which the service runs at most once a second, but nothing this package installs lets a program you run open the receiver or send it HID++ commands.
 
-One limit stays after an upgrade from 1.0.x. A program that already had a receiver open when the upgrade was installed keeps that open handle until it closes it, since Linux checks access when a file is opened. Unplugging the receiver and plugging it back in, or restarting, ends it.
+One limit stays after an upgrade from 1.0.x. A program that already had a receiver or cable open when the upgrade was installed keeps that open handle until it closes it, since Linux checks access when a file is opened. Unplugging it and plugging it back in, or restarting, ends it.
 
 ## Uninstall
 
@@ -82,7 +82,7 @@ These haven't been tested yet:
 - Light app themes on panels that stay dark outside Plasma and GNOME
 - Double click installs in Ubuntu's App Center and GNOME Software
 - An Open at Login override that another tool wrote with GNOME's `X-GNOME-Autostart-enabled` key
-- The `.deb` and `.rpm` on a real Debian, Ubuntu, or Fedora machine, including the rule applying without a replug (only clean containers have run them)
+- The `.deb` and `.rpm` on a real Debian, Ubuntu, or Fedora desktop, including the rule applying without a replug (only clean containers have run them, plus the `.deb` on GitHub's Ubuntu runner with a fake receiver)
 - The service on a booted Debian, Fedora, or Arch system before release, since only GitHub's Ubuntu runner and clean containers run it automatically
 
 Apart from these, two limits are known. A mouse that reports its battery without a percentage draws a full icon and never warns, while its menu line shows what it reported instead, such as a level name. A mouse on a receiver the kernel leaves alone also keeps showing as awake with its last reading after it's turned off, until the app next reads it (every 5 minutes, or when you open the menu or click the icon), since the receivers tested so far don't announce a mouse turning off.
@@ -114,7 +114,7 @@ The app is the flat set of modules in `src/`, which the packages install side by
 - `check.py` is the terminal check.
 - `version.py` holds the version.
 
-`packaging/` holds the launcher, the desktop entries, the udev rule, the service's systemd, D-Bus, and sysusers files, the install scripts, the package configs, and the build scripts. `tests/` holds the unit tests, with the fake devices and D-Bus services in `tests/fakes/`, the checks that run the real tray on private buses in `tests/live/`, and the container checks in `tests/containers/`.
+`packaging/` holds the launcher, the desktop entries, the udev rule, the service's systemd, D-Bus, and sysusers files, the install scripts, the package configs, and the build scripts. `tests/` holds the unit tests, with the fake devices and D-Bus services in `tests/fakes/`, the checks that run the real tray on private buses in `tests/live/`, the container checks in `tests/containers/`, and the check that runs the packaged service on a booted runner in `tests/booted/`.
 
 ## Build from source
 
