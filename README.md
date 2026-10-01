@@ -55,15 +55,17 @@ GNOME's top bar has no system tray of its own, so Mouse Battery needs the AppInd
 Mouse Battery reads mice in two ways:
 
 - Mice the Linux kernel already drives, such as most Unifying, LIGHTSPEED, and Bluetooth mice, are read through UPower.
-- Mice on a receiver or cable the kernel leaves alone are read over Logitech's HID++ protocol by a small system service, which alone may open the receiver. That covers the PRO X3 SUPERSTRIKE's receiver (`046d:c54f`) and USB cable (`046d:c0a9`), and on kernels that don't drive them, receivers such as the LIGHTSPEED `046d:c547` and the Logi Bolt `046d:c548`.
+- Mice on a receiver or cable the kernel leaves alone are read over Logitech's HID++ protocol by a small system service, which is the only program this package lets open the receiver or cable. That covers the PRO X3 SUPERSTRIKE's receiver (`046d:c54f`) and USB cable (`046d:c0a9`), and on kernels that don't drive them, receivers such as the LIGHTSPEED `046d:c547` and the Logi Bolt `046d:c548`.
 
 It has been tested with the PRO X3 SUPERSTRIKE on its receiver and on its cable, and by one tester with a PRO X Wireless on a `046d:c547` receiver and an MX Master 3S on a Logi Bolt receiver (see "Not tested" below).
 
 ## What the udev rule allows
 
-The rule hands the HID++ interface of any Logitech USB device that the kernel leaves to its generic HID driver, such as a receiver or a mouse on its cable, to the `logitech-mouse-battery` group, when that interface's report descriptor passes the app's own check. The check rejects any interface with a keyboard, keypad, or mouse collection and any receiver interface that carries a paired keyboard's keystrokes. Only Mouse Battery's service runs in that group, as its own system user in a systemd sandbox, and it offers nothing but battery readings on the system bus. Any local user may read those readings and ask for a new read, which the service runs at most once a second, but nothing this package installs lets a program you run open the receiver or send it HID++ commands.
+The rule hands the HID++ interface of any Logitech USB device that the kernel leaves to its generic HID driver, such as a receiver or a mouse on its cable, to the `logitech-mouse-battery` group, when that interface's report descriptor passes the app's own check. The check rejects any interface with a keyboard, keypad, or mouse collection and any receiver interface that carries a paired keyboard's keystrokes. Only Mouse Battery's service runs in that group, as its own system user in a systemd sandbox, and it offers nothing but battery readings on the system bus. Any local user may read those readings and ask for a new read, which the service runs at most once a second, but nothing this package installs lets a program you run open the receiver or cable, or send it HID++ commands.
 
-One limit stays after an upgrade from 1.0.x. A program that already had a receiver or cable open when the upgrade was installed keeps that open handle until it closes it, since Linux checks access when a file is opened. Unplugging it and plugging it back in, or restarting, ends it.
+Another package's udev rule can still give your account access of its own, as Solaar's does for every Logitech receiver, and installing Mouse Battery leaves that access in place.
+
+One limit stays after an upgrade from 1.0.x. A program that already had a receiver or cable open when the upgrade was installed keeps that open handle until it closes it, since Linux checks access when a file is opened. Closing that program, replugging the receiver or cable, or restarting the computer closes the handle.
 
 ## Uninstall
 
