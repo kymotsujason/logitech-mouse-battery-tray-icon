@@ -122,6 +122,31 @@ class AppTests(unittest.TestCase):
             mouseApp.checkHost()
         self.assertIsNotNone(mouseApp.tray)
 
+    def testAFailedHostQueryIsAskedAgain(self):
+        with mock.patch.object(tray, "HOST_RETRY_MS", 10):
+            mouseApp = self.makeApp(False)
+        with mock.patch.object(tray, "hostRegistered", return_value=True):
+            QTest.qWait(200)
+        self.assertIsNotNone(mouseApp.tray)
+
+    def testHostRetriesBackOffUpToACap(self):
+        with mock.patch.object(tray, "HOST_RETRY_MS", 10), mock.patch.object(tray, "HOST_RETRY_MAX_MS", 40):
+            mouseApp = self.makeApp(False)
+            intervals = [mouseApp.hostTimer.interval()]
+            with mock.patch.object(tray, "hostRegistered", return_value=False):
+                for i in range(3):
+                    mouseApp.checkHost()
+                    intervals.append(mouseApp.hostTimer.interval())
+        self.assertEqual(intervals, [10, 20, 40, 40])
+
+    def testTheNoTrayNoticeAsksForTheHostFirst(self):
+        mouseApp = self.makeApp(False)
+        sent, patch = self.notices(mouseApp)
+        with patch, mock.patch.object(tray, "hostRegistered", return_value=True):
+            mouseApp.onNoTray()
+        self.assertIsNotNone(mouseApp.tray)
+        self.assertEqual(sent, [])
+
     def testAPanelColorErrorStillShowsTheIconInThePaletteColor(self):
         mouseApp = self.makeApp(False)
         errors = io.StringIO()

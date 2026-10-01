@@ -29,6 +29,8 @@ LOCK_NAME = "logitech-mouse-battery.lock"
 WATCHER_SERVICE = "org.kde.StatusNotifierWatcher"
 WATCHER_PATH = "/StatusNotifierWatcher"
 NO_TRAY_NOTICE_MS = 10 * 1000
+HOST_RETRY_MS = 2 * 1000
+HOST_RETRY_MAX_MS = 60 * 1000
 INSTALL_SETTLE_MS = 2 * 1000
 CALL_TIMEOUT_MS = 2000
 TARGET_NICENESS = 10
@@ -181,6 +183,8 @@ class MouseBatteryApp(QObject):
         self.menu.addAction("About Mouse Battery").triggered.connect(lambda: self.showAbout())
         self.menu.addAction("Quit").triggered.connect(lambda: self.quitApp())
         self.noticeTimer = mice.singleShotTimer(self, NO_TRAY_NOTICE_MS, self.onNoTray)
+        self.hostRetryMs = HOST_RETRY_MS
+        self.hostTimer = mice.singleShotTimer(self, HOST_RETRY_MS, self.checkHost)
         self.installTimer = mice.singleShotTimer(self, INSTALL_SETTLE_MS, self.onInstallChanged)
         self.installWatcher = QFileSystemWatcher(self)
         self.plasmarcWatcher = QFileSystemWatcher(self)
@@ -199,6 +203,7 @@ class MouseBatteryApp(QObject):
         self.checkHost()
 
     def stop(self):
+        self.hostTimer.stop()
         self.mice.stop()
 
     def quitApp(self):
@@ -209,9 +214,15 @@ class MouseBatteryApp(QObject):
         self.checkHost()
 
     def checkHost(self):
-        # Qt 6.4 caches its first tray check for the whole process, thus the tray icon waits for a registered host
-        if (self.tray is not None or not hostRegistered(self.sessionBus)):
+        if (self.tray is not None):
             return
+        # Qt 6.4 caches its first tray check for the whole process, thus the tray icon waits for a registered host
+        if (not hostRegistered(self.sessionBus)):
+            # the watcher signals only report a change, so a query that errors or times out has to be asked again
+            self.hostTimer.start(self.hostRetryMs)
+            self.hostRetryMs = min(self.hostRetryMs * 2, HOST_RETRY_MAX_MS)
+            return
+        self.hostTimer.stop()
         self.noticeTimer.stop()
         self.tray = QSystemTrayIcon(self)
         self.tray.setContextMenu(self.menu)
@@ -226,6 +237,7 @@ class MouseBatteryApp(QObject):
         self.tray.show()
 
     def onNoTray(self):
+        self.checkHost()
         if (self.tray is not None):
             return
         actions = []
