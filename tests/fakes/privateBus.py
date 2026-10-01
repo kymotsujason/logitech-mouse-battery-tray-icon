@@ -43,12 +43,6 @@ def requireTools(testCase):
     testCase.skipTest("needs " + ", ".join(missing))
 
 
-def gioConnection(address):
-    # PyGObject is only there where these tests run, so it's imported when a test asks for a connection
-    from gi.repository import Gio
-    return Gio.DBusConnection.new_for_address_sync(address, Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT | Gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION, None, None)
-
-
 class PrivateBus:
     def __init__(self):
         self.folder = tempfile.mkdtemp()

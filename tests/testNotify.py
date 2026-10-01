@@ -7,25 +7,32 @@ from unittest import mock
 
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
-from PyQt6.QtDBus import QDBusConnection
+from PyQt6.QtDBus import QDBusConnection, QDBusMessage
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
 
+import dbusCalls
 import notify
 from tests.fakes import privateBus
 from tests.fakes.recordingBus import RecordingBus
 
 app = QApplication.instance() or QApplication([])
 SRC = os.path.dirname(os.path.abspath(notify.__file__))
-# the bug only shows when Notify is the first D-Bus marshaling in its process, so each send runs in a fresh one
+# the bug only shows when Notify is the first D-Bus marshaling in its process, so each send runs in a fresh one and goes out before a Notifier subscribes to anything, since that hid the bug on Qt 6.4
 FIRST_SEND = """
 import json
 import sys
 from PyQt6.QtCore import QCoreApplication
+from PyQt6.QtDBus import QDBusConnection
 app = QCoreApplication(sys.argv[:1])
+import dbusCalls
 import notify
 pairs = [tuple(pair) for pair in json.loads(sys.argv[1])]
-print(json.dumps(notify.Notifier().send("Summary", "Body", pairs)))
+reply = dbusCalls.call(QDBusConnection.sessionBus(), notify.notifyMessage("Summary", "Body", pairs), notify.CALL_TIMEOUT_MS)
+if (dbusCalls.failure(reply) is not None or not reply.arguments()):
+    print(json.dumps([None, reply.errorName()]))
+else:
+    print(json.dumps([reply.arguments()[0], None]))
 """
 
 
@@ -53,6 +60,22 @@ class NotifierTests(unittest.TestCase):
 
     def testTheActionListIsAStringList(self):
         self.assertEqual([notify.stringListVariant(values).typeName() for values in ([], ["a", "First"])], ["QStringList", "QStringList"])
+
+    def testABodyIsEscapedWhenTheServerCantSayWhatItSupports(self):
+        self.assertEqual(notify.Notifier(RecordingBus()).bodyText("<b>A&B</b>"), "&lt;b&gt;A&amp;B&lt;/b&gt;")
+
+    def testAReusedIdKeepsItsNewHandler(self):
+        notifier = notify.Notifier(RecordingBus())
+        first = mock.Mock()
+        second = mock.Mock()
+        notifier.handlers[7] = first
+        closed = QDBusMessage.createSignal(notify.PATH, notify.SERVICE, "NotificationClosed")
+        closed.setArguments([notify.uintArgument(7), notify.uintArgument(2)])
+        with mock.patch.object(notify, "HANDLER_GRACE_MS", 50):
+            notifier.onNotificationClosed(closed)
+        notifier.handlers[7] = second
+        QTest.qWait(200)
+        self.assertIs(notifier.handlers.get(7), second)
 
 
 class FakeServerTest(unittest.TestCase):
@@ -112,23 +135,21 @@ class ActionTests(FakeServerTest):
     def setUp(self):
         super().setUp()
         self.notifier = notify.Notifier(self.qtConnection("notifyActionBus"))
+        # a second connection drives the fake and forges signals, so the test process never imports PyGObject
+        self.controlBus = self.qtConnection("notifyControlBus")
         self.pressed = []
         self.notificationId, error = self.notifier.send("S", "B", [("go", "Go")], self.pressed.append)
         self.assertIsNone(error)
 
-    def control(self, method, *args):
-        from gi.repository import Gio, GLib
-        connection = privateBus.gioConnection(self.bus.address)
-        signature = "(us)" if method == "Press" else "(u)"
-        connection.call_sync(notify.SERVICE, notify.PATH, "test.FakeNotifications", method, GLib.Variant(signature, args), None, Gio.DBusCallFlags.NONE, 2000, None)
-        connection.close_sync(None)
+    def control(self, method, notificationId, *args):
+        message = QDBusMessage.createMethodCall(notify.SERVICE, notify.PATH, "test.FakeNotifications", method)
+        message.setArguments([notify.uintArgument(notificationId), *args])
+        self.assertIsNone(dbusCalls.failure(dbusCalls.call(self.controlBus, message)))
 
     def forge(self, notificationId, key):
-        from gi.repository import GLib
-        connection = privateBus.gioConnection(self.bus.address)
-        connection.emit_signal(None, notify.PATH, notify.SERVICE, "ActionInvoked", GLib.Variant("(us)", (notificationId, key)))
-        connection.flush_sync(None)
-        connection.close_sync(None)
+        message = QDBusMessage.createSignal(notify.PATH, notify.SERVICE, "ActionInvoked")
+        message.setArguments([notify.uintArgument(notificationId), key])
+        self.assertTrue(self.controlBus.send(message))
 
     def testTheServersActionReachesItsHandler(self):
         self.control("Press", self.notificationId, "go")
@@ -143,7 +164,7 @@ class ActionTests(FakeServerTest):
         self.forge(self.notificationId, "go")
         QTest.qWait(300)
         self.assertEqual(self.pressed, [])
-        # the same signal from the server still gets through, which shows the forged one was really delivered and filtered
+        # the same signal from the server still gets through, which shows the subscription is live
         self.control("Press", self.notificationId, "go")
         self.assertTrue(waitFor(lambda: self.pressed == ["go"]))
 

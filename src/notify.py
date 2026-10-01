@@ -22,10 +22,20 @@ def uintArgument(value):
 
 
 def stringListVariant(values):
-    # a QDBusArgument holding an empty list fails to marshal as the first call of a process on PyQt6 6.4 and 6.6, while a QVariant converted to QStringList goes out as "as" on 6.4 and 6.11 alike
+    # a QDBusArgument holding a string list fails to marshal when it's the first marshaling in a process on PyQt6 6.4 and 6.6, while a QVariant converted to QStringList goes out as "as" on 6.4, 6.6, and 6.11
     variant = QVariant(list(values))
     variant.convert(QMetaType(QMetaType.Type.QStringList.value))
     return variant
+
+
+def notifyMessage(summary, body, actions):
+    flat = []
+    for key, label in actions:
+        flat.extend([key, label])
+    message = QDBusMessage.createMethodCall(SERVICE, PATH, SERVICE, "Notify")
+    # a plain list goes out as av and a plain dict fails on PyQt6 6.4, so both are typed by hand
+    message.setArguments([APP_NAME, uintArgument(0), APP_ICON, summary, body, stringListVariant(flat), QVariant({"desktop-entry": APP_ICON}), -1])
+    return message
 
 
 class Notifier(QObject):
@@ -44,28 +54,23 @@ class Notifier(QObject):
         message = QDBusMessage.createMethodCall(SERVICE, PATH, SERVICE, "GetCapabilities")
         reply = dbusCalls.call(self.bus, message, CALL_TIMEOUT_MS)
         if (dbusCalls.failure(reply) is not None or not reply.arguments()):
-            # a server that can't answer yet is asked again with the next notice
-            return False
+            # a server that can't answer yet is asked again with the next notice, and None says it didn't answer
+            return None
         self.bodyMarkup = "body-markup" in [str(capability) for capability in dbusCalls.plain(reply.arguments()[0])]
         return self.bodyMarkup
 
     def bodyText(self, body):
         escaped = html.escape(body, quote=False)
-        # a body with nothing to escape reads the same either way, so the server isn't asked, and Notify stays a process's first call for the Qt 6.4 test
+        # a body with nothing to escape reads the same either way, so the server isn't asked
         if (escaped == body):
             return body
-        # a server with body-markup parses tags in the body, while one without shows the text as written
-        if (self.supportsBodyMarkup()):
-            return escaped
-        return body
+        # only a server that answered without body-markup is known to show tags as written, so the body goes out escaped for every other server, including one that didn't answer
+        if (self.supportsBodyMarkup() is False):
+            return body
+        return escaped
 
     def send(self, summary, body, actions=(), onAction=None):
-        flat = []
-        for key, label in actions:
-            flat.extend([key, label])
-        message = QDBusMessage.createMethodCall(SERVICE, PATH, SERVICE, "Notify")
-        # a plain list goes out as av and a plain dict fails on PyQt6 6.4, so both are typed by hand
-        message.setArguments([APP_NAME, uintArgument(0), APP_ICON, summary, self.bodyText(body), stringListVariant(flat), QVariant({"desktop-entry": APP_ICON}), -1])
+        message = notifyMessage(summary, self.bodyText(body), actions)
         reply = dbusCalls.call(self.bus, message, CALL_TIMEOUT_MS)
         if (dbusCalls.failure(reply) is not None or not reply.arguments()):
             return (None, reply.errorName())
@@ -89,4 +94,10 @@ class Notifier(QObject):
         if (not arguments or arguments[0] not in self.handlers):
             return
         notificationId = arguments[0]
-        QTimer.singleShot(HANDLER_GRACE_MS, lambda: self.handlers.pop(notificationId, None))
+        handler = self.handlers[notificationId]
+        QTimer.singleShot(HANDLER_GRACE_MS, lambda: self.dropHandler(notificationId, handler))
+
+    def dropHandler(self, notificationId, handler):
+        # a server can give a closed notice's id to a new one, whose handler stays
+        if (self.handlers.get(notificationId) is handler):
+            del self.handlers[notificationId]
