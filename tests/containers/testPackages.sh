@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# installs each built package from dist/ in a clean container of its distro and runs checkPackage.sh there
+# installs each built package from dist/ in a clean container of its distro and runs checkPackage.sh there, then
+# checkService.sh in a second clean container
 set -u
 
 repo=$(cd "$(dirname "$0")/../.." && pwd)
@@ -17,6 +18,10 @@ runIn() {
         return
     fi
     docker run --rm -v "$repo/dist:/dist:ro" -v "$repo/tests/containers/checkPackage.sh:/checkPackage.sh:ro" "$image" bash /checkPackage.sh "$kind" "/dist/$package" "$version"
+    if [ $? -ne 0 ]; then
+        failures=$((failures + 1))
+    fi
+    docker run --rm -v "$repo:/repo:ro" "$image" bash /repo/tests/containers/checkService.sh "$kind" "/repo/dist/$package"
     if [ $? -ne 0 ]; then
         failures=$((failures + 1))
     fi

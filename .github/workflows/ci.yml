@@ -31,3 +31,5 @@ jobs:
         run: packaging/buildArch.sh
       - name: Test each package in a clean container
         run: tests/containers/testPackages.sh
+      - name: Upgrade a running 1.0.1 tray in a container
+        run: tests/containers/testUpgrade.sh

@@ -339,9 +339,14 @@ class WorkflowTests(unittest.TestCase):
         self.assertLess(release.index("-aur.tar.gz"), release.index("> SHA256SUMS"))
         self.assertLess(release.index("> SHA256SUMS"), release.index("gh release create"))
 
+    def testTheReleaseChecksTheUpgradeBeforePublishing(self):
+        release = self.releaseJob()
+        self.assertIn("run: tests/containers/testUpgrade.sh\n", release)
+        self.assertLess(release.index("testUpgrade.sh"), release.index("gh release create"))
+
     def testCiRunsTheLateTrayCheckAndEveryBuild(self):
         ci = self.read("ci.yml")
-        for script in ("tests/live/checkLateTray.sh", "packaging/tarball.sh", "packaging/build.sh", "packaging/buildArch.sh", "tests/containers/testPackages.sh"):
+        for script in ("tests/live/checkLateTray.sh", "packaging/tarball.sh", "packaging/build.sh", "packaging/buildArch.sh", "tests/containers/testPackages.sh", "tests/containers/testUpgrade.sh"):
             self.assertIn("run: " + script + "\n", ci)
 
     def testTheAurBundleCarriesTheInstallFile(self):

@@ -3,7 +3,7 @@ import sys
 
 repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, repo)
-sys.path.insert(0, os.path.join(repo, "src"))
+sys.path.insert(0, os.environ.get("MOUSE_BATTERY_APP_DIR", os.path.join(repo, "src")))
 
 from PyQt6.QtCore import QCoreApplication
 from PyQt6.QtDBus import QDBusConnection
