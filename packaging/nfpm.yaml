@@ -28,6 +28,10 @@ contents:
     dst: /usr/share/logitech-mouse-battery/check.py
     file_info:
       mode: 0644
+  - src: src/clearAccess.py
+    dst: /usr/share/logitech-mouse-battery/clearAccess.py
+    file_info:
+      mode: 0644
   - src: src/dbusCalls.py
     dst: /usr/share/logitech-mouse-battery/dbusCalls.py
     file_info:
