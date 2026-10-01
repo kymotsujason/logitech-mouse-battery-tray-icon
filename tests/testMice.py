@@ -516,8 +516,9 @@ class MouseListTests(unittest.TestCase):
         path = "/org/freedesktop/UPower/devices/mouse_hidpp_battery_0"
         self.mice.applyUPower(upower.UPowerMouse(path, "02bc524c", "PRO X3", hidpp.BatteryReading(55, 0)))
         self.assertEqual((self.keys(), self.mouse().upowerPath, self.mouse().reading.percent), (["02bc524c"], path, 55))
+        self.mice.warner.markSent("02bc524c", 9)
         self.mice.removeUPower(path)
-        self.assertEqual((self.keys(), self.mouse().upowerPath), (["02bc524c"], None))
+        self.assertEqual((self.keys(), self.mouse().upowerPath, self.mice.warner.sent), (["02bc524c"], None, {"02bc524c": {10}}))
 
     def testAUPowerOnlyMouseComesAndGoes(self):
         path = "/org/freedesktop/UPower/devices/mouse_hidpp_battery_1"

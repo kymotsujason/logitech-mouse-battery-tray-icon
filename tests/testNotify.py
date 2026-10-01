@@ -64,6 +64,13 @@ class WarnerTests(unittest.TestCase):
         results = [self.updateAndSend("m", discharging(percent), False) for percent in (10, 5, 20, 10, 5, 21, 10, 5)]
         self.assertEqual(results, [10, 5, None, None, None, None, 10, 5])
 
+    def testHighReadingsThatArentAwakeAndDischargingDontArmThemAgain(self):
+        self.updateAndSend("m", discharging(9), False)
+        self.assertIsNone(self.updateAndSend("m", hidpp.BatteryReading(50, 4), False))
+        self.assertIsNone(self.updateAndSend("m", hidpp.BatteryReading(50, 6), False))
+        self.assertIsNone(self.updateAndSend("m", discharging(50), True))
+        self.assertIsNone(self.updateAndSend("m", discharging(9), False))
+
     def testAWarningStaysDueUntilItsMarkedSent(self):
         self.assertEqual(self.warner.update("m", discharging(9), False), 9)
         self.assertEqual(self.warner.update("m", discharging(9), False), 9)
