@@ -99,14 +99,21 @@ class MouseListTests(unittest.TestCase):
         self.addUPower(50)
         self.assertEqual((self.mouse().reading.percent, self.mouse().asleep), (50, False))
         self.mice.removeUPower(UPOWER_PATH)
-        self.assertEqual((self.keys(), self.mouse().reading.percent, self.mouse().asleep, self.mouse().upowerPath), (["02bc524c"], 50, True, None))
+        self.assertEqual((self.keys(), self.mouse().reading.percent, self.mouse().asleep, self.mouse().upowerPath, self.mouse().stale), (["02bc524c"], 50, True, None, False))
 
     def testAMouseThatLosesItsUPowerHalfWithNoServiceTurnsAsleep(self):
         self.mice.applyService(state(entry(percent=40, lastRead=1000.0)))
         self.addUPower(50)
         self.mice.applyService(None)
         self.mice.removeUPower(UPOWER_PATH)
-        self.assertEqual((self.mouse().reading.percent, self.mouse().asleep), (50, True))
+        self.assertEqual((self.mouse().reading.percent, self.mouse().asleep, self.mouse().stale), (50, True, True))
+
+    def testAStaleMouseThatUPowerReadsIsCurrentAgain(self):
+        self.mice.applyService(state(entry(percent=40, lastRead=1000.0)))
+        self.mice.applyService(None)
+        self.assertTrue(self.mouse().stale)
+        self.addUPower(50)
+        self.assertEqual((self.mouse().reading.percent, self.mouse().asleep, self.mouse().stale), (50, False, False))
 
     def testAnOlderEntryAfterUPowerLeavesGivesOnlyItsSleep(self):
         self.mice.applyService(state(entry(percent=40, lastRead=1000.0)))

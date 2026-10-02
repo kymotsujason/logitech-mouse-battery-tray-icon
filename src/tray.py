@@ -44,6 +44,8 @@ def mouseLine(name, mouse, now=None):
     if (mouse.reading is None):
         return name + ", no reading yet"
     level = hidpp.levelText(mouse.reading)
+    if (mouse.stale):
+        return name + ", " + level + " " + mice.readingTime(mouse.lastRead, time.time() if now is None else now)
     if (mouse.asleep):
         return name + ", asleep, " + level + " " + mice.readingTime(mouse.lastRead, time.time() if now is None else now)
     charging = mouse.reading.charging
@@ -63,9 +65,12 @@ def mouseLine(name, mouse, now=None):
 def statusLines(mouseList):
     names = mouseList.displayNames()
     lines = [mouseLine(names[mouse.key], mouse) for mouse in mouseList.mice]
-    if (lines):
-        return lines
-    return [mice.STATUS_TEXT[mouseList.status()]]
+    if (not lines):
+        return [mice.STATUS_TEXT[mouseList.status()]]
+    # the mice listed don't say the service is gone, and without it no HID++ reading or warning comes
+    if (mouseList.serviceLost()):
+        lines.append(mice.STATUS_TEXT[mice.STATUS_NO_SERVICE])
+    return lines
 
 
 def raiseNiceness(target=TARGET_NICENESS):

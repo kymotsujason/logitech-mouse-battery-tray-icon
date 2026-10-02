@@ -56,6 +56,8 @@ class Mouse:
         self.upowerPath = None
         self.reading = None
         self.asleep = False
+        # the reading is the last one the service gave before it went away, so it's shown with its time and no claim the mouse sleeps
+        self.stale = False
         self.lastRead = None
         self.wokeAt = None
         self.readFromUPower = False
@@ -97,6 +99,7 @@ class MouseList(QObject):
             for mouse in self.mice:
                 if (mouse.nodePath is not None and mouse.upowerPath is None):
                     mouse.asleep = True
+                    mouse.stale = True
             self.changed.emit()
             return
         listed = set()
@@ -118,6 +121,7 @@ class MouseList(QObject):
 
     def copyEntry(self, entry):
         mouse = self.mouseFor(entry.key, pathKey=entry.pathKey)
+        mouse.stale = False
         if (entry.name):
             mouse.name = entry.name
         mouse.nodePath = entry.source
@@ -146,6 +150,7 @@ class MouseList(QObject):
 
     def applyReading(self, mouse, reading, woke=False):
         now = time.time()
+        mouse.stale = False
         if (reading is None):
             mouse.asleep = True
         else:
@@ -199,6 +204,7 @@ class MouseList(QObject):
         if (state is not None):
             entry = next((each for each in state.mice if each.key == mouse.key), None)
         mouse.asleep = True if entry is None else entry.asleep
+        mouse.stale = self.serviceLost()
 
     def shownMouse(self):
         awake = [mouse for mouse in self.mice if not mouse.asleep and mouse.reading is not None]
@@ -217,6 +223,9 @@ class MouseList(QObject):
             counts[base] = counts.get(base, 0) + 1
             names[mouse.key] = base if counts[base] == 1 else base + " " + str(counts[base])
         return names
+
+    def serviceLost(self):
+        return self.answered and self.serviceState is None
 
     def status(self):
         if (self.mice):

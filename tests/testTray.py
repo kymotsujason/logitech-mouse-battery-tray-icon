@@ -31,6 +31,7 @@ import tray
 import trayHost
 import upower
 from icon import IconState
+from serviceState import ServiceEntry, ServiceState
 from tests.fakes.recordingBus import RecordingBus
 
 app = QApplication.instance() or QApplication([])
@@ -84,6 +85,19 @@ class TrayTextTests(unittest.TestCase):
         asleep = makeMouse(hidpp.BatteryReading(69, 0), asleep=True)
         self.assertEqual(tray.mouseLine(NAME, asleep, now=LAST_READ), NAME + ", asleep, 69% at " + clock)
         self.assertEqual(tray.mouseLine(NAME, asleep, now=LAST_READ + 3 * 86400), NAME + ", asleep, 69% on " + day + " at " + clock)
+
+    def testALostServiceShowsTheLastReadingAndSaysSo(self):
+        local = time.localtime(LAST_READ)
+        stamp = " on " + mice.MONTH_NAMES[local.tm_mon - 1] + " " + str(local.tm_mday) + " at " + time.strftime("%H:%M", local)
+        listed = ServiceState(False, False, ("/dev/hidraw18",), (), (ServiceEntry("02bc524c", False, NAME, "/dev/hidraw18", hidpp.BatteryReading(69, 0), False, LAST_READ, LAST_READ),))
+        mouseList = mice.MouseList()
+        mouseList.applyService(listed)
+        mouseList.applyService(None)
+        self.assertEqual(tray.statusLines(mouseList), [NAME + ", 69%" + stamp, "Can't reach the battery service."])
+        mouseList.applyService(listed)
+        self.assertEqual(tray.statusLines(mouseList), [NAME + ", 69%"])
+        mouseList.stop()
+        sip.delete(mouseList)
 
 
 class ProcessTests(unittest.TestCase):
@@ -182,8 +196,8 @@ class AppTests(unittest.TestCase):
         mouseApp = self.makeApp(True)
         self.assertTrue(waitUntil(lambda: [action.text() for action in mouseApp.statusActions] == ["Can't reach the battery service."]))
         mouseApp.mouseList.applyUPower(upower.UPowerMouse(PATH, "12ab34cd", "MX Master 3", hidpp.BatteryReading(55, 0)))
-        self.assertEqual([action.text() for action in mouseApp.statusActions], ["MX Master 3, 55%"])
-        self.assertEqual(mouseApp.shownTooltip, "MX Master 3, 55%")
+        self.assertEqual([action.text() for action in mouseApp.statusActions], ["MX Master 3, 55%", "Can't reach the battery service."])
+        self.assertEqual(mouseApp.shownTooltip, "MX Master 3, 55%\nCan't reach the battery service.")
 
     def lowBatterySends(self, replies):
         mouseApp = self.makeApp(True)
@@ -308,13 +322,15 @@ class AppTests(unittest.TestCase):
 
     def testAnAmpersandIsDoubledOnlyInTheMenu(self):
         mouseApp = self.makeApp(True)
+        self.assertTrue(waitUntil(mouseApp.mouseList.serviceLost))
         mouseApp.mouseList.applyUPower(upower.UPowerMouse(PATH, "12ab34cd", "Tom & Jerry", hidpp.BatteryReading(55, 0)))
-        self.assertEqual(([action.text() for action in mouseApp.statusActions], mouseApp.shownTooltip), (["Tom && Jerry, 55%"], "Tom & Jerry, 55%"))
+        self.assertEqual(([action.text() for action in mouseApp.statusActions], mouseApp.shownTooltip), (["Tom && Jerry, 55%", "Can't reach the battery service."], "Tom & Jerry, 55%\nCan't reach the battery service."))
 
     def testAngleBracketsInANameNeverReachTheTooltip(self):
         mouseApp = self.makeApp(True)
+        self.assertTrue(waitUntil(mouseApp.mouseList.serviceLost))
         mouseApp.mouseList.applyUPower(upower.UPowerMouse(PATH, "12ab34cd", '<img src="http://example.invalid/x">', hidpp.BatteryReading(55, 0)))
-        self.assertEqual(([action.text() for action in mouseApp.statusActions], mouseApp.tray.toolTip()), (['<img src="http://example.invalid/x">, 55%'], 'img src="http://example.invalid/x", 55%'))
+        self.assertEqual(([action.text() for action in mouseApp.statusActions], mouseApp.tray.toolTip()), (['<img src="http://example.invalid/x">, 55%', "Can't reach the battery service."], 'img src="http://example.invalid/x", 55%\nCan\'t reach the battery service.'))
 
     def testAboutOpensOneBox(self):
         mouseApp = self.makeApp(True)
