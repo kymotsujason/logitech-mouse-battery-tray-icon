@@ -129,12 +129,12 @@ class WarnerTests(unittest.TestCase):
         self.warner.confirm("m", 4)
         self.assertIsNone(self.warner.update("m", discharging(4), False))
 
-    def testAnAnswerForAForgottenKeyLeavesNothingBehind(self):
+    def testAFailedNoticeForAMouseThatLeftIsGivenBack(self):
         self.warner.update("m", discharging(9), False)
+        # the mouse leaves while its notice is on its way, and the notice then fails
         self.warner.forget("m")
-        self.warner.confirm("m", 9)
         self.warner.giveBack("m", 9)
-        self.assertNotIn("m", self.warner.sent)
+        self.assertEqual(self.warner.update("m", discharging(9), False), 9)
 
     def testAsleepNeverWarns(self):
         self.assertIsNone(self.updateAndSend("m", discharging(4), True))

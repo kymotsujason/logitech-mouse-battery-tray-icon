@@ -78,9 +78,8 @@ class LowBatteryWarner:
         return not any(notice[1] == key and notice[2] == threshold for notice in self.notices)
 
     def forget(self, key, pathKey=False):
+        # a claim stays, so a notice that fails after its mouse left still takes its own entry back out of the window, while confirm and giveBack never arm a key again
         self.sent.pop(key, None)
-        # an answer that comes after the mouse left finds no claim, so it can't arm anything for the key again
-        self.claims = {claimKey: claim for claimKey, claim in self.claims.items() if claimKey[0] != key}
         # a key built from a path can pass to a different mouse, which gets warnings of its own
         if (pathKey):
             self.notices = [notice for notice in self.notices if notice[1] != key]
