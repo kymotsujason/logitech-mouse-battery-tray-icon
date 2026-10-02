@@ -182,6 +182,9 @@ class HidppNode:
     def requestOutcome(self, deviceIndex, featureIndex, function, params=b"", timeout=None):
         if (timeout is None):
             timeout = REQUEST_TIMEOUT
+        # a request its budget can't wait for would only leave a late reply on the node
+        if (timeout <= 0):
+            return (TIMEOUT, None)
         funcSw = (function << 4) | self.nextSwId()
         self.writeReport(deviceIndex, featureIndex, funcSw, params)
         deadline = time.monotonic() + timeout
@@ -347,8 +350,9 @@ def identifySlot(node, slot, deadline=None):
     kind, unitId = readUnitId(node, slot, deadline)
     if (kind != ANSWER):
         return (UNKNOWN, None)
-    name = readName(node, slot, deadline)
+    # the battery goes first, since a device decides how slowly it answers each name chunk and the reading is what the identify is for
     outcome, reading = readBattery(node, feature, deadline)
+    name = readName(node, slot, deadline)
     return (FOUND, FoundMouse(slot, unitId, name, feature, reading, outcome))
 
 

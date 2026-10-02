@@ -189,6 +189,29 @@ class DeviceTests(unittest.TestCase):
         spent = time.monotonic() - 1
         self.assertEqual(hidpp.identifySlot(self.device.node(), 1, spent), (hidpp.UNKNOWN, None))
 
+    def testASlowNameLeavesTheIdentifyItsBatteryReading(self):
+        answer = mouseHandler()
+
+        def slowName(request):
+            if (request[2] == 2 and (request[3] >> 4) == 1):
+                time.sleep(0.25)
+            return answer(request)
+        self.device = FakeDevice(slowName)
+        outcome, found = hidpp.identifySlot(self.device.node(), 1, time.monotonic() + 0.4)
+        self.assertEqual((outcome, found.reading, found.outcome), (hidpp.FOUND, hidpp.BatteryReading(81, 0), hidpp.ANSWER))
+
+    def testASearchWithItsBudgetSpentLeavesAnsweringSlotsUnknown(self):
+        self.device = FakeDevice(mouseHandler())
+        result = hidpp.searchNode(self.device.node(), pingTimeout=0.05, deadline=time.monotonic() - 1)
+        self.assertEqual((result.mice, result.unknown), ((), frozenset({1})))
+        self.assertEqual([request for request in self.device.requests if request[2] != 0 or (request[3] >> 4) != 1], [])
+
+    def testARequestWithItsBudgetSpentSendsNothing(self):
+        self.device = FakeDevice(mouseHandler())
+        self.assertEqual(self.device.node().requestOutcome(1, 0, 0, bytes([0x10, 0x04]), timeout=-0.5), (hidpp.TIMEOUT, None))
+        time.sleep(0.05)
+        self.assertEqual(self.device.requests, [])
+
     def testAShortDeviceInfoReplyGivesNoUnitIdInsteadOfATruncatedOne(self):
         def shortInfo(request):
             if (request[2] == 3 and (request[3] >> 4) == 0):
