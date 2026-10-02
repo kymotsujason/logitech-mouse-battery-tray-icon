@@ -35,6 +35,31 @@ else:
     print(json.dumps([reply.arguments()[0], None]))
 """
 
+# the same first send, through the call the tray makes, which answers from the event loop
+FIRST_SEND_LATER = """
+import json
+import sys
+from PyQt6.QtCore import QCoreApplication, QObject
+from PyQt6.QtDBus import QDBusConnection
+from PyQt6.QtTest import QTest
+app = QCoreApplication(sys.argv[:1])
+import dbusCalls
+import notify
+pairs = [tuple(pair) for pair in json.loads(sys.argv[1])]
+owner = QObject()
+replies = []
+dbusCalls.callLater(QDBusConnection.sessionBus(), notify.notifyMessage("Summary", "Body", pairs), replies.append, owner, notify.CALL_TIMEOUT_MS)
+for i in range(250):
+    if (replies):
+        break
+    QTest.qWait(20)
+reply = replies[0]
+if (dbusCalls.failure(reply) is not None or not reply.arguments()):
+    print(json.dumps([None, reply.errorName()]))
+else:
+    print(json.dumps([reply.arguments()[0], None]))
+"""
+
 
 def waitFor(condition, timeout=2.0):
     for i in range(int(timeout * 50)):
@@ -47,8 +72,25 @@ def waitFor(condition, timeout=2.0):
 class NotifierTests(unittest.TestCase):
     def testMissingServiceSkipsTheNotificationAndSaysWhy(self):
         bus = QDBusConnection.connectToBus("unix:path=/nonexistent/bus", "notifyTestBus")
-        self.assertEqual(notify.Notifier(bus).send("Title", "Body"), (None, "org.freedesktop.DBus.Error.Disconnected"))
-        QDBusConnection.disconnectFromBus("notifyTestBus")
+        self.addCleanup(QDBusConnection.disconnectFromBus, "notifyTestBus")
+        results = []
+        notify.Notifier(bus).send("Title", "Body", onSent=lambda notificationId, error: results.append((notificationId, error)))
+        self.assertTrue(waitFor(lambda: results))
+        self.assertEqual(results, [(None, "org.freedesktop.DBus.Error.Disconnected")])
+
+    def testSendingMakesNoBlockingCall(self):
+        bus = QDBusConnection.connectToBus("unix:path=/nonexistent/bus", "notifyBlockingBus")
+        self.addCleanup(QDBusConnection.disconnectFromBus, "notifyBlockingBus")
+        blocking = []
+        results = []
+        realCall = dbusCalls.call
+        notifier = notify.Notifier(bus)
+        with mock.patch.object(dbusCalls, "call", lambda bus, message, *args: blocking.append(message.member()) or realCall(bus, message, *args)):
+            # the ampersand needs the server's capabilities, and the plain body doesn't
+            notifier.send("T", "Tom & Jerry", onSent=lambda *result: results.append(result))
+            notifier.send("T", "Plain", onSent=lambda *result: results.append(result))
+            self.assertTrue(waitFor(lambda: len(results) == 2))
+        self.assertEqual(blocking, [])
 
     def testSignalsAreTakenOnlyFromTheServer(self):
         bus = RecordingBus()
@@ -96,9 +138,9 @@ class FakeServerTest(unittest.TestCase):
 
 
 class FirstNoticeTests(FakeServerTest):
-    def firstSend(self, pairs):
+    def firstSend(self, pairs, script=FIRST_SEND):
         env = dict(os.environ, DBUS_SESSION_BUS_ADDRESS=self.bus.address, QT_QPA_PLATFORM="offscreen", PYTHONPATH=SRC)
-        result = subprocess.run([sys.executable, "-B", "-c", FIRST_SEND, json.dumps(pairs)], env=env, capture_output=True, text=True, timeout=60)
+        result = subprocess.run([sys.executable, "-B", "-c", script, json.dumps(pairs)], env=env, capture_output=True, text=True, timeout=60)
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout.strip().splitlines()[-1])
 
@@ -114,12 +156,43 @@ class FirstNoticeTests(FakeServerTest):
         self.assertGreater(notificationId, 0)
         self.assertTrue(self.bus.waitForLine(self.log, "notify Summary|Body|a:First,b:Second"))
 
+    def testANoticeSentLaterWithTwoButtonsWorksAsTheFirstCallOfAProcess(self):
+        notificationId, error = self.firstSend([["a", "First"], ["b", "Second"]], FIRST_SEND_LATER)
+        self.assertIsNone(error)
+        self.assertGreater(notificationId, 0)
+        self.assertTrue(self.bus.waitForLine(self.log, "notify Summary|Body|a:First,b:Second"))
+
+
+def sendAndWait(notifier, summary, body):
+    results = []
+    notifier.send(summary, body, onSent=lambda *result: results.append(result))
+    waitFor(lambda: results)
+    return results[0] if results else None
+
 
 class MarkupServerTests(FakeServerTest):
     def testABodyIsEscapedForAServerThatParsesMarkup(self):
         notifier = notify.Notifier(self.qtConnection("notifyMarkupBus"))
-        self.assertIsNone(notifier.send("S", "<b>A&B</b>")[1])
+        self.assertIsNone(sendAndWait(notifier, "S", "<b>A&B</b>")[1])
         self.assertTrue(self.bus.waitForLine(self.log, "notify S|&lt;b&gt;A&amp;B&lt;/b&gt;|"))
+
+    def testBodiesWaitingForTheServersAnswerAskItOnce(self):
+        notifier = notify.Notifier(self.qtConnection("notifyOnceBus"))
+        results = []
+        for body in ("A&B", "C&D"):
+            notifier.send("S", body, onSent=lambda *result: results.append(result))
+        self.assertTrue(waitFor(lambda: len(results) == 2))
+        self.assertTrue(self.bus.waitForLine(self.log, "notify S|C&amp;D|"))
+        self.assertEqual(self.bus.lines(self.log).count("capabilities asked"), 1)
+        sendAndWait(notifier, "S", "E&F")
+        self.assertEqual(self.bus.lines(self.log).count("capabilities asked"), 1)
+
+    def testSendNowWaitsForTheServer(self):
+        notifier = notify.Notifier(self.qtConnection("notifyNowBus"))
+        notificationId, error = notifier.sendNow("S", "Already running.")
+        self.assertIsNone(error)
+        self.assertGreater(notificationId, 0)
+        self.assertTrue(self.bus.waitForLine(self.log, "notify S|Already running.|"))
 
 
 class PlainServerTests(FakeServerTest):
@@ -127,7 +200,7 @@ class PlainServerTests(FakeServerTest):
 
     def testABodyStaysAsWrittenForAServerWithoutMarkup(self):
         notifier = notify.Notifier(self.qtConnection("notifyPlainBus"))
-        self.assertIsNone(notifier.send("S", "<b>A&B</b>")[1])
+        self.assertIsNone(sendAndWait(notifier, "S", "<b>A&B</b>")[1])
         self.assertTrue(self.bus.waitForLine(self.log, "notify S|<b>A&B</b>|"))
 
 
@@ -138,7 +211,10 @@ class ActionTests(FakeServerTest):
         # a second connection drives the fake and forges signals, so the test process never imports PyGObject
         self.controlBus = self.qtConnection("notifyControlBus")
         self.pressed = []
-        self.notificationId, error = self.notifier.send("S", "B", [("go", "Go")], self.pressed.append)
+        results = []
+        self.notifier.send("S", "B", [("go", "Go")], self.pressed.append, lambda *result: results.append(result))
+        self.assertTrue(waitFor(lambda: results))
+        self.notificationId, error = results[0]
         self.assertIsNone(error)
 
     def control(self, method, notificationId, *args):

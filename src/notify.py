@@ -44,20 +44,11 @@ class Notifier(QObject):
         self.bus = bus if bus is not None else QDBusConnection.sessionBus()
         self.handlers = {}
         self.bodyMarkup = None
+        self.askingCapabilities = False
+        self.waitingSends = []
         # only the notification server's own signals count, so another program on the bus can't press a button
         self.bus.connect(SERVICE, PATH, SERVICE, "ActionInvoked", self.onActionInvoked)
         self.bus.connect(SERVICE, PATH, SERVICE, "NotificationClosed", self.onNotificationClosed)
-
-    def supportsBodyMarkup(self):
-        if (self.bodyMarkup is not None):
-            return self.bodyMarkup
-        message = QDBusMessage.createMethodCall(SERVICE, PATH, SERVICE, "GetCapabilities")
-        reply = dbusCalls.call(self.bus, message, CALL_TIMEOUT_MS)
-        if (dbusCalls.failure(reply) is not None or not reply.arguments()):
-            # a server that can't answer yet is asked again with the next notice, and None says it didn't answer
-            return None
-        self.bodyMarkup = "body-markup" in [str(capability) for capability in dbusCalls.plain(reply.arguments()[0])]
-        return self.bodyMarkup
 
     def bodyText(self, body):
         escaped = html.escape(body, quote=False)
@@ -65,19 +56,57 @@ class Notifier(QObject):
         if (escaped == body):
             return body
         # only a server that answered without body-markup is known to show tags as written, so the body goes out escaped for every other server, including one that didn't answer
-        if (self.supportsBodyMarkup() is False):
+        if (self.bodyMarkup is False):
             return body
         return escaped
 
-    def send(self, summary, body, actions=(), onAction=None):
-        message = notifyMessage(summary, self.bodyText(body), actions)
-        reply = dbusCalls.call(self.bus, message, CALL_TIMEOUT_MS)
+    def send(self, summary, body, actions=(), onAction=None, onSent=None):
+        # onSent gets the notice's id and None, or None and the error name, once the server answers
+        if (self.bodyMarkup is None and html.escape(body, quote=False) != body):
+            # a body escaping would change waits for the server to say whether it reads markup
+            self.waitingSends.append((summary, body, actions, onAction, onSent))
+            self.askCapabilities()
+            return
+        self.sendNotice(summary, self.bodyText(body), actions, onAction, onSent)
+
+    def askCapabilities(self):
+        if (self.askingCapabilities):
+            return
+        self.askingCapabilities = True
+        message = QDBusMessage.createMethodCall(SERVICE, PATH, SERVICE, "GetCapabilities")
+        dbusCalls.callLater(self.bus, message, self.onCapabilities, self, CALL_TIMEOUT_MS)
+
+    def onCapabilities(self, reply):
+        self.askingCapabilities = False
+        # a server that can't answer yet is asked again with the next notice, and the bodies waiting now go out escaped
+        if (dbusCalls.failure(reply) is None and reply.arguments()):
+            self.bodyMarkup = "body-markup" in [str(capability) for capability in dbusCalls.plain(reply.arguments()[0])]
+        waiting = self.waitingSends
+        self.waitingSends = []
+        for summary, body, actions, onAction, onSent in waiting:
+            self.sendNotice(summary, self.bodyText(body), actions, onAction, onSent)
+
+    def sendNotice(self, summary, body, actions, onAction, onSent):
+        message = notifyMessage(summary, body, actions)
+        dbusCalls.callLater(self.bus, message, lambda reply: self.onNotified(reply, onAction, onSent), self, CALL_TIMEOUT_MS)
+
+    def onNotified(self, reply, onAction, onSent):
         if (dbusCalls.failure(reply) is not None or not reply.arguments()):
-            return (None, reply.errorName())
+            if (onSent is not None):
+                onSent(None, reply.errorName())
+            return
         notificationId = reply.arguments()[0]
         if (onAction is not None):
             self.handlers[notificationId] = onAction
-        return (notificationId, None)
+        if (onSent is not None):
+            onSent(notificationId, None)
+
+    def sendNow(self, summary, body):
+        # a process about to exit runs no event loop to take an answer, so this one waits for the server
+        reply = dbusCalls.call(self.bus, notifyMessage(summary, self.bodyText(body), ()), CALL_TIMEOUT_MS)
+        if (dbusCalls.failure(reply) is not None or not reply.arguments()):
+            return (None, reply.errorName())
+        return (reply.arguments()[0], None)
 
     @pyqtSlot(QDBusMessage)
     def onActionInvoked(self, message):

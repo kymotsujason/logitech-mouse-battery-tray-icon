@@ -48,6 +48,7 @@ def close(notificationId):
 
 def onCall(conn, sender, path, interface, method, params, invocation):
     if (method == "GetCapabilities"):
+        log("capabilities asked")
         invocation.return_value(GLib.Variant("(as)", (capabilities,)))
         return
     if (method == "Press"):

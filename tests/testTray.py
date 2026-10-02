@@ -187,10 +187,40 @@ class AppTests(unittest.TestCase):
 
     def lowBatterySends(self, replies):
         mouseApp = self.makeApp(True)
-        with mock.patch.object(mouseApp.notifier, "send", side_effect=replies) as send:
+        sent = []
+
+        def send(summary, body, actions=(), onAction=None, onSent=None):
+            sent.append(body)
+            onSent(*replies.pop(0))
+
+        with mock.patch.object(mouseApp.notifier, "send", send):
             for percent in (9, 8, 7):
                 mouseApp.mouseList.applyUPower(upower.UPowerMouse(PATH, "12ab34cd", "MX Master 3", hidpp.BatteryReading(percent, 0)))
-        return [each.args[1] for each in send.call_args_list]
+        return sent
+
+    def testALowBatteryNoticeOnItsWayIsntSentAgain(self):
+        mouseApp = self.makeApp(True)
+        held = []
+
+        def send(summary, body, actions=(), onAction=None, onSent=None):
+            held.append(onSent)
+
+        with mock.patch.object(mouseApp.notifier, "send", send):
+            for percent in (9, 8):
+                mouseApp.mouseList.applyUPower(upower.UPowerMouse(PATH, "12ab34cd", "MX Master 3", hidpp.BatteryReading(percent, 0)))
+            self.assertEqual(len(held), 1)
+            held[0](7, None)
+            mouseApp.mouseList.applyUPower(upower.UPowerMouse(PATH, "12ab34cd", "MX Master 3", hidpp.BatteryReading(7, 0)))
+        self.assertEqual(len(held), 1)
+
+    def testALowBatteryNoticeMakesNoBlockingCall(self):
+        mouseApp = self.makeApp(True)
+        blocking = []
+        realCall = dbusCalls.call
+        with mock.patch.object(dbusCalls, "call", lambda bus, message, *args: blocking.append(message.member()) or realCall(bus, message, *args)), contextlib.redirect_stderr(io.StringIO()):
+            mouseApp.mouseList.applyUPower(upower.UPowerMouse(PATH, "12ab34cd", "Tom & Jerry", hidpp.BatteryReading(9, 0)))
+            QTest.qWait(50)
+        self.assertEqual(blocking, [])
 
     def testALowBatteryNoticeThatFailsIsSentAgain(self):
         with contextlib.redirect_stderr(io.StringIO()):
@@ -235,7 +265,7 @@ class AppTests(unittest.TestCase):
 
     def notices(self, mouseApp):
         sent = []
-        return sent, mock.patch.object(mouseApp.notifier, "send", lambda summary, body, actions=(), onAction=None: sent.append((body, list(actions))))
+        return sent, mock.patch.object(mouseApp.notifier, "send", lambda summary, body, actions=(), onAction=None, onSent=None: sent.append((body, list(actions))))
 
     def testDontOpenAtLoginThatCantWriteSaysSoAndKeepsRunning(self):
         mouseApp = self.makeApp(False)
