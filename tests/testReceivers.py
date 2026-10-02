@@ -2,7 +2,9 @@ import errno
 import io
 import os
 import queue
+import shutil
 import sys
+import tempfile
 import time
 import unittest
 from unittest import mock
@@ -135,6 +137,34 @@ class WorkerTests(unittest.TestCase):
         self.assertIsNotNone(nextMessage(self.messages, "read"))
 
 
+class NodeSignatureTests(unittest.TestCase):
+    def setUp(self):
+        self.folder = tempfile.mkdtemp()
+        self.path = os.path.join(self.folder, "hidraw4")
+        open(self.path, "w").close()
+
+    def tearDown(self):
+        shutil.rmtree(self.folder, ignore_errors=True)
+
+    def testNewTimesKeepTheSignature(self):
+        before = receivers.nodeSignature(self.path)
+        os.utime(self.path, (1, 1))
+        self.assertEqual(receivers.nodeSignature(self.path), before)
+
+    def testANewModeOrANewNodeChangesIt(self):
+        before = receivers.nodeSignature(self.path)
+        os.chmod(self.path, 0o600)
+        changedMode = receivers.nodeSignature(self.path)
+        # a second file holds the old inode, so the replacement can't reuse its number
+        os.rename(self.path, self.path + ".old")
+        open(self.path, "w").close()
+        self.assertNotIn(before, (changedMode, receivers.nodeSignature(self.path)))
+        self.assertNotEqual(changedMode, receivers.nodeSignature(self.path))
+
+    def testAMissingNodeHasNone(self):
+        self.assertIsNone(receivers.nodeSignature(self.path + "x"))
+
+
 RECEIVER = "/dev/hidraw18"
 CABLE = "/dev/hidraw30"
 OTHER_REPORT = bytes([0x11, 1, 9, 0x00, 1, 2, 3]).ljust(20, b"\x00")
@@ -175,6 +205,7 @@ class ReceiverListTests(unittest.TestCase):
         self.patches = [
             mock.patch.object(hidpp, "findHidppNodes", self.nodes.find),
             mock.patch.object(hidpp.HidppNode, "open", self.nodes.open),
+            mock.patch.object(receivers, "nodeSignature", self.nodes.signature),
             mock.patch.object(hidpp, "PING_TIMEOUT", 0.2),
             mock.patch.object(hidpp, "REQUEST_TIMEOUT", 0.1),
             mock.patch.object(receivers, "WAKE_RETRY_MS", 300),
@@ -716,7 +747,7 @@ class ReceiverListTests(unittest.TestCase):
         QTest.qWait(800)
         self.assertEqual(pingsTo(receiver, 1), 2)
 
-    def testDeniedRetriesBackOffAndADevChangeStartsThemOver(self):
+    def testDeniedRetriesBackOff(self):
         with mock.patch.object(receivers, "DENIED_RETRY_MAX_MS", 400):
             self.nodes.deny(RECEIVER)
             self.mice.start()
@@ -724,9 +755,33 @@ class ReceiverListTests(unittest.TestCase):
             for i in range(3):
                 self.mice.retryDenied()
                 intervals.append(self.mice.deniedTimer.interval())
-            self.assertEqual(intervals, [100, 200, 400, 400])
-            self.mice.onDevChanged("/dev")
-            self.assertEqual(self.mice.deniedTimer.interval(), 100)
+        self.assertEqual(intervals, [100, 200, 400, 400])
+
+    def holdDeniedRetry(self):
+        self.mice.deniedRetryMs = 60000
+        self.mice.deniedTimer.start(self.mice.deniedRetryMs)
+
+    def testADevChangeLeavesAnUnchangedDeniedNodeToItsBackoff(self):
+        self.nodes.deny(RECEIVER)
+        self.mice.start()
+        self.holdDeniedRetry()
+        opened = []
+        realOpen = self.nodes.open
+        with mock.patch.object(hidpp.HidppNode, "open", lambda path, onEvent=None: opened.append(path) or realOpen(path, onEvent)):
+            # any account can change a /dev entry's times, which the watch sees like any other change
+            for i in range(3):
+                self.mice.onDevChanged("/dev")
+                self.assertTrue(waitUntil(lambda: not self.mice.settleTimer.isActive()))
+        self.assertEqual((opened, self.mice.deniedTimer.interval()), ([], 60000))
+
+    def testADeniedNodeWhoseDeviceChangedOpensAtTheNextScan(self):
+        self.nodes.deny(RECEIVER)
+        self.mice.start()
+        self.holdDeniedRetry()
+        self.nodes.allow(RECEIVER, mouseHandler())
+        self.mice.onDevChanged("/dev")
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"]))
+        self.assertEqual(self.mice.denied, set())
 
     def testANodeThatKeepsDyingAfterItOpensBacksOff(self):
         with mock.patch.object(receivers, "DENIED_RETRY_MAX_MS", 10000):

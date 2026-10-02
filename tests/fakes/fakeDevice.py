@@ -111,12 +111,20 @@ class FakeNodes:
         self.denied = set()
         self.failing = set()
         self.hidden = set()
+        self.generations = {}
 
     def add(self, path, handler):
         device = FakeDevice(handler)
         self.devices[path] = device
         self.everyDevice.append(device)
+        # a new device at a path is a new device node, as a replug or a granted access makes one
+        self.generations[path] = self.generations.get(path, 0) + 1
         return device
+
+    def signature(self, path):
+        if (path not in self.devices and path not in self.denied):
+            return None
+        return (path, self.generations.get(path, 0))
 
     def remove(self, path):
         self.devices.pop(path).unplug()

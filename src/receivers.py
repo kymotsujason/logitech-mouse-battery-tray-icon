@@ -128,6 +128,15 @@ def singleShotTimer(parent, interval, slot):
     return timer
 
 
+def nodeSignature(path):
+    # a replug makes a new inode and udev granting access changes the mode or group, while the times any account can set aren't part of it
+    try:
+        info = os.stat(path)
+    except OSError:
+        return None
+    return (info.st_ino, info.st_rdev, info.st_mode, info.st_uid, info.st_gid)
+
+
 class ReceiverMouse:
     def __init__(self, key, pathKey=False):
         self.key = key
@@ -175,6 +184,7 @@ class ReceiverList(QObject):
         super().__init__()
         self.nodes = {}
         self.denied = set()
+        self.deniedSignatures = {}
         self.mice = []
         self.stopped = False
         self.reportedErrors = set()
@@ -239,10 +249,6 @@ class ReceiverList(QObject):
     def onDevChanged(self, path):
         if (self.stopped):
             return
-        # a replug is the usual way a denied node gets its access, so the retry starts over at its shortest wait
-        self.deniedRetryMs = DENIED_RETRY_MS
-        if (self.deniedTimer.isActive()):
-            self.deniedTimer.start(self.deniedRetryMs)
         now = time.monotonic()
         if (self.settleSince is None or not self.settleTimer.isActive()):
             self.settleSince = now
@@ -257,12 +263,16 @@ class ReceiverList(QObject):
         removed = [path for path in self.nodes if path not in paths]
         for path in removed:
             self.closeNode(path)
-        self.denied &= set(paths)
+        self.keepDenied(paths)
         # a node that shows up at a path discovery dropped is a new device, so its errors get printed again
         self.reportedErrors = {entry for entry in self.reportedErrors if entry[0] in paths}
         for path in paths:
-            if (path not in self.nodes):
-                self.openNode(path)
+            if (path in self.nodes):
+                continue
+            # any account can set a /dev entry's times, so a denied node waits for its backoff unless its device node really changed
+            if (path in self.denied and self.deniedSignatures.get(path) == nodeSignature(path)):
+                continue
+            self.openNode(path)
         if (removed):
             self.searchAll()
         self.updateDeniedTimer()
@@ -275,7 +285,7 @@ class ReceiverList(QObject):
             node = hidpp.HidppNode.open(path)
         except OSError as error:
             self.reportError(path, "Couldn't open", error)
-            self.denied.add(path)
+            self.deny(path)
             return
         # a node whose pipe or thread can't be made is closed and left for the retry instead of leaking its fd, and the worker's messages queue on this thread until the state below exists
         worker = None
@@ -287,13 +297,23 @@ class ReceiverList(QObject):
                 worker.closePipe()
             node.close()
             self.reportError(path, "Couldn't start", error)
-            self.denied.add(path)
+            self.deny(path)
             return
         retryTimer = singleShotTimer(self, WAKE_RETRY_MS, lambda: self.requestSearch(path))
         identifyTimer = singleShotTimer(self, IDENTIFY_GAP_MS, lambda: self.runDeferredIdentifies(path))
         self.nodes[path] = NodeState(path, worker, retryTimer, identifyTimer)
         self.denied.discard(path)
+        self.deniedSignatures.pop(path, None)
         self.requestSearch(path)
+
+    def deny(self, path):
+        self.denied.add(path)
+        self.deniedSignatures[path] = nodeSignature(path)
+
+    def keepDenied(self, paths):
+        # a path discovery no longer lists may be a different device that took the same hidraw number
+        self.denied &= set(paths)
+        self.deniedSignatures = {path: signature for path, signature in self.deniedSignatures.items() if path in self.denied}
 
     def reportError(self, path, what, error):
         # an errno name tells a missing ACL from a failing device or from running out of fds, and printing each message once per path keeps a retry loop quiet
@@ -322,8 +342,7 @@ class ReceiverList(QObject):
 
     def retryDenied(self):
         before = (set(self.nodes), set(self.denied))
-        # a path discovery no longer lists may be a different device that took the same hidraw number
-        self.denied &= set(hidpp.findHidppNodes())
+        self.keepDenied(hidpp.findHidppNodes())
         for path in list(self.denied):
             self.openNode(path)
         self.deniedRetryMs = min(self.deniedRetryMs * 2, DENIED_RETRY_MAX_MS)
@@ -424,7 +443,7 @@ class ReceiverList(QObject):
         self.reportError(path, "Lost", error)
         self.closeNode(path)
         if (path in hidpp.findHidppNodes()):
-            self.denied.add(path)
+            self.deny(path)
             self.updateDeniedTimer()
         self.searchAll()
         self.changed.emit()
