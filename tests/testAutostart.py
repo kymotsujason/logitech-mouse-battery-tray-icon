@@ -197,6 +197,25 @@ class AutostartTests(unittest.TestCase):
                 autostart.setEnabled(self.configHome, False)
             self.assertEqual(os.listdir(linked), [])
 
+    def testAConfigFolderLinkFromAnotherAccountIsRefused(self):
+        with tempfile.TemporaryDirectory() as outer, tempfile.TemporaryDirectory() as linked:
+            configHome = os.path.join(outer, "config")
+            os.symlink(linked, configHome)
+            realLstat = os.lstat
+
+            def otherOwnerFor(path, *args, **kwargs):
+                info = realLstat(path, *args, **kwargs)
+                # the config folder itself is a link another account made, as a link from ~/.config to /etc/xdg would be
+                if (os.path.abspath(path) == configHome):
+                    fields = list(info[:10])
+                    fields[4] = os.getuid() + 1
+                    return os.stat_result(fields)
+                return info
+
+            with mock.patch.object(autostart.os, "lstat", otherOwnerFor), self.assertRaises(PermissionError):
+                autostart.setEnabled(configHome, False)
+            self.assertEqual(os.listdir(os.path.join(linked, "autostart")), [])
+
     def testALinkAtTheTemporaryNameIsntWrittenThrough(self):
         os.makedirs(os.path.dirname(self.path))
         with tempfile.TemporaryDirectory() as other:

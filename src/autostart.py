@@ -35,6 +35,16 @@ def readEntry(path):
 def writeText(path, text):
     # the new text replaces the old file only once it's all on disk, so a failed write leaves the old override whole
     folder = os.path.dirname(os.path.abspath(path))
+    # a link another account made anywhere along the path, such as ~/.config leading to /etc/xdg for a run as root, would lead the write into files that aren't this account's
+    prefix = os.sep
+    for part in os.path.abspath(path).strip(os.sep).split(os.sep):
+        prefix = os.path.join(prefix, part)
+        try:
+            info = os.lstat(prefix)
+        except FileNotFoundError:
+            break
+        if (stat.S_ISLNK(info.st_mode) and info.st_uid not in (os.getuid(), 0)):
+            raise PermissionError(errno.EACCES, "Permission denied", prefix)
     path = os.path.realpath(path)
     # a link can lead into another account's files, such as /etc for a run as root with the user's config, so both the folder the file sits in and the override's own folder, read without following a link, have to belong to this account
     if (os.stat(os.path.dirname(path)).st_uid != os.getuid() or os.lstat(folder).st_uid != os.getuid()):
