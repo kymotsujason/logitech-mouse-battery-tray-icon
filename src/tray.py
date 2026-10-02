@@ -245,10 +245,13 @@ class MouseBatteryApp(QObject):
     def showAbout(self):
         # a second click brings the open box forward instead of stacking another one
         if (self.aboutBox is None or sip.isdeleted(self.aboutBox) or not self.aboutBox.isVisible()):
-            # KDE's platform theme shows the box through its own message dialog, which adds the buttons again each time the same box is shown, so every opening gets a new one
+            # every opening gets a new box, since KDE's platform theme added the buttons again each time the same box was shown through its own dialog
             self.aboutBox = QMessageBox(QMessageBox.Icon.NoIcon, "About Mouse Battery", "Mouse Battery " + VERSION + "\n\nShows the battery of Logitech mice in the system tray.\n\n" + PROJECT_URL + "\n\nLicensed under the GNU GPL, version 3 or later.\nNot affiliated with Logitech.", QMessageBox.StandardButton.Ok)
             self.aboutBox.setIconPixmap(self.app.windowIcon().pixmap(64, 64))
             self.aboutBox.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+            # KDE's own dialog only passes button clicks back, so a close from its title bar left this box open off screen, and Qt before 6.6 never hands a box to the platform
+            if (hasattr(QMessageBox, "Option")):
+                self.aboutBox.setOption(QMessageBox.Option.DontUseNativeDialog)
         self.aboutBox.show()
         self.aboutBox.raise_()
         self.aboutBox.activateWindow()

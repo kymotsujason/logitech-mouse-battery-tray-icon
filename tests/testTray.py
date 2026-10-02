@@ -423,16 +423,25 @@ class AppTests(unittest.TestCase):
         self.assertTrue(mouseApp.aboutBox.isVisible())
         mouseApp.aboutBox.close()
 
-    def testAboutKeepsOneOkButtonUnderKdesMessageDialog(self):
+    def runAboutCycles(self, *ways):
         env = {key: value for key, value in os.environ.items() if key not in ("DISPLAY", "WAYLAND_DISPLAY")}
         env.update(QT_QPA_PLATFORM="offscreen", QT_QPA_PLATFORMTHEME="kde")
-        result = subprocess.run([sys.executable, os.path.join(FAKES, "aboutCycles.py")], env=env, capture_output=True, text=True, timeout=60)
+        result = subprocess.run([sys.executable, os.path.join(FAKES, "aboutCycles.py"), *ways], env=env, capture_output=True, text=True, timeout=60)
         self.assertEqual(result.returncode, 0, result.stderr)
         cycles = json.loads(result.stdout.splitlines()[-1])
         if (not cycles["helper"]):
             self.skipTest("Qt didn't load a platform theme with its own message dialog, such as KDE's")
+        return cycles
+
+    def testAboutKeepsOneOkButtonUnderKdesMessageDialog(self):
+        cycles = self.runAboutCycles("ok", "ok", "ok")
         # KDE's helper adds the buttons again each time the same box is shown
-        self.assertEqual(cycles["counts"], [1, 1, 1])
+        self.assertEqual(cycles["buttons"], [1, 1, 1])
+
+    def testAboutShowsAgainAfterItsWindowIsClosedUnderKdesMessageDialog(self):
+        cycles = self.runAboutCycles("close", "escape", "ok", "close")
+        # KDE's helper shows a box of its own, and closing that one from its title bar never closed the app's box
+        self.assertEqual(cycles["shown"], [1, 1, 1, 1])
 
     def testTheBaseColorIsCachedUntilTheReadTimerFires(self):
         mouseApp = self.makeApp(True)
