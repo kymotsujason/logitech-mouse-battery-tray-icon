@@ -206,7 +206,7 @@ class DeviceTests(unittest.TestCase):
         self.assertEqual((result.mice, result.unknown), ((), frozenset({1})))
         self.assertEqual([request for request in self.device.requests if request[2] != 0 or (request[3] >> 4) != 1], [])
 
-    def testAnIdentifyWhoseBudgetRunsOutAtTheBatteryIsUnknown(self):
+    def testAnIdentifyWhoseBudgetRunsOutAtTheBatteryFindsTheMouseWithoutAReading(self):
         answer = mouseHandler()
 
         def slowInfoAndBattery(request):
@@ -215,7 +215,8 @@ class DeviceTests(unittest.TestCase):
             return answer(request)
         self.device = FakeDevice(slowInfoAndBattery)
         # the unit id takes most of the budget, so the battery read times out on the budget instead of the mouse going quiet
-        self.assertEqual(hidpp.identifySlot(self.device.node(), 1, time.monotonic() + 0.45), (hidpp.UNKNOWN, None))
+        outcome, found = hidpp.identifySlot(self.device.node(), 1, time.monotonic() + 0.45)
+        self.assertEqual((outcome, found.unitId, found.reading, found.outcome), (hidpp.FOUND, "02bc524c", None, hidpp.ERROR))
 
     def testARequestWithItsBudgetSpentSendsNothing(self):
         self.device = FakeDevice(mouseHandler())

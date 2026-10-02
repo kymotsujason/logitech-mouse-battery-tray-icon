@@ -352,9 +352,9 @@ def identifySlot(node, slot, deadline=None):
         return (UNKNOWN, None)
     # the battery goes first, since a device decides how slowly it answers each name chunk and the reading is what the identify is for
     outcome, reading = readBattery(node, feature, deadline)
-    # a read cut off by the budget says the identify ran out of time, not that the mouse went quiet, so the slot is left to be looked at again
+    # a read cut off by the budget says the identify ran out of time, not that the mouse went quiet, so the mouse is kept and read again later as one that answered with an error
     if (outcome == TIMEOUT and time.monotonic() >= deadline):
-        return (UNKNOWN, None)
+        return (FOUND, FoundMouse(slot, unitId, None, feature, None, ERROR))
     name = readName(node, slot, deadline)
     return (FOUND, FoundMouse(slot, unitId, name, feature, reading, outcome))
 
