@@ -112,7 +112,8 @@ Mouse Battery: waiting for udev
 Mouse Battery: closing the access 1.0.x gave
 Mouse Battery: clearing the service's failed starts
 Mouse Battery: restarting the service if it runs"
-check "afterInstall.sh ran its steps in order" "$(grep -o 'Mouse Battery: .*' "$work/install2.log" | grep -v 'that step failed')" "$expected"
+# apt runs dpkg under a pseudo terminal, which ends every line the install scripts print with a carriage return
+check "afterInstall.sh ran its steps in order" "$(tr -d '\r' < "$work/install2.log" | grep -o 'Mouse Battery: .*' | grep -v 'that step failed')" "$expected"
 check "no step failed" "$(grep -c 'that step failed' "$work/install2.log")" "0"
 check "clearAccess.py closed the fake receiver" "$(grep -c "Closed access to $node" "$work/install2.log")" "1"
 check "the node belongs to root and the group, mode 0660" "$(stat -c '%U %G %a' "$node")" "root $name 660"
