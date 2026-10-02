@@ -269,7 +269,8 @@ class MouseBatteryApp(QObject):
             self.tray.setIcon(makeIcon(state, color))
             self.shownState = state
             self.shownColor = color
-        tooltip = "\n".join(lines)
+        # Plasma draws the tooltip as plain text, where an escaped name would show its entities, while Qt's own tray tooltip turns rich once it holds a tag, so a device name can't bring one in
+        tooltip = "\n".join(lines).replace("<", "").replace(">", "")
         if (tooltip != self.shownTooltip):
             self.tray.setToolTip(tooltip)
             self.shownTooltip = tooltip

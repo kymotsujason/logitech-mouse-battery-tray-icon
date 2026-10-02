@@ -274,6 +274,11 @@ class AppTests(unittest.TestCase):
         mouseApp.mouseList.applyUPower(upower.UPowerMouse(PATH, "12ab34cd", "Tom & Jerry", hidpp.BatteryReading(55, 0)))
         self.assertEqual(([action.text() for action in mouseApp.statusActions], mouseApp.shownTooltip), (["Tom && Jerry, 55%"], "Tom & Jerry, 55%"))
 
+    def testAngleBracketsInANameNeverReachTheTooltip(self):
+        mouseApp = self.makeApp(True)
+        mouseApp.mouseList.applyUPower(upower.UPowerMouse(PATH, "12ab34cd", '<img src="http://example.invalid/x">', hidpp.BatteryReading(55, 0)))
+        self.assertEqual(([action.text() for action in mouseApp.statusActions], mouseApp.tray.toolTip()), (['<img src="http://example.invalid/x">, 55%'], 'img src="http://example.invalid/x", 55%'))
+
     def testAboutOpensOneBox(self):
         mouseApp = self.makeApp(True)
         # the old modal about() would block the test, so it's stubbed for the run before the fix
