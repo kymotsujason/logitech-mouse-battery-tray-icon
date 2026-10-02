@@ -139,9 +139,24 @@ class ProcessTests(unittest.TestCase):
             with open(victim) as f:
                 self.assertEqual((canRun, f.read()), (True, "keep"))
 
-    def testNoRuntimeFolderMeansNoLock(self):
-        self.assertEqual(tray.takeLock(None), (True, None))
-        self.assertEqual(tray.takeLock(""), (True, None))
+    def testNoRuntimeFolderMeansNoLockAndSaysSo(self):
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors):
+            self.assertEqual(tray.takeLock(None), (True, None))
+            self.assertEqual(tray.takeLock(""), (True, None))
+        self.assertEqual(errors.getvalue(), "Running without the single copy lock, since XDG_RUNTIME_DIR isn't set\n" * 2)
+
+    def testALockThatCantBeOpenedIsPrinted(self):
+        errors = io.StringIO()
+        with tempfile.TemporaryDirectory() as folder, contextlib.redirect_stderr(errors):
+            self.assertEqual(tray.takeLock(os.path.join(folder, "missing")), (True, None))
+        self.assertTrue(errors.getvalue().startswith("Running without the single copy lock, since it couldn't be opened: [Errno 2]"), errors.getvalue())
+
+    def testACopyThatFindsAnotherRunningSaysSoOnStderr(self):
+        errors = io.StringIO()
+        with mock.patch.object(tray.signal, "signal"), mock.patch.object(tray, "raiseNiceness"), mock.patch.object(tray, "QApplication"), mock.patch.object(tray, "takeLock", return_value=(False, None)), mock.patch.object(tray, "Notifier"), mock.patch.object(sys, "excepthook", sys.excepthook), mock.patch.object(exceptionHooks.threading, "excepthook", exceptionHooks.threading.excepthook), contextlib.redirect_stderr(errors):
+            self.assertEqual(tray.main(), 0)
+        self.assertEqual(errors.getvalue(), "Mouse Battery is already running.\n")
 
     def testMainInstallsTheExceptionHooks(self):
         with mock.patch.object(tray.signal, "signal"), mock.patch.object(sys, "excepthook", sys.excepthook), mock.patch.object(exceptionHooks.threading, "excepthook", exceptionHooks.threading.excepthook), mock.patch.object(tray, "raiseNiceness"), mock.patch.object(tray, "QApplication"), mock.patch.object(tray, "takeLock", return_value=(False, None)), mock.patch.object(tray, "Notifier"):
@@ -494,7 +509,8 @@ class AppTests(unittest.TestCase):
         errors = io.StringIO()
         with contextlib.redirect_stderr(errors):
             self.lowBatterySends([(None, "org.freedesktop.DBus.Error.ServiceUnknown")] * 3)
-        self.assertEqual(errors.getvalue(), "Couldn't send the low battery notice for MX Master 3: org.freedesktop.DBus.Error.ServiceUnknown\n")
+        # the recording bus has no service, so the service watcher prints its own line beside this one
+        self.assertEqual([line for line in errors.getvalue().splitlines() if "low battery" in line], ["Couldn't send the low battery notice for MX Master 3: org.freedesktop.DBus.Error.ServiceUnknown"])
 
     def testTheMenuALeftClickAndTheTimerEachAskTheServiceToRead(self):
         with mock.patch.object(serviceClient.ServiceWatcher, "readAll") as readAll:

@@ -1,4 +1,5 @@
 import math
+import sys
 from dataclasses import dataclass
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal, pyqtSlot
@@ -139,6 +140,7 @@ class UPowerWatcher(QObject):
         self.generation = 0
         self.refreshing = set()
         self.refreshAgain = set()
+        self.printedErrors = set()
 
     def start(self):
         # subscribing before listing keeps a device added in between from going missing
@@ -181,6 +183,7 @@ class UPowerWatcher(QObject):
         paths, error = pathsFrom(reply)
         if (error is not None):
             if (error not in ABSENT_ERRORS):
+                self.reportError(error)
                 self.enumerateDue = True
                 self.scheduleRetry()
             else:
@@ -189,6 +192,13 @@ class UPowerWatcher(QObject):
         self.enumerateDue = False
         for path in paths:
             self.refresh(path)
+
+    def reportError(self, error):
+        # the retries keep going quietly, so each kind of failure gets one line
+        if (error in self.printedErrors):
+            return
+        self.printedErrors.add(error)
+        print("UPower answered " + error, file=sys.stderr)
 
     def scheduleRetry(self):
         if (not self.retryTimer.isActive()):
@@ -226,6 +236,7 @@ class UPowerWatcher(QObject):
                 self.dropPath(path)
             elif (error not in ABSENT_ERRORS):
                 # a call that failed for another reason says nothing about the mouse, so it keeps its last reading until the retry
+                self.reportError(error)
                 self.retryPaths.add(path)
                 self.scheduleRetry()
             return

@@ -187,7 +187,13 @@ class TrayHost(QObject):
         self.sendNotice("Mouse Battery needs the AppIndicator extension to show in the top bar.", [action])
 
     def sendNotice(self, body, actions):
-        self.notifier.send(APP_NAME, body, actions + [("dontOpen", "Don't Open at Login")], self.onNoticeAction)
+        # without a tray the app has no other way to show itself, so the journal says so too
+        print("No system tray found: " + body, file=sys.stderr)
+        self.notifier.send(APP_NAME, body, actions + [("dontOpen", "Don't Open at Login")], self.onNoticeAction, onSent=self.onNoticeSent)
+
+    def onNoticeSent(self, notificationId, error):
+        if (notificationId is None):
+            print("Couldn't send the no tray notice: " + str(error), file=sys.stderr)
 
     def onNoticeAction(self, key):
         if (key == "turnOn" and self.extensionUuid is not None):

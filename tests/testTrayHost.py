@@ -62,7 +62,8 @@ class RunCommandTests(unittest.TestCase):
 
 class TrayHostTests(unittest.TestCase):
     def setUp(self):
-        self.patches = [mock.patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": "XFCE"})]
+        # the no tray notice also goes to stderr, which would fill the test output
+        self.patches = [mock.patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": "XFCE"}), mock.patch.object(sys, "stderr", io.StringIO())]
         for patch in self.patches:
             patch.start()
         self.bus = QDBusConnection.connectToBus("unix:path=/nonexistent/bus", "trayHostTestBus")
@@ -236,6 +237,16 @@ class TrayHostTests(unittest.TestCase):
             host.checkHost()
         found[0]("ubuntu-appindicators@ubuntu.com")
         self.assertEqual((self.readies, sent), ([1], []))
+
+    def testTheNoTrayNoticeIsLoggedAndSoIsItsFailure(self):
+        host = self.makeHost(False)
+        errors = io.StringIO()
+
+        def failingSend(summary, body, actions=(), onAction=None, onSent=None):
+            onSent(None, "org.freedesktop.DBus.Error.ServiceUnknown")
+        with mock.patch.object(host.notifier, "send", failingSend), mock.patch.object(trayHost, "askNameHasOwner", ownerAnswering(False)), mock.patch.object(trayHost, "askHostRegistered", answering(False)), contextlib.redirect_stderr(errors):
+            host.onNoTray()
+        self.assertEqual(errors.getvalue(), "No system tray found: Mouse Battery needs a system tray with StatusNotifierItem support to show its icon.\nCouldn't send the no tray notice: org.freedesktop.DBus.Error.ServiceUnknown\n")
 
     def testDontOpenAtLoginIsHandedToTheTray(self):
         host = self.makeHost(False)

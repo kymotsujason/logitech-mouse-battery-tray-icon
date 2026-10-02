@@ -1,3 +1,4 @@
+import io
 import os
 import shutil
 import signal
@@ -45,6 +46,7 @@ class ServiceWatcherTests(unittest.TestCase):
         self.names = []
         self.states = []
         self.watcher = None
+        self.captureErrors()
 
     def tearDown(self):
         if (self.watcher is not None):
@@ -167,6 +169,46 @@ class ServiceWatcherTests(unittest.TestCase):
         self.startWatcher()
         self.assertTrue(waitUntil(lambda: None in self.states))
         self.assertEqual(self.goodStates(), [])
+
+    def errorLines(self):
+        return self.errors.getvalue().splitlines()
+
+    def captureErrors(self):
+        self.errors = io.StringIO()
+        patch = mock.patch.object(sys, "stderr", self.errors)
+        patch.start()
+        self.patches.append(patch)
+
+    def testAnUnreachableServiceIsPrintedOnceAndItsReturnOnce(self):
+        self.privateBus = PrivateBus()
+        self.startWatcher()
+        self.assertTrue(waitUntil(lambda: self.states.count(None) >= 3))
+        self.startFake()
+        self.assertTrue(waitUntil(lambda: self.goodStates()))
+        lines = self.errorLines()
+        self.assertEqual(len(lines), 2, lines)
+        self.assertTrue(lines[0].startswith("Couldn't reach the battery service: org.freedesktop.DBus.Error.ServiceUnknown"), lines[0])
+        self.assertEqual(lines[1], "Reached the battery service again")
+
+    def testAServiceThatGoesAwayIsPrinted(self):
+        self.privateBus = PrivateBus()
+        self.startFake()
+        self.startWatcher()
+        self.assertTrue(waitUntil(lambda: self.goodStates()))
+        self.stopFake()
+        self.assertTrue(waitUntil(lambda: self.states[-1] is None))
+        count = len(self.goodStates())
+        self.startFake()
+        self.assertTrue(waitUntil(lambda: len(self.goodStates()) > count))
+        self.assertEqual(self.errorLines(), ["The battery service went away", "Reached the battery service again"])
+
+    def testAStateThatDoesntDecodeIsPrintedOnce(self):
+        self.privateBus = PrivateBus()
+        self.writeState("not json")
+        self.startFake()
+        self.startWatcher()
+        self.assertTrue(waitUntil(lambda: self.states.count(None) >= 3))
+        self.assertEqual(self.errorLines(), ["The battery service sent a state this version can't read"])
 
     def testACallThatCantBeSentCountsAsAFailedCall(self):
         self.names.append("deadBus" + str(id(self)))

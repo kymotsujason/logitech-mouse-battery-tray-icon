@@ -1,3 +1,5 @@
+import sys
+
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal, pyqtSlot
 from PyQt6.QtDBus import QDBusConnection, QDBusError, QDBusMessage, QDBusServiceWatcher
 
@@ -28,6 +30,8 @@ class ServiceWatcher(QObject):
         self.retryTimer.timeout.connect(self.getState)
         self.ownerWatcher = None
         self.readSent = False
+        # each kind of trouble is printed once until the service answers again, so a retry loop stays quiet in the journal
+        self.problems = set()
 
     def start(self):
         # subscribing by the service's name before the first call keeps a forged signal out and a change in between in
@@ -46,7 +50,14 @@ class ServiceWatcher(QObject):
     def getState(self):
         # Qt returns False without calling either slot when the connection is down
         if (not self.callService("GetState", self.onReply, self.onError)):
+            self.reportProblem("noConnection", "Couldn't reach the battery service: the system bus connection is down")
             self.fail()
+
+    def reportProblem(self, kind, line):
+        if (kind in self.problems):
+            return
+        self.problems.add(kind)
+        print(line, file=sys.stderr)
 
     def readAll(self):
         self.callService("ReadAll", self.onReadAllDone, self.onReadAllFailed)
@@ -61,8 +72,12 @@ class ServiceWatcher(QObject):
     def onReply(self, message):
         state = stateFrom(message)
         if (state is None):
+            self.reportProblem("undecodable", "The battery service sent a state this version can't read")
             self.fail()
             return
+        if (self.problems):
+            self.problems.clear()
+            print("Reached the battery service again", file=sys.stderr)
         self.retryMs = RETRY_MS
         self.stateChanged.emit(state)
         if (not self.readSent):
@@ -72,6 +87,7 @@ class ServiceWatcher(QObject):
 
     @pyqtSlot(QDBusError, QDBusMessage)
     def onError(self, error, message):
+        self.reportProblem(error.name(), "Couldn't reach the battery service: " + error.name() + ": " + error.message())
         self.fail()
 
     @pyqtSlot(QDBusMessage)
@@ -86,12 +102,14 @@ class ServiceWatcher(QObject):
     def onStateChanged(self, message):
         state = stateFrom(message)
         if (state is None):
+            self.reportProblem("undecodable", "The battery service sent a state this version can't read")
             self.fail()
             return
         self.stateChanged.emit(state)
 
     def onOwnerChanged(self, name, oldOwner, newOwner):
         if (not newOwner):
+            self.reportProblem("gone", "The battery service went away")
             self.stateChanged.emit(None)
             return
         self.retryTimer.stop()

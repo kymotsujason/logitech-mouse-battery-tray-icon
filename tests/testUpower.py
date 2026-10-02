@@ -1,4 +1,7 @@
+import contextlib
+import io
 import os
+import sys
 import time
 import unittest
 from unittest import mock
@@ -210,6 +213,12 @@ def settle():
 
 
 class RetryTests(unittest.TestCase):
+    def setUp(self):
+        # the watcher prints each failure it retries, which would fill the test output
+        patch = mock.patch.object(sys, "stderr", io.StringIO())
+        patch.start()
+        self.addCleanup(patch.stop)
+
     def makeWatcher(self, answer):
         bus = ScriptedBus(answer)
         watcher = upower.UPowerWatcher(bus)
@@ -230,6 +239,14 @@ class RetryTests(unittest.TestCase):
         bus, watcher = self.makeWatcher(failWith("org.freedesktop.DBus.Error.NoReply"))
         watcher.start()
         self.assertTrue(waitFor(lambda: watcher.enumerateDue and watcher.retryTimer.isActive()))
+
+    def testAnErrorThatGetsRetriedIsPrintedOnce(self):
+        errors = io.StringIO()
+        with mock.patch.object(upower, "RETRY_MS", 10), mock.patch.object(upower, "RETRY_MAX_MS", 20), contextlib.redirect_stderr(errors):
+            bus, watcher = self.makeWatcher(failWith("org.freedesktop.DBus.Error.NoReply"))
+            watcher.start()
+            self.assertTrue(waitFor(lambda: len(bus.calls) >= 3))
+        self.assertEqual(errors.getvalue(), "UPower answered org.freedesktop.DBus.Error.NoReply\n")
 
     def testNoUPowerOnTheBusIsntRetried(self):
         for name in upower.ABSENT_ERRORS:
@@ -320,6 +337,10 @@ class BusTests(unittest.TestCase):
         self.addCleanup(QDBusConnection.disconnectFromBus, "upowerControlBus")
         self.changes = []
         self.removals = []
+        # a failed GetAll the fake is told to give is printed by the watcher
+        patch = mock.patch.object(sys, "stderr", io.StringIO())
+        patch.start()
+        self.addCleanup(patch.stop)
 
     def makeWatcher(self):
         watcher = upower.UPowerWatcher(self.connection)

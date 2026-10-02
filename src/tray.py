@@ -85,13 +85,16 @@ def raiseNiceness(target=TARGET_NICENESS):
 
 
 def takeLock(runtimeDir):
+    # a run without the lock can't tell whether another copy is running, so the journal says why it went ahead
     if (not runtimeDir):
+        print("Running without the single copy lock, since XDG_RUNTIME_DIR isn't set", file=sys.stderr)
         return (True, None)
     try:
         # a link at the lock's name could point a run with someone else's environment at a file to truncate, so it isn't followed and nothing is truncated
         fd = os.open(os.path.join(runtimeDir, LOCK_NAME), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
         handle = os.fdopen(fd, "r+")
-    except OSError:
+    except OSError as error:
+        print("Running without the single copy lock, since it couldn't be opened: " + str(error), file=sys.stderr)
         return (True, None)
     try:
         fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -360,6 +363,8 @@ def main():
     app.setQuitOnLastWindowClosed(False)
     canRun, lockHandle = takeLock(os.environ.get("XDG_RUNTIME_DIR"))
     if (not canRun):
+        # the notice can fail as the process exits, and a launch that does nothing should still leave a line
+        print("Mouse Battery is already running.", file=sys.stderr)
         Notifier().sendNow(APP_NAME, "Mouse Battery is already running.")
         return 0
     mouseApp = MouseBatteryApp(app)
