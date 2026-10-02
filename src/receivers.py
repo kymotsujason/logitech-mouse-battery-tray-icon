@@ -19,7 +19,7 @@ DENIED_RETRY_MAX_MS = 300 * 1000
 READ_ALL_GAP_MS = 1000
 # any local account can ask for a read, so the search a read brings with it can't enumerate every slot at the read's own rate
 READ_ALL_SEARCH_GAP_MS = 60 * 1000
-# a node that served this long before it died counts as a one-off rather than a failing device, so its backoff and its printed error start over
+# a node that served this long before it died counts as a one-off instead of a failing device, so its backoff and its printed error start over
 STABLE_MS = 60 * 1000
 # /dev churn restarts the settle wait, and this caps how far the scan it delays can be pushed out
 SETTLE_CEILING_MS = 5 * 1000

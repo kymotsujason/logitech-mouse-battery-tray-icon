@@ -34,7 +34,7 @@ def seatKeepsAccess(path, sysRoot, udevRoot):
 
 
 def closeNode(path, gid, keepAcl=False):
-    # the group goes on before the ACL comes off, so a step that fails leaves the node open to the seat rather than to no one
+    # the group goes on before the ACL comes off, so a step that fails leaves the node open to the seat instead of to no one
     os.chown(path, 0, gid)
     os.chmod(path, 0o660)
     if (keepAcl):
