@@ -11,5 +11,5 @@ if (os.environ.get("LIVE_NOTICE_MS")):
     trayHost.NO_TRAY_NOTICE_MS = int(os.environ["LIVE_NOTICE_MS"])
 if (os.environ.get("LIVE_EARLY_TRAY")):
     # the control for checkLateTray.sh builds the tray icon before any host, the way Qt 6.4's cached check breaks it
-    trayHost.hostRegistered = lambda bus: True
+    trayHost.askHostRegistered = lambda bus, owner, onAnswer: onAnswer(True)
 sys.exit(tray.main())
