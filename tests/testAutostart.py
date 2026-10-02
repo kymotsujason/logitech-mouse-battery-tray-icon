@@ -178,6 +178,25 @@ class AutostartTests(unittest.TestCase):
             with open(target) as f:
                 self.assertEqual(f.read(), original)
 
+    def testAnAutostartFolderLinkFromAnotherAccountIsRefused(self):
+        folder = os.path.dirname(self.path)
+        with tempfile.TemporaryDirectory() as linked:
+            os.symlink(linked, folder)
+            realLstat = os.lstat
+
+            def otherOwnerFor(path, *args, **kwargs):
+                info = realLstat(path, *args, **kwargs)
+                # the autostart folder is a link another account made, as a link to /etc/xdg/autostart would be
+                if (os.path.abspath(path) == folder):
+                    fields = list(info[:10])
+                    fields[4] = os.getuid() + 1
+                    return os.stat_result(fields)
+                return info
+
+            with mock.patch.object(autostart.os, "lstat", otherOwnerFor), self.assertRaises(PermissionError):
+                autostart.setEnabled(self.configHome, False)
+            self.assertEqual(os.listdir(linked), [])
+
     def testALinkAtTheTemporaryNameIsntWrittenThrough(self):
         os.makedirs(os.path.dirname(self.path))
         with tempfile.TemporaryDirectory() as other:
