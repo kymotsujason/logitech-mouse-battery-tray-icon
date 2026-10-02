@@ -43,6 +43,11 @@ UNKNOWN = "unknown"
 CONNECTION_NOTIFICATION = 0x41
 DEVICE_SLOTS = [1, 2, 3, 4, 5, 6, 0xFF]
 PING_TIMEOUT = 0.25
+NAME_LIMIT = 64
+NAME_CHUNKS = 16
+# a whole identify and a whole search are bounded too, since a device picks how slowly it answers each request within them
+IDENTIFY_BUDGET = 5.0
+SEARCH_BUDGET = 20.0
 
 CHARGING_NAMES = ["discharging", "charging", "charging slowly", "full", "charging error", "pending charge", "unknown"]
 # HID++ defines the first five codes, and the last two only come from UPower's states
@@ -100,7 +105,8 @@ def readUevent(text):
     fields = {}
     for line in text.splitlines():
         key, separator, value = line.partition("=")
-        if (separator):
+        # a device string carrying a newline would otherwise add lines of its own, and the first line for a key is the kernel's
+        if (separator and key not in fields and not any(unicodedata.category(character).startswith("C") for character in value)):
             fields[key] = value
     return fields
 
@@ -205,24 +211,34 @@ class HidppNode:
         return reply
 
 
-def getFeatureIndex(node, deviceIndex, featureId):
-    reply = node.request(deviceIndex, FEATURE_ROOT, 0, bytes([featureId >> 8, featureId & 0xFF]))
+def timeLeft(deadline):
+    # None keeps the per-request default, and a spent budget gives a timeout the request returns on at once
+    if (deadline is None):
+        return None
+    return min(REQUEST_TIMEOUT, deadline - time.monotonic())
+
+
+def getFeatureIndex(node, deviceIndex, featureId, deadline=None):
+    reply = node.request(deviceIndex, FEATURE_ROOT, 0, bytes([featureId >> 8, featureId & 0xFF]), timeout=timeLeft(deadline))
     if (reply is None or reply[0] == 0):
         return None
     return reply[0]
 
 
-def readName(node, deviceIndex):
-    featureIndex = getFeatureIndex(node, deviceIndex, FEATURE_NAME)
+def readName(node, deviceIndex, deadline=None):
+    featureIndex = getFeatureIndex(node, deviceIndex, FEATURE_NAME, deadline)
     if (featureIndex is None):
         return None
-    reply = node.request(deviceIndex, featureIndex, 0)
+    reply = node.request(deviceIndex, featureIndex, 0, timeout=timeLeft(deadline))
     if (reply is None):
         return None
-    length = reply[0]
+    length = min(reply[0], NAME_LIMIT)
     name = b""
-    while (len(name) < length):
-        reply = node.request(deviceIndex, featureIndex, 1, bytes([len(name)]))
+    # a long report carries 16 name bytes, so this many chunks covers any name a device can declare, and a device answering with short reports stops here instead of driving one request per 3 bytes
+    for _ in range(NAME_CHUNKS):
+        if (len(name) >= length):
+            break
+        reply = node.request(deviceIndex, featureIndex, 1, bytes([len(name)]), timeout=timeLeft(deadline))
         if (reply is None):
             return None
         chunk = reply[:length - len(name)]
@@ -232,33 +248,33 @@ def readName(node, deviceIndex):
     return cleanText(name.decode("utf-8", "replace"))
 
 
-def lookupFeature(node, deviceIndex, featureId):
-    kind, reply = node.requestOutcome(deviceIndex, FEATURE_ROOT, 0, bytes([featureId >> 8, featureId & 0xFF]))
+def lookupFeature(node, deviceIndex, featureId, deadline=None):
+    kind, reply = node.requestOutcome(deviceIndex, FEATURE_ROOT, 0, bytes([featureId >> 8, featureId & 0xFF]), timeout=timeLeft(deadline))
     if (kind != ANSWER):
         return (kind, None)
     return (ANSWER, reply[0])
 
 
-def readDeviceType(node, deviceIndex):
-    kind, nameIndex = lookupFeature(node, deviceIndex, FEATURE_NAME)
+def readDeviceType(node, deviceIndex, deadline=None):
+    kind, nameIndex = lookupFeature(node, deviceIndex, FEATURE_NAME, deadline)
     if (kind != ANSWER or nameIndex == 0):
         return (kind, None)
-    kind, reply = node.requestOutcome(deviceIndex, nameIndex, 2)
+    kind, reply = node.requestOutcome(deviceIndex, nameIndex, 2, timeout=timeLeft(deadline))
     if (kind != ANSWER):
         return (kind, None)
     return (ANSWER, reply[0])
 
 
-def findBattery(node, deviceIndex):
+def findBattery(node, deviceIndex, deadline=None):
     for featureId in BATTERY_FEATURES:
-        kind, featureIndex = lookupFeature(node, deviceIndex, featureId)
+        kind, featureIndex = lookupFeature(node, deviceIndex, featureId, deadline)
         if (kind != ANSWER):
             return (kind, None)
         if (featureIndex == 0):
             continue
         hasPercent = (featureId == FEATURE_BATTERY_STATUS)
         if (featureId == FEATURE_UNIFIED_BATTERY):
-            kind, capabilities = node.requestOutcome(deviceIndex, featureIndex, 0)
+            kind, capabilities = node.requestOutcome(deviceIndex, featureIndex, 0, timeout=timeLeft(deadline))
             if (kind != ANSWER):
                 return (kind, None)
             # bit 1 of the capability flags says whether the device reports a percentage
@@ -267,13 +283,16 @@ def findBattery(node, deviceIndex):
     return (ANSWER, None)
 
 
-def readUnitId(node, deviceIndex):
-    kind, infoIndex = lookupFeature(node, deviceIndex, FEATURE_DEVICE_INFO)
+def readUnitId(node, deviceIndex, deadline=None):
+    kind, infoIndex = lookupFeature(node, deviceIndex, FEATURE_DEVICE_INFO, deadline)
     if (kind != ANSWER or infoIndex == 0):
         return (kind, None)
-    kind, reply = node.requestOutcome(deviceIndex, infoIndex, 0)
+    kind, reply = node.requestOutcome(deviceIndex, infoIndex, 0, timeout=timeLeft(deadline))
     if (kind != ANSWER):
         return (kind, None)
+    # a short report leaves fewer than the four bytes a unit id needs, and a truncated one would collide with another mouse's
+    if (len(reply) < 5):
+        return (ANSWER, None)
     unitId = reply[1:5].hex()
     return (ANSWER, None if unitId == "00000000" else unitId)
 
@@ -312,31 +331,36 @@ def pingSlots(node, slots=None, timeout=None):
     return sorted(answered)
 
 
-def identifySlot(node, slot):
-    kind, deviceType = readDeviceType(node, slot)
+def identifySlot(node, slot, deadline=None):
+    if (deadline is None):
+        deadline = time.monotonic() + IDENTIFY_BUDGET
+    kind, deviceType = readDeviceType(node, slot, deadline)
     if (kind != ANSWER):
         return (UNKNOWN, None)
     if (deviceType not in MOUSE_KINDS):
         return (SKIP, None)
-    kind, feature = findBattery(node, slot)
+    kind, feature = findBattery(node, slot, deadline)
     if (kind != ANSWER):
         return (UNKNOWN, None)
     if (feature is None):
         return (SKIP, None)
-    kind, unitId = readUnitId(node, slot)
+    kind, unitId = readUnitId(node, slot, deadline)
     if (kind != ANSWER):
         return (UNKNOWN, None)
-    name = readName(node, slot)
-    outcome, reading = readBattery(node, feature)
+    name = readName(node, slot, deadline)
+    outcome, reading = readBattery(node, feature, deadline)
     return (FOUND, FoundMouse(slot, unitId, name, feature, reading, outcome))
 
 
-def searchNode(node, skipped=frozenset(), pingTimeout=None):
+def searchNode(node, skipped=frozenset(), pingTimeout=None, deadline=None):
+    if (deadline is None):
+        deadline = time.monotonic() + SEARCH_BUDGET
     mice = []
     newSkipped = set()
     unknown = set()
     for slot in pingSlots(node, [slot for slot in DEVICE_SLOTS if slot not in skipped], pingTimeout):
-        outcome, found = identifySlot(node, slot)
+        # one slot's budget can't eat the whole search, and a search that runs out leaves the rest unknown so they're looked at again
+        outcome, found = identifySlot(node, slot, min(deadline, time.monotonic() + IDENTIFY_BUDGET))
         if (outcome == FOUND):
             mice.append(found)
         elif (outcome == SKIP):
@@ -394,9 +418,9 @@ def parseUnifiedStatus(params, hasPercent):
     return BatteryReading(None, charging, level=unifiedLevelName(params[1]))
 
 
-def readBattery(node, feature):
+def readBattery(node, feature, deadline=None):
     function = 1 if feature.featureId == FEATURE_UNIFIED_BATTERY else 0
-    kind, reply = node.requestOutcome(feature.deviceIndex, feature.featureIndex, function)
+    kind, reply = node.requestOutcome(feature.deviceIndex, feature.featureIndex, function, timeout=timeLeft(deadline))
     if (kind != ANSWER):
         return (kind, None)
     if (feature.featureId == FEATURE_UNIFIED_BATTERY):

@@ -22,6 +22,16 @@ class FindNodeTests(unittest.TestCase):
         fields = hidpp.readUevent("DRIVER=hid-generic\nHID_ID=0003:0000046D:0000C54F\nnoise\n")
         self.assertEqual(fields, {"DRIVER": "hid-generic", "HID_ID": "0003:0000046D:0000C54F"})
 
+    def testALaterLineCannotOverrideTheKernelsOwn(self):
+        # HID_NAME holds the device's own product string, so a newline in it would otherwise add lines the kernel never wrote
+        fields = hidpp.readUevent("DRIVER=hid-logitech-hidpp\nHID_ID=0003:00001234:00005678\nHID_NAME=x\nHID_ID=0003:0000046D:0000C54F\nDRIVER=hid-generic\n")
+        self.assertEqual(fields["HID_ID"], "0003:00001234:00005678")
+        self.assertEqual(fields["DRIVER"], "hid-logitech-hidpp")
+
+    def testAForgedUeventDoesNotPassTheNodeCheck(self):
+        forged = "DRIVER=hid-logitech-hidpp\nHID_ID=0003:00001234:00005678\nHID_NAME=x\nHID_ID=0003:0000046D:0000C54F\nDRIVER=hid-generic\n"
+        self.assertFalse(hidpp.isHidppNode(forged, C54F_DESCRIPTOR))
+
     def testFindsEveryUsbLogitechHidppNodeOnHidGeneric(self):
         with tempfile.TemporaryDirectory() as root:
             self.makeNode(root, "hidraw2", "0003:0000046D:0000C54F", GENERIC_DESKTOP_DESCRIPTOR)
@@ -160,6 +170,32 @@ class DeviceTests(unittest.TestCase):
         self.assertEqual(hidpp.readName(self.device.node(), 1), "PRO X3 SUPERSTRIKE")
         chunkStarts = [r[4] for r in self.device.requests if r[2] == 2 and (r[3] >> 4) == 1]
         self.assertEqual(chunkStarts, [0, 16])
+
+    def testADeviceDrippingNameChunksRunsOutOfChunksInsteadOfRequests(self):
+        # a device that declares a long name and answers each chunk with a short report would otherwise drive one request per 3 bytes
+        def dripping(request):
+            if (request[2] == 2 and (request[3] >> 4) == 0):
+                return [reply(request, [255])]
+            if (request[2] == 2 and (request[3] >> 4) == 1):
+                return [bytes([hidpp.SHORT_REPORT, request[1], request[2], request[3], 0x41, 0x42, 0x43])]
+            return mouseHandler()(request)
+        self.device = FakeDevice(dripping)
+        hidpp.readName(self.device.node(), 1)
+        chunks = [r for r in self.device.requests if r[2] == 2 and (r[3] >> 4) == 1]
+        self.assertEqual(len(chunks), hidpp.NAME_CHUNKS)
+
+    def testAnIdentifyGivesUpOnceItsBudgetIsSpent(self):
+        self.device = FakeDevice(mouseHandler())
+        spent = time.monotonic() - 1
+        self.assertEqual(hidpp.identifySlot(self.device.node(), 1, spent), (hidpp.UNKNOWN, None))
+
+    def testAShortDeviceInfoReplyGivesNoUnitIdInsteadOfATruncatedOne(self):
+        def shortInfo(request):
+            if (request[2] == 3 and (request[3] >> 4) == 0):
+                return [bytes([hidpp.SHORT_REPORT, request[1], request[2], request[3], 0x07, 0xAB, 0xCD])]
+            return mouseHandler()(request)
+        self.device = FakeDevice(shortInfo)
+        self.assertEqual(hidpp.readUnitId(self.device.node(), 1), (hidpp.ANSWER, None))
 
     def testFindsUnifiedBatteryOnReceiverSlot(self):
         self.device = FakeDevice(mouseHandler())
