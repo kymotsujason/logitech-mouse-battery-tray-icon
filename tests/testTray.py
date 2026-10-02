@@ -255,8 +255,10 @@ class AppTests(unittest.TestCase):
             with open(os.path.join(folder, "version.py"), "w") as f:
                 f.write("VERSION = \"9.9.9\"\n")
             errors = io.StringIO()
-            with mock.patch.object(installWatch, "APP_FOLDER", folder), mock.patch.object(installWatch.subprocess, "run", return_value=mock.Mock(returncode=0)), mock.patch.object(installWatch.os, "execv", side_effect=OSError(8, "Exec format error")), contextlib.redirect_stderr(errors):
+            with mock.patch.object(installWatch, "APP_FOLDER", folder), mock.patch.object(installWatch.os, "execv", side_effect=OSError(8, "Exec format error")), contextlib.redirect_stderr(errors):
                 mouseApp.installWatcher.onChanged()
+                self.assertTrue(waitUntil(lambda: mouseApp.installWatcher.check is None, timeout=10.0))
+        self.assertIn("couldn't start", errors.getvalue())
         self.assertEqual((mouseApp.mouseList.stopped, mouseApp.mouseList.readTimer.isActive()), (False, True))
 
     def testARemovedStatusLineIsFreed(self):

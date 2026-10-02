@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -51,17 +52,6 @@ class InstallWatchTests(unittest.TestCase):
                 self.watcher.watcher.removePaths(self.watcher.watcher.files() + self.watcher.watcher.directories())
         self.assertTrue(started)
 
-    def testABrokenTrayPyFailsTheRealImportCheck(self):
-        with tempfile.TemporaryDirectory() as folder:
-            installedCopy(folder, "9.9.9")
-            with open(os.path.join(folder, "tray.py"), "w") as f:
-                f.write("import notThere\n")
-            errors = io.StringIO()
-            with mock.patch.object(installWatch, "APP_FOLDER", folder), mock.patch.object(installWatch.os, "execv") as execv, contextlib.redirect_stderr(errors):
-                self.watcher.onChanged()
-        self.assertFalse(execv.called)
-        self.assertEqual(errors.getvalue(), "Version 9.9.9 didn't import, so " + installWatch.VERSION + " keeps running\n")
-
     def testReadVersion(self):
         with tempfile.TemporaryDirectory() as folder:
             self.assertIsNone(installWatch.readVersion(folder))
@@ -74,50 +64,89 @@ class InstallWatchTests(unittest.TestCase):
             self.watcher.onChanged()
         self.assertEqual(self.removals, [1])
 
+    def runCheck(self, folder, trayText, execv=None):
+        # the check imports the new tray.py in its own process, so a test writes one that behaves the way it needs
+        installedCopy(folder, "9.9.9")
+        with open(os.path.join(folder, "tray.py"), "w") as f:
+            f.write(trayText)
+        errors = io.StringIO()
+        execv = execv or mock.Mock()
+        with mock.patch.object(installWatch, "APP_FOLDER", folder), mock.patch.object(installWatch.os, "execv", execv), contextlib.redirect_stderr(errors):
+            self.watcher.onChanged()
+            self.assertTrue(waitFor(lambda: self.watcher.check is None, timeout=10.0))
+        return (execv, errors.getvalue())
+
     def testANewVersionThatImportsRestartsTheApp(self):
         with tempfile.TemporaryDirectory() as folder:
-            installedCopy(folder, "9.9.9")
-            errors = io.StringIO()
-            with mock.patch.object(installWatch, "APP_FOLDER", folder), mock.patch.object(installWatch.subprocess, "run", return_value=mock.Mock(returncode=0)) as run, mock.patch.object(installWatch.os, "execv") as execv, contextlib.redirect_stderr(errors):
-                self.watcher.onChanged()
-        self.assertEqual(run.call_args.args[0], [sys.executable, "-B", "-c", "import tray"])
+            execv, errors = self.runCheck(folder, "")
         self.assertEqual(execv.call_args.args[1], [sys.executable, "-B", os.path.join(folder, "tray.py")])
-        self.assertEqual(errors.getvalue(), "")
+        self.assertEqual(errors, "")
+
+    def testABrokenTrayPyFailsTheRealImportCheck(self):
+        with tempfile.TemporaryDirectory() as folder:
+            execv, errors = self.runCheck(folder, "import notThere\n")
+        self.assertFalse(execv.called)
+        self.assertEqual(errors, "Version 9.9.9 didn't import, so " + installWatch.VERSION + " keeps running\n")
 
     def testAFailedExecKeepsRunning(self):
         with tempfile.TemporaryDirectory() as folder:
-            installedCopy(folder, "9.9.9")
-            errors = io.StringIO()
-            with mock.patch.object(installWatch, "APP_FOLDER", folder), mock.patch.object(installWatch.subprocess, "run", return_value=mock.Mock(returncode=0)), mock.patch.object(installWatch.os, "execv", side_effect=OSError(8, "Exec format error")), contextlib.redirect_stderr(errors):
-                self.watcher.onChanged()
-        self.assertEqual(errors.getvalue(), "Version 9.9.9 couldn't start ([Errno 8] Exec format error), so " + installWatch.VERSION + " keeps running\n")
+            execv, errors = self.runCheck(folder, "", execv=mock.Mock(side_effect=OSError(8, "Exec format error")))
+        self.assertEqual(errors, "Version 9.9.9 couldn't start ([Errno 8] Exec format error), so " + installWatch.VERSION + " keeps running\n")
 
-    def testANewVersionThatDoesntImportKeepsRunning(self):
-        with tempfile.TemporaryDirectory() as folder:
-            installedCopy(folder, "9.9.9")
-            errors = io.StringIO()
-            with mock.patch.object(installWatch, "APP_FOLDER", folder), mock.patch.object(installWatch.subprocess, "run", return_value=mock.Mock(returncode=1)), mock.patch.object(installWatch.os, "execv") as execv, contextlib.redirect_stderr(errors):
-                self.watcher.onChanged()
+    def testACheckThatRunsTooLongIsStoppedAndKeepsRunning(self):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(installWatch, "CHECK_TIMEOUT_MS", 300):
+            execv, errors = self.runCheck(folder, "import time\ntime.sleep(30)\n")
         self.assertFalse(execv.called)
-        self.assertEqual(errors.getvalue(), "Version 9.9.9 didn't import, so " + installWatch.VERSION + " keeps running\n")
+        self.assertEqual(errors, "Version 9.9.9 couldn't be checked (the import didn't finish in time), so " + installWatch.VERSION + " keeps running\n")
 
-    def testAVersionCheckThatCantFinishKeepsRunning(self):
+    def testACheckThatCantStartKeepsRunning(self):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(installWatch, "PYTHON", os.path.join(folder, "missing")):
+            execv, errors = self.runCheck(folder, "")
+        self.assertFalse(execv.called)
+        self.assertTrue(errors.startswith("Version 9.9.9 couldn't be checked ("), errors)
+        self.assertTrue(errors.endswith("), so " + installWatch.VERSION + " keeps running\n"), errors)
+
+    def testTheCheckRunsBesideTheAppInsteadOfHoldingIt(self):
         with tempfile.TemporaryDirectory() as folder:
             installedCopy(folder, "9.9.9")
-            for error in (installWatch.subprocess.TimeoutExpired([sys.executable], 60), OSError("exec failed")):
-                with self.subTest(error=type(error).__name__):
-                    errors = io.StringIO()
-                    with mock.patch.object(installWatch, "APP_FOLDER", folder), mock.patch.object(installWatch.subprocess, "run", side_effect=error), mock.patch.object(installWatch.os, "execv") as execv, contextlib.redirect_stderr(errors):
-                        self.watcher.onChanged()
-                    self.assertFalse(execv.called)
-                    self.assertEqual(errors.getvalue(), "Version 9.9.9 couldn't be checked (" + str(error) + "), so " + installWatch.VERSION + " keeps running\n")
+            with open(os.path.join(folder, "tray.py"), "w") as f:
+                f.write("import time\ntime.sleep(1)\n")
+            with mock.patch.object(installWatch, "APP_FOLDER", folder), mock.patch.object(installWatch.os, "execv") as execv:
+                started = time.monotonic()
+                self.watcher.onChanged()
+                returned = time.monotonic() - started
+                self.assertTrue(waitFor(lambda: execv.called, timeout=10.0))
+        self.assertLess(returned, 0.5)
+
+    def testAChangeDuringACheckChecksAgainBeforeRestarting(self):
+        with tempfile.TemporaryDirectory() as folder:
+            installedCopy(folder, "9.9.9")
+            with open(os.path.join(folder, "tray.py"), "w") as f:
+                f.write("import time\ntime.sleep(0.5)\n")
+            with mock.patch.object(installWatch, "APP_FOLDER", folder), mock.patch.object(installWatch.os, "execv") as execv, mock.patch.object(self.watcher, "startCheck", wraps=self.watcher.startCheck) as startCheck:
+                self.watcher.onChanged()
+                self.watcher.onChanged()
+                self.assertTrue(waitFor(lambda: execv.called, timeout=10.0))
+        self.assertEqual((startCheck.call_count, execv.call_count), (2, 1))
+
+    def testAMissingTrayPyDuringACheckStillQuits(self):
+        with tempfile.TemporaryDirectory() as folder:
+            installedCopy(folder, "9.9.9")
+            with open(os.path.join(folder, "tray.py"), "w") as f:
+                f.write("import time\ntime.sleep(0.5)\n")
+            with mock.patch.object(installWatch, "APP_FOLDER", folder), mock.patch.object(installWatch.os, "execv"):
+                self.watcher.onChanged()
+                os.remove(os.path.join(folder, "tray.py"))
+                self.watcher.onChanged()
+                self.assertEqual(self.removals, [1])
+                self.assertTrue(waitFor(lambda: self.watcher.check is None, timeout=10.0))
 
     def testTheSameVersionDoesNothing(self):
         with tempfile.TemporaryDirectory() as folder:
             installedCopy(folder, installWatch.VERSION)
-            with mock.patch.object(installWatch, "APP_FOLDER", folder), mock.patch.object(installWatch.subprocess, "run") as run:
+            with mock.patch.object(installWatch, "APP_FOLDER", folder), mock.patch.object(self.watcher, "startCheck") as startCheck:
                 self.watcher.onChanged()
-        self.assertFalse(run.called)
+        self.assertFalse(startCheck.called)
 
     def testTheAppImportsTheWayAnOlderVersionChecksIt(self):
         # 1.0.0 runs exactly this in the new app folder before it restarts into it, with no display
