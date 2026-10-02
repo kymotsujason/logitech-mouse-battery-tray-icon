@@ -181,6 +181,7 @@ class NodeState:
         self.searched = False
         self.followUp = False
         self.reportSearchAt = None
+        self.searchStartedAt = None
         self.retrySlots = set()
         self.noticedSlots = set()
         self.pendingReads = set()
@@ -337,9 +338,6 @@ class ReceiverList(QObject):
         # a path denied with a different device node than last time is a new device or new access, so the retry starts over at its shortest wait
         if (path not in self.lastDeniedSignatures or self.lastDeniedSignatures[path] != signature):
             self.deniedRetryMs = DENIED_RETRY_MS
-            # the timer is shared, so a new denial can bring the next retry closer but never push another path's further away
-            if (self.deniedTimer.isActive() and self.deniedTimer.remainingTime() > self.deniedRetryMs):
-                self.deniedTimer.start(self.deniedRetryMs)
         self.lastDeniedSignatures[path] = signature
         self.denied.add(path)
         self.deniedSignatures[path] = signature
@@ -397,6 +395,9 @@ class ReceiverList(QObject):
             self.deniedTimer.stop()
         elif (not self.deniedTimer.isActive()):
             self.deniedTimer.start(self.deniedRetryMs)
+        elif (self.deniedTimer.remainingTime() > self.deniedRetryMs):
+            # the timer is shared, so a wait that just started over brings the next retry closer, while nothing pushes another path's further away
+            self.deniedTimer.start(self.deniedRetryMs)
 
     def searchAll(self):
         for path in list(self.nodes):
@@ -410,6 +411,7 @@ class ReceiverList(QObject):
             state.searchAgain = True
             return
         state.searching = True
+        state.searchStartedAt = time.monotonic()
         # a notice that comes in while this search runs has to keep its slot out of what the search skips
         state.noticedSlots.clear()
         state.worker.queueWork(("search", frozenset(state.skipped), time.monotonic()))
@@ -430,6 +432,8 @@ class ReceiverList(QObject):
         state.searched = True
         if (state.searchAgain):
             state.searchAgain = False
+            # the search a report queued counts toward the gap, so reports during it ride on the retry it arms
+            state.reportSearchAt = time.monotonic()
             self.requestSearch(state.path)
 
     def onMessage(self, message):
@@ -484,8 +488,8 @@ class ReceiverList(QObject):
         kind = item[0]
         if (kind == "search"):
             self.finishSearch(state)
-            # a request the device turned away says nothing about what's paired, so the search runs again after the retry wait
-            if (error is not None):
+            # a request the device turned away says nothing about what's paired, and a slot still waiting needs another look, so the search runs again after the retry wait
+            if (error is not None or state.retrySlots):
                 state.retryTimer.start()
             # a first search that raises would otherwise leave the menu saying it's looking until something else redraws it
             self.changed.emit()
@@ -706,8 +710,8 @@ class ReceiverList(QObject):
         now = time.monotonic()
         gapPassed = state.reportSearchAt is None or (now - state.reportSearchAt) * 1000 >= WAKE_RETRY_MS
         if (state.searching):
-            # a new pairing's notice during a search gets the search right after it, while later reports in the gap ride on the retry the search arms
-            if (gapPassed):
+            # a new pairing's notice during an unrelated search, such as a node's first, gets the search right after it, while a search a report or a retry started, however long it runs, answers the reports during it through the retry it arms
+            if (state.reportSearchAt is None or (state.searchStartedAt - state.reportSearchAt) * 1000 >= WAKE_RETRY_MS):
                 state.reportSearchAt = now
                 state.searchAgain = True
             return

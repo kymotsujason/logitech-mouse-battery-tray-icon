@@ -868,6 +868,55 @@ class ReceiverListTests(unittest.TestCase):
         QTest.qWait(30)
         self.assertEqual((state.searching, state.searchAgain), (True, False))
 
+    def testAReportDuringARetrySearchLongerThanTheWaitStillRidesOnTheRetry(self):
+        with mock.patch.object(receivers, "WAKE_RETRY_MS", 100), mock.patch.object(hidpp, "PING_TIMEOUT", 0.5):
+            self.nodes.add(RECEIVER, silent)
+            self.mice.start()
+            self.assertTrue(waitUntil(lambda: not self.mice.nodes[RECEIVER].searching))
+            state = self.mice.nodes[RECEIVER]
+            state.retryTimer.stop()
+            state.retryTimer.start(0)
+            self.assertTrue(waitUntil(lambda: state.searching))
+            # past the retry wait, while the retry's own search still runs
+            QTest.qWait(200)
+            self.assertTrue(state.searching)
+            self.mice.onReport(state, OTHER_REPORT)
+        self.assertFalse(state.searchAgain)
+
+    def testASearchThatRaisesWithASlotWaitingArmsTheRetry(self):
+        self.nodes.add(RECEIVER, silent)
+        realSearch = hidpp.searchNode
+        calls = []
+
+        def failingSecond(node, skipped=frozenset(), pingTimeout=None):
+            calls.append(1)
+            if (len(calls) == 2):
+                raise ValueError("boom")
+            return realSearch(node, skipped, pingTimeout)
+
+        with mock.patch.object(hidpp, "searchNode", failingSecond), mock.patch.object(receivers.traceback, "print_exc"):
+            self.mice.start()
+            self.assertTrue(waitUntil(lambda: calls and not self.mice.nodes[RECEIVER].searching))
+            state = self.mice.nodes[RECEIVER]
+            state.retryTimer.stop()
+            state.retrySlots.add(2)
+            self.mice.requestSearch(RECEIVER)
+            self.assertTrue(waitUntil(lambda: len(calls) == 2 and not state.searching))
+        self.assertTrue(state.retryTimer.isActive())
+
+    def testANodeThatServedAWhilePullsTheSharedRetryIn(self):
+        self.nodes.add(RECEIVER, mouseHandler())
+        self.nodes.deny(CABLE)
+        self.mice.start()
+        self.mice.onLost(self.mice.nodes[RECEIVER], OSError(errno.EIO, "Input/output error"))
+        self.mice.retryDenied()
+        self.assertIn(RECEIVER, self.mice.nodes)
+        self.holdDeniedRetry()
+        state = self.mice.nodes[RECEIVER]
+        state.openedAt -= receivers.STABLE_MS / 1000
+        self.mice.onLost(state, OSError(errno.EIO, "Input/output error"))
+        self.assertEqual(self.mice.deniedTimer.interval(), 100)
+
     def testANewDenialPullsTheRetryInButNeverPushesItOut(self):
         self.nodes.deny(RECEIVER)
         self.mice.start()
