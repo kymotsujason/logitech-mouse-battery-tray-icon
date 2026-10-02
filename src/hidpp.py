@@ -392,11 +392,14 @@ def voltageCharging(flags):
     if (not (flags & 0x80)):
         return CHARGING_DISCHARGING
     state = flags & 0x07
+    # as in the kernel's hidpp20_battery_map_status_voltage, where 2 is plugged in but not charging
     if (state == 0):
         return CHARGING_CHARGING
     if (state == 1):
         return CHARGING_FULL
-    return CHARGING_ERROR
+    if (state == 2):
+        return CHARGING_PENDING
+    return CHARGING_UNKNOWN
 
 
 def parseBatteryStatus(level, status):
@@ -487,7 +490,7 @@ def describeReading(reading):
 
 
 def cleanText(text):
-    # device strings reach the menu, notices, and the terminal, so control characters such as an escape are dropped
+    # device strings reach the menu, notices, and the terminal, so control characters such as an escape are dropped, and so are the line and paragraph separators a host may break a line at
     if (text is None):
         return None
-    return "".join(character for character in text if not unicodedata.category(character).startswith("C")).strip()
+    return "".join(character for character in text if not unicodedata.category(character).startswith("C") and unicodedata.category(character) not in ("Zl", "Zp")).strip()

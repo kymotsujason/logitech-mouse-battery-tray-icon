@@ -454,6 +454,14 @@ class TextTests(unittest.TestCase):
         self.assertEqual(hidpp.cleanText(" PRO\x00 X3\x1b[31m\n"), "PRO X3[31m")
         self.assertIsNone(hidpp.cleanText(None))
 
+    def testCleanTextDropsLineAndParagraphSeparators(self):
+        # a host that breaks lines at these would show a fake line in the tooltip or a notice
+        self.assertEqual(hidpp.cleanText("MX PRO X3, 100% "), "MXPRO X3, 100%")
+
+    def testVoltageChargeStatesFollowTheKernel(self):
+        states = {flags: hidpp.voltageCharging(flags) for flags in (0x00, 0x80, 0x81, 0x82, 0x83, 0x87)}
+        self.assertEqual(states, {0x00: hidpp.CHARGING_DISCHARGING, 0x80: hidpp.CHARGING_CHARGING, 0x81: hidpp.CHARGING_FULL, 0x82: hidpp.CHARGING_PENDING, 0x83: hidpp.CHARGING_UNKNOWN, 0x87: hidpp.CHARGING_UNKNOWN})
+
     def testDescribeReading(self):
         self.assertEqual(hidpp.describeReading(hidpp.BatteryReading(81, 0)), "81%, discharging")
         self.assertEqual(hidpp.describeReading(hidpp.BatteryReading(None, 1, 3900)), "3900 mV, charging")
