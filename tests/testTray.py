@@ -309,13 +309,26 @@ class AppTests(unittest.TestCase):
         sent = []
         return sent, mock.patch.object(mouseApp.notifier, "send", lambda summary, body, actions=(), onAction=None, onSent=None: sent.append((body, list(actions))))
 
-    def testDontOpenAtLoginThatCantWriteSaysSoAndKeepsRunning(self):
-        mouseApp = self.makeApp(False)
+    def writeReadOnlyOverride(self):
         path = autostart.overridePath(self.temp.name)
         os.makedirs(os.path.dirname(path))
         with open(path, "w") as f:
             f.write("[Desktop Entry]\nType=Application\nName=Mouse Battery\nExec=logitech-mouse-battery\n")
         os.chmod(path, 0o400)
+
+    def testAToggleFromTheMenuThatCantWriteSaysSo(self):
+        mouseApp = self.makeApp(False)
+        self.writeReadOnlyOverride()
+        sent, patch = self.notices(mouseApp)
+        with patch, contextlib.redirect_stderr(io.StringIO()):
+            mouseApp.onLoginToggled(False)
+        self.assertEqual(len(sent), 1)
+        self.assertTrue(sent[0][0].startswith("Couldn't change Open at Login. [Errno 13] Permission denied"), sent[0][0])
+        self.assertTrue(mouseApp.loginAction.isChecked())
+
+    def testDontOpenAtLoginThatCantWriteSaysSoAndKeepsRunning(self):
+        mouseApp = self.makeApp(False)
+        self.writeReadOnlyOverride()
         sent, patch = self.notices(mouseApp)
         errors = io.StringIO()
         with patch, mock.patch.object(mouseApp, "quitApp") as quitApp, contextlib.redirect_stderr(errors):

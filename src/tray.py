@@ -190,7 +190,7 @@ class MouseBatteryApp(QObject):
         self.tray.show()
 
     def onDontOpenAtLogin(self):
-        enabled, error = self.onLoginToggled(False)
+        enabled, error = self.setOpenAtLogin(False)
         if (enabled):
             # quitting now would bring the app back at the next login with no word why
             self.notifier.send(APP_NAME, "Couldn't turn off Open at Login." + ("" if error is None else " " + error))
@@ -206,6 +206,12 @@ class MouseBatteryApp(QObject):
             self.mouseList.readAll()
 
     def onLoginToggled(self, checked):
+        enabled, error = self.setOpenAtLogin(checked)
+        # the menu puts its check mark back on its own, which says nothing about why
+        if (error is not None):
+            self.notifier.send(APP_NAME, "Couldn't change Open at Login. " + error)
+
+    def setOpenAtLogin(self, checked):
         error = None
         try:
             autostart.setEnabled(self.configHome, checked)
