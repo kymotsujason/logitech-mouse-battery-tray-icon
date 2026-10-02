@@ -115,7 +115,7 @@ The app is the flat set of modules in `src/`, which the packages install side by
 - `upower.py` reads the mice the kernel drives through UPower.
 - `lowBattery.py` decides when a mouse gets a low battery warning.
 - `notify.py` sends desktop notifications.
-- `dbusCalls.py` makes every blocking D-Bus call, each with a timeout.
+- `dbusCalls.py` makes every D-Bus call with a timeout, answering the tray through a callback so a slow service never holds it still, and blocking only for the terminal check.
 - `panelColor.py` works out the color the icon is drawn in, from the desktop's theme.
 - `icon.py` draws the tray icon.
 - `autostart.py` turns Open at Login on and off.

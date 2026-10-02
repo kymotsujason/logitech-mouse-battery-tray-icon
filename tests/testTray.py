@@ -149,7 +149,7 @@ class AppTests(unittest.TestCase):
         self.temp.cleanup()
 
     def makeApp(self, hostUp):
-        with mock.patch.object(trayHost, "hostRegistered", return_value=hostUp):
+        with mock.patch.object(trayHost, "askHostRegistered", lambda bus, owner, onAnswer: onAnswer(hostUp)):
             self.mouseApp = tray.MouseBatteryApp(app, self.bus, self.bus)
             self.mouseApp.start()
         return self.mouseApp
@@ -157,7 +157,7 @@ class AppTests(unittest.TestCase):
     def testAPanelColorErrorStillShowsTheIconInThePaletteColor(self):
         mouseApp = self.makeApp(False)
         errors = io.StringIO()
-        with mock.patch.object(tray.panelColor, "baseColor", side_effect=ValueError("embedded null byte")), mock.patch.object(trayHost, "hostRegistered", return_value=True), contextlib.redirect_stderr(errors):
+        with mock.patch.object(tray.panelColor, "baseColor", side_effect=ValueError("embedded null byte")), mock.patch.object(trayHost, "askHostRegistered", lambda bus, owner, onAnswer: onAnswer(True)), contextlib.redirect_stderr(errors):
             mouseApp.trayHost.checkHost()
             mouseApp.onColorsChanged()
         self.assertTrue(mouseApp.tray.isVisible())
@@ -173,7 +173,7 @@ class AppTests(unittest.TestCase):
             realUpdate()
             raise RuntimeError("update failed")
 
-        with mock.patch.object(mouseApp, "updateTray", failingUpdate), mock.patch.object(trayHost, "hostRegistered", return_value=True), mock.patch.object(tray.sys, "excepthook", lambda *info: hooked.append(info[0])):
+        with mock.patch.object(mouseApp, "updateTray", failingUpdate), mock.patch.object(trayHost, "askHostRegistered", lambda bus, owner, onAnswer: onAnswer(True)), mock.patch.object(tray.sys, "excepthook", lambda *info: hooked.append(info[0])):
             mouseApp.trayHost.checkHost()
         self.assertTrue(mouseApp.tray.isVisible())
         self.assertEqual(hooked, [RuntimeError])
@@ -393,7 +393,7 @@ class AppTests(unittest.TestCase):
     def testTheTrayShowsOnceTheHostIsReady(self):
         mouseApp = self.makeApp(False)
         self.assertIsNone(mouseApp.tray)
-        with mock.patch.object(trayHost, "hostRegistered", return_value=True):
+        with mock.patch.object(trayHost, "askHostRegistered", lambda bus, owner, onAnswer: onAnswer(True)):
             mouseApp.trayHost.checkHost()
         self.assertIsNotNone(mouseApp.tray)
 

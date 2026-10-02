@@ -1,21 +1,63 @@
 import contextlib
 import io
 import os
-import subprocess
+import sys
+import time
 import unittest
 from unittest import mock
 
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
+from PyQt6.QtCore import QObject
 from PyQt6.QtDBus import QDBusConnection, QDBusMessage
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
 
+import dbusCalls
 import notify
 import trayHost
 from tests.fakes.recordingBus import RecordingBus
 
 app = QApplication.instance() or QApplication([])
+
+
+def answering(value):
+    return lambda bus, owner, onAnswer: onAnswer(value)
+
+
+def ownerAnswering(value):
+    return lambda bus, owner, name, onAnswer: onAnswer(value)
+
+
+class RunCommandTests(unittest.TestCase):
+    def setUp(self):
+        self.owner = QObject()
+        self.results = []
+
+    def runAndWait(self, arguments, timeoutMs=5000):
+        started = time.monotonic()
+        trayHost.runCommand(self.owner, arguments, timeoutMs, lambda code, why: self.results.append((code, why)))
+        returned = time.monotonic() - started
+        for i in range(400):
+            if (self.results):
+                break
+            QTest.qWait(20)
+        return returned
+
+    def testACommandRunsBesideTheTrayAndHandsBackItsExitCode(self):
+        returned = self.runAndWait([sys.executable, "-c", "import time, sys; time.sleep(0.5); sys.exit(3)"])
+        self.assertLess(returned, 0.3)
+        self.assertEqual(self.results, [(3, None)])
+
+    def testACommandPastItsTimeIsStopped(self):
+        self.runAndWait([sys.executable, "-c", "import time; time.sleep(30)"], timeoutMs=300)
+        self.assertEqual(self.results, [(None, "it didn't finish in time")])
+
+    def testACommandThatCantStartSaysWhy(self):
+        self.runAndWait(["/nonexistent/gnome-extensions", "info", "x"])
+        self.assertEqual(len(self.results), 1)
+        self.assertIsNone(self.results[0][0])
+        self.assertTrue(self.results[0][1])
 
 
 class TrayHostTests(unittest.TestCase):
@@ -36,7 +78,7 @@ class TrayHostTests(unittest.TestCase):
         QDBusConnection.disconnectFromBus("trayHostTestBus")
 
     def makeHost(self, hostUp):
-        with mock.patch.object(trayHost, "hostRegistered", return_value=hostUp):
+        with mock.patch.object(trayHost, "askHostRegistered", answering(hostUp)):
             self.host = trayHost.TrayHost(self.bus, notify.Notifier(self.bus))
             self.host.ready.connect(lambda: self.readies.append(1))
             self.host.dontOpenAtLogin.connect(lambda: self.leaves.append(1))
@@ -44,32 +86,55 @@ class TrayHostTests(unittest.TestCase):
         return self.host
 
     def testAnExtensionCheckThatTimesOutMovesOnToTheNext(self):
-        answers = [subprocess.TimeoutExpired(["gnome-extensions"], 5), mock.Mock(returncode=0)]
-        with mock.patch.object(trayHost.shutil, "which", return_value="/usr/bin/gnome-extensions"), mock.patch.object(trayHost.subprocess, "run", side_effect=answers):
-            self.assertEqual(trayHost.installedExtension(), trayHost.EXTENSION_UUIDS[1])
+        answers = [(None, "it didn't finish in time"), (0, None)]
+        asked = []
+        found = []
+
+        def run(owner, arguments, timeoutMs, onDone):
+            asked.append((arguments, timeoutMs))
+            onDone(*answers.pop(0))
+
+        with mock.patch.object(trayHost.shutil, "which", return_value="/usr/bin/gnome-extensions"), mock.patch.object(trayHost, "runCommand", run):
+            trayHost.findInstalledExtension(QObject(), found.append)
+        self.assertEqual(found, [trayHost.EXTENSION_UUIDS[1]])
+        self.assertEqual(asked, [(["gnome-extensions", "info", uuid], trayHost.EXTENSION_CHECK_MS) for uuid in trayHost.EXTENSION_UUIDS])
+
+    def testNoGnomeExtensionsCommandFindsNoExtension(self):
+        found = []
+        with mock.patch.object(trayHost.shutil, "which", return_value=None), mock.patch.object(trayHost, "runCommand") as run:
+            trayHost.findInstalledExtension(QObject(), found.append)
+        self.assertEqual((found, run.called), ([None], False))
 
     def testTurnOnThatFailsSaysWhy(self):
         host = self.makeHost(False)
         host.extensionUuid = "ubuntu-appindicators@ubuntu.com"
         errors = io.StringIO()
-        with mock.patch.object(trayHost.subprocess, "run", return_value=mock.Mock(returncode=2)), contextlib.redirect_stderr(errors):
+        with mock.patch.object(trayHost, "runCommand", lambda owner, arguments, timeoutMs, onDone: onDone(2, None)), contextlib.redirect_stderr(errors):
             host.onNoticeAction("turnOn")
         self.assertEqual(errors.getvalue(), "Couldn't turn on ubuntu-appindicators@ubuntu.com: gnome-extensions enable exited with 2\n")
 
+    def testTurnOnThatCantRunSaysWhy(self):
+        host = self.makeHost(False)
+        host.extensionUuid = "ubuntu-appindicators@ubuntu.com"
+        errors = io.StringIO()
+        with mock.patch.object(trayHost, "runCommand", lambda owner, arguments, timeoutMs, onDone: onDone(None, "it didn't finish in time")), contextlib.redirect_stderr(errors):
+            host.onNoticeAction("turnOn")
+        self.assertEqual(errors.getvalue(), "Couldn't turn on ubuntu-appindicators@ubuntu.com: it didn't finish in time\n")
+
     def notices(self, host):
         sent = []
-        return sent, mock.patch.object(host.notifier, "send", lambda summary, body, actions=(), onAction=None: sent.append((body, list(actions))))
+        return sent, mock.patch.object(host.notifier, "send", lambda summary, body, actions=(), onAction=None, onSent=None: sent.append((body, list(actions))))
 
     def testNotReadyUntilAHostIsRegistered(self):
         host = self.makeHost(False)
         self.assertEqual(self.readies, [])
-        with mock.patch.object(trayHost, "hostRegistered", return_value=True):
+        with mock.patch.object(trayHost, "askHostRegistered", answering(True)):
             host.checkHost()
         self.assertEqual(self.readies, [1])
 
     def testReadyFiresOnlyOnce(self):
         host = self.makeHost(True)
-        with mock.patch.object(trayHost, "hostRegistered", return_value=True):
+        with mock.patch.object(trayHost, "askHostRegistered", answering(True)):
             host.checkHost()
             host.onNoTray()
         self.assertEqual(self.readies, [1])
@@ -77,7 +142,7 @@ class TrayHostTests(unittest.TestCase):
     def testAFailedHostQueryIsAskedAgain(self):
         with mock.patch.object(trayHost, "HOST_RETRY_MS", 10):
             self.makeHost(False)
-        with mock.patch.object(trayHost, "hostRegistered", return_value=True):
+        with mock.patch.object(trayHost, "askHostRegistered", answering(True)):
             QTest.qWait(200)
         self.assertEqual(self.readies, [1])
 
@@ -85,7 +150,7 @@ class TrayHostTests(unittest.TestCase):
         with mock.patch.object(trayHost, "HOST_RETRY_MS", 10), mock.patch.object(trayHost, "HOST_RETRY_MAX_MS", 40):
             host = self.makeHost(False)
             intervals = [host.hostTimer.interval()]
-            with mock.patch.object(trayHost, "hostRegistered", return_value=False):
+            with mock.patch.object(trayHost, "askHostRegistered", answering(False)):
                 for i in range(3):
                     host.checkHost()
                     intervals.append(host.hostTimer.interval())
@@ -94,7 +159,7 @@ class TrayHostTests(unittest.TestCase):
     def testWatcherSignalsStartTheBackoffOver(self):
         with mock.patch.object(trayHost, "HOST_RETRY_MS", 10), mock.patch.object(trayHost, "HOST_RETRY_MAX_MS", 40):
             host = self.makeHost(False)
-            with mock.patch.object(trayHost, "hostRegistered", return_value=False):
+            with mock.patch.object(trayHost, "askHostRegistered", answering(False)):
                 for i in range(3):
                     host.checkHost()
                 host.hostWatcher.serviceRegistered.emit(trayHost.WATCHER_SERVICE)
@@ -105,6 +170,21 @@ class TrayHostTests(unittest.TestCase):
                 afterHost = host.hostTimer.interval()
         self.assertEqual((afterWatcher, afterHost), (10, 10))
 
+    def testASignalDuringACheckAsksOnceMore(self):
+        held = []
+        with mock.patch.object(trayHost, "askHostRegistered", lambda bus, owner, onAnswer: held.append(onAnswer)):
+            host = trayHost.TrayHost(self.bus, notify.Notifier(self.bus))
+            self.host = host
+            host.ready.connect(lambda: self.readies.append(1))
+            host.checkHost()
+            host.checkHost()
+            host.onHostRegistered(QDBusMessage())
+            self.assertEqual(len(held), 1)
+            held[0](False)
+            self.assertEqual(len(held), 2)
+            held[1](True)
+        self.assertEqual(self.readies, [1])
+
     def testStopEndsTheHostAndNoticeTimers(self):
         host = self.makeHost(False)
         self.assertEqual((host.hostTimer.isActive(), host.noticeTimer.isActive()), (True, True))
@@ -114,46 +194,67 @@ class TrayHostTests(unittest.TestCase):
     def testTheNoTrayNoticeAsksForTheHostFirst(self):
         host = self.makeHost(False)
         sent, patch = self.notices(host)
-        with patch, mock.patch.object(trayHost, "hostRegistered", return_value=True):
+        with patch, mock.patch.object(trayHost, "askHostRegistered", answering(True)):
             host.onNoTray()
         self.assertEqual((self.readies, sent), ([1], []))
 
     def testNoTrayNoticeOnGnomeOffersTheExtension(self):
         host = self.makeHost(False)
         sent, patch = self.notices(host)
-        with patch, mock.patch.object(trayHost, "nameHasOwner", return_value=True), mock.patch.object(trayHost, "installedExtension", return_value="ubuntu-appindicators@ubuntu.com"):
+        with patch, mock.patch.object(trayHost, "askNameHasOwner", ownerAnswering(True)), mock.patch.object(trayHost, "findInstalledExtension", lambda owner, onFound: onFound("ubuntu-appindicators@ubuntu.com")), mock.patch.object(trayHost, "askHostRegistered", answering(False)):
             host.onNoTray()
         self.assertEqual(sent, [("Mouse Battery needs the AppIndicator extension to show in the top bar.", [("turnOn", "Turn On"), ("dontOpen", "Don't Open at Login")])])
 
     def testNoTrayNoticeOnGnomeFlashbackOffersOnlyTheWayOut(self):
         host = self.makeHost(False)
         sent, patch = self.notices(host)
-        with patch, mock.patch.object(trayHost, "nameHasOwner", return_value=True), mock.patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": "GNOME-Flashback:GNOME"}):
+        with patch, mock.patch.object(trayHost, "askNameHasOwner", ownerAnswering(True)), mock.patch.object(trayHost, "askHostRegistered", answering(False)), mock.patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": "GNOME-Flashback:GNOME"}):
             host.onNoTray()
         self.assertEqual(sent, [("Mouse Battery needs a system tray with StatusNotifierItem support to show its icon.", [("dontOpen", "Don't Open at Login")])])
 
     def testNoTrayNoticeWithoutTheExtensionLinksToIt(self):
         host = self.makeHost(False)
         sent, patch = self.notices(host)
-        with patch, mock.patch.object(trayHost, "nameHasOwner", return_value=True), mock.patch.object(trayHost, "installedExtension", return_value=None):
+        with patch, mock.patch.object(trayHost, "askNameHasOwner", ownerAnswering(True)), mock.patch.object(trayHost, "findInstalledExtension", lambda owner, onFound: onFound(None)), mock.patch.object(trayHost, "askHostRegistered", answering(False)):
             host.onNoTray()
         self.assertEqual(sent[0][1], [("getExtension", "Get Extension"), ("dontOpen", "Don't Open at Login")])
 
     def testNoTrayNoticeElsewhereOffersOnlyTheWayOut(self):
         host = self.makeHost(False)
         sent, patch = self.notices(host)
-        with patch, mock.patch.object(trayHost, "nameHasOwner", return_value=False):
+        with patch, mock.patch.object(trayHost, "askNameHasOwner", ownerAnswering(False)), mock.patch.object(trayHost, "askHostRegistered", answering(False)):
             host.onNoTray()
         self.assertEqual(sent, [("Mouse Battery needs a system tray with StatusNotifierItem support to show its icon.", [("dontOpen", "Don't Open at Login")])])
+
+    def testAHostThatShowsUpWhileTheExtensionIsLookedForStopsTheNotice(self):
+        host = self.makeHost(False)
+        sent, patch = self.notices(host)
+        found = []
+        with patch, mock.patch.object(trayHost, "askNameHasOwner", ownerAnswering(True)), mock.patch.object(trayHost, "findInstalledExtension", lambda owner, onFound: found.append(onFound)), mock.patch.object(trayHost, "askHostRegistered", answering(False)):
+            host.onNoTray()
+        with mock.patch.object(trayHost, "askHostRegistered", answering(True)):
+            host.checkHost()
+        found[0]("ubuntu-appindicators@ubuntu.com")
+        self.assertEqual((self.readies, sent), ([1], []))
 
     def testDontOpenAtLoginIsHandedToTheTray(self):
         host = self.makeHost(False)
         host.onNoticeAction("dontOpen")
         self.assertEqual(self.leaves, [1])
 
+    def testTheHostCheckAndTheNoTrayNoticeMakeNoBlockingCall(self):
+        blocking = []
+        realCall = dbusCalls.call
+        with mock.patch.object(dbusCalls, "call", lambda bus, message, *args: blocking.append(message.member()) or realCall(bus, message, *args)), mock.patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": "GNOME"}):
+            self.host = trayHost.TrayHost(self.bus, notify.Notifier(self.bus))
+            self.host.start()
+            self.host.onNoTray()
+            QTest.qWait(100)
+        self.assertEqual(blocking, [])
+
     def testTheHostSignalIsTakenOnlyFromTheWatcher(self):
         bus = RecordingBus()
-        with mock.patch.object(trayHost, "QDBusServiceWatcher"), mock.patch.object(trayHost, "hostRegistered", return_value=False):
+        with mock.patch.object(trayHost, "QDBusServiceWatcher"), mock.patch.object(trayHost, "askHostRegistered", answering(False)):
             host = trayHost.TrayHost(bus, mock.Mock())
             host.start()
         host.stop()
