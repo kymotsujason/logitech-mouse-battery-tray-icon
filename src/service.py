@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 import signal
 import sys
+import time
 
 from PyQt6.QtCore import QCoreApplication, QObject, QTimer, pyqtClassInfo, pyqtSignal, pyqtSlot
-from PyQt6.QtDBus import QDBusAbstractAdaptor, QDBusConnection
+from PyQt6.QtDBus import QDBusAbstractAdaptor, QDBusConnection, QDBusMessage
 
 import serviceState
 from exceptionHooks import installExceptionHooks
@@ -11,16 +12,21 @@ from receivers import ReceiverList
 
 # a device can send a report every millisecond, and each one would otherwise be its own encode and system bus broadcast
 BROADCAST_MS = 200
+# any local account may ask for a read, so each account gets a few at once and then one per refill, against the tray's own read every 300 s
+READ_ALL_BURST = 5
+READ_ALL_REFILL_SECONDS = 30
 
 
 @pyqtClassInfo("D-Bus Interface", serviceState.INTERFACE)
 class BatteryService(QDBusAbstractAdaptor):
     StateChanged = pyqtSignal(str)
 
-    def __init__(self, parent, receiverList):
+    def __init__(self, parent, receiverList, bus):
         super().__init__(parent)
         self.receiverList = receiverList
+        self.bus = bus
         self.sentState = None
+        self.callerBudgets = {}
         self.setAutoRelaySignals(True)
         self.broadcastTimer = QTimer(self)
         self.broadcastTimer.setSingleShot(True)
@@ -32,9 +38,28 @@ class BatteryService(QDBusAbstractAdaptor):
     def GetState(self):
         return serviceState.encodeState(self.receiverList)
 
-    @pyqtSlot()
-    def ReadAll(self):
+    # QtDBus hands a slot the call itself when its last argument is a QDBusMessage, and leaves it out of the method's D-Bus signature
+    @pyqtSlot(QDBusMessage)
+    def ReadAll(self, message):
+        caller = self.callerOf(message)
+        if (caller is None or not self.takeRead(caller)):
+            return
         self.receiverList.requestReadAll()
+
+    def callerOf(self, message):
+        # a unique name is new on every connection, so the budget follows the account behind it
+        reply = self.bus.interface().serviceUid(message.service())
+        return reply.value() if reply.isValid() else None
+
+    def takeRead(self, caller):
+        now = time.monotonic()
+        reads, since = self.callerBudgets.get(caller, (READ_ALL_BURST, now))
+        reads = min(READ_ALL_BURST, reads + (now - since) / READ_ALL_REFILL_SECONDS)
+        if (reads < 1):
+            self.callerBudgets[caller] = (reads, now)
+            return False
+        self.callerBudgets[caller] = (reads - 1, now)
+        return True
 
     def onChanged(self):
         # changes during the wait ride along instead of restarting it, so a steady stream still goes out once per wait
@@ -55,7 +80,7 @@ class ServiceObject(QObject):
 def serve(bus, receiverList):
     # the bus exports the adaptor through its parent, so the caller keeps both alive for as long as it serves
     holder = ServiceObject()
-    adaptor = BatteryService(holder, receiverList)
+    adaptor = BatteryService(holder, receiverList, bus)
     if (not bus.registerObject(serviceState.OBJECT_PATH, holder)):
         print("Couldn't register " + serviceState.OBJECT_PATH + ": " + bus.lastError().message(), file=sys.stderr)
         return None

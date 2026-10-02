@@ -932,6 +932,19 @@ class ReceiverListTests(unittest.TestCase):
         self.assertTrue(self.mice.nodes[RECEIVER].searching)
         self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"]))
 
+    def testReadAllSearchesANodeWithNoMouseAtMostOncePerGap(self):
+        receiver = self.nodes.add(RECEIVER, silent)
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: not self.mice.isBusy()))
+        searches = []
+        for i in range(3):
+            pings = pingsTo(receiver, 2)
+            self.mice.requestReadAll()
+            self.assertTrue(waitUntil(lambda: not self.mice.isBusy() and not self.mice.readAllTimer.isActive()))
+            searches.append(pingsTo(receiver, 2) - pings)
+            QTest.qWait(350)
+        self.assertEqual(searches, [1, 0, 0])
+
     def testReadAllDuringTheFirstSearchQueuesNoSecondSearch(self):
         receiver = self.nodes.add(RECEIVER, silent)
         self.mice.start()

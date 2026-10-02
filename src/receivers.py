@@ -17,6 +17,8 @@ SETTLE_MS = 1500
 DENIED_RETRY_MS = 5 * 1000
 DENIED_RETRY_MAX_MS = 300 * 1000
 READ_ALL_GAP_MS = 1000
+# any local account can ask for a read, so the search a read brings with it can't enumerate every slot at the read's own rate
+READ_ALL_SEARCH_GAP_MS = 60 * 1000
 # a node that served this long before it died counts as a one-off rather than a failing device, so its backoff and its printed error start over
 STABLE_MS = 60 * 1000
 # /dev churn restarts the settle wait, and this caps how far the scan it delays can be pushed out
@@ -185,6 +187,7 @@ class ReceiverList(QObject):
         self.settleSince = None
         self.readAllTimer = singleShotTimer(self, READ_ALL_GAP_MS, self.runReadAll)
         self.lastReadAll = None
+        self.lastReadAllSearch = None
         self.devWatcher = QFileSystemWatcher(["/dev"], self)
         self.devWatcher.directoryChanged.connect(self.onDevChanged)
 
@@ -219,11 +222,18 @@ class ReceiverList(QObject):
     def runReadAll(self):
         self.lastReadAll = time.monotonic()
         self.readAll()
+        self.searchNodesWithoutMice()
+
+    def searchNodesWithoutMice(self):
+        now = time.monotonic()
+        if (self.lastReadAllSearch is not None and (now - self.lastReadAllSearch) * 1000 < READ_ALL_SEARCH_GAP_MS):
+            return
         # 1.0.1 searched every node whenever the tray or check started, so a mouse that slept through the first search is looked for again
         withMice = {mouse.nodePath for mouse in self.mice}
         for path, state in list(self.nodes.items()):
             # a search that's already running stands in for this one, instead of a whole second search queued after it
             if (path not in withMice and not state.searching):
+                self.lastReadAllSearch = now
                 self.requestSearch(path)
 
     def onDevChanged(self, path):

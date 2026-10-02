@@ -207,6 +207,53 @@ class ServiceTests(unittest.TestCase):
         QTest.qWait(1500)
         self.assertEqual(batteryReads(device) - before, 2)
 
+    def readAllLoop(self, caller, seconds):
+        started = time.monotonic()
+        while (time.monotonic() - started < seconds):
+            self.assertIsInstance(caller.call("ReadAll"), list)
+
+    def testOneAccountsLoopOfReadAllRunsOutOfItsBurst(self):
+        device = self.startWithMouse()
+        before = batteryReads(device)
+        with mock.patch.object(receivers, "READ_ALL_GAP_MS", 50), mock.patch.object(service, "READ_ALL_BURST", 2):
+            self.readAllLoop(Caller(self.connectTo("other")), 1.0)
+            QTest.qWait(200)
+        self.assertEqual(batteryReads(device) - before, 2)
+
+    def testAnotherAccountStillGetsItsReadsWhileOneLoops(self):
+        device = self.startWithMouse()
+        adaptor = self.served[1]
+        with mock.patch.object(receivers, "READ_ALL_GAP_MS", 50), mock.patch.object(service, "READ_ALL_BURST", 2), mock.patch.object(adaptor, "callerOf", lambda message: message.service()):
+            self.readAllLoop(Caller(self.connectTo("other")), 0.5)
+            QTest.qWait(200)
+            before = batteryReads(device)
+            self.caller.call("ReadAll")
+            self.assertTrue(waitUntil(lambda: batteryReads(device) > before))
+
+    def testAnAccountsBudgetRefillsOverTime(self):
+        device = self.startWithMouse()
+        caller = Caller(self.connectTo("other"))
+        with mock.patch.object(receivers, "READ_ALL_GAP_MS", 50), mock.patch.object(service, "READ_ALL_BURST", 1), mock.patch.object(service, "READ_ALL_REFILL_SECONDS", 0.3):
+            self.readAllLoop(caller, 0.2)
+            QTest.qWait(400)
+            before = batteryReads(device)
+            caller.call("ReadAll")
+            self.assertTrue(waitUntil(lambda: batteryReads(device) > before))
+
+    def testTheCallerIsTheAccountBehindTheConnection(self):
+        self.startWithMouse()
+        adaptor = self.served[1]
+        callers = []
+        realCallerOf = adaptor.callerOf
+        with mock.patch.object(adaptor, "callerOf", lambda message: callers.append(realCallerOf(message)) or callers[-1]):
+            self.caller.call("ReadAll")
+        self.assertEqual(callers, [os.getuid()])
+
+    def testReadAllTakesNoArgumentsOnTheBus(self):
+        xml = self.caller.call("Introspect", interface="org.freedesktop.DBus.Introspectable")[0]
+        start = xml.index('<method name="ReadAll">')
+        self.assertEqual(xml[start:xml.index("</method>", start)].count("<arg"), 0)
+
     def testServingFailsWhenAnotherConnectionOwnsTheName(self):
         errors = io.StringIO()
         with mock.patch.object(sys, "stderr", errors):
