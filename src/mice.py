@@ -221,7 +221,8 @@ class MouseList(QObject):
     def displayNames(self):
         counts = {}
         names = {}
-        for mouse in self.mice:
+        # key order, since a mouse that comes back goes to the end of the list and would take another one's number
+        for mouse in sorted(self.mice, key=lambda mouse: mouse.key):
             base = mouse.name or DEFAULT_NAME
             counts[base] = counts.get(base, 0) + 1
             names[mouse.key] = base if counts[base] == 1 else base + " " + str(counts[base])
@@ -229,6 +230,9 @@ class MouseList(QObject):
 
     def serviceLost(self):
         return self.answered and self.serviceState is None
+
+    def anyDenied(self):
+        return self.serviceState is not None and bool(self.serviceState.deniedPaths)
 
     def status(self):
         if (self.mice):

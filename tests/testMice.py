@@ -82,6 +82,14 @@ class MouseListTests(unittest.TestCase):
         self.mice.applyService(state(entry("aaaaaaaa"), entry("bbbbbbbb", source=OTHER_NODE), nodes=(RECEIVER, OTHER_NODE)))
         self.assertEqual(sorted(self.mice.displayNames().values()), [NAME, NAME + " 2"])
 
+    def testSameNamedMiceKeepTheirNumbersWhenOneComesBack(self):
+        both = state(entry("aaaaaaaa"), entry("bbbbbbbb", source=OTHER_NODE), nodes=(RECEIVER, OTHER_NODE))
+        self.mice.applyService(both)
+        # the first mouse leaves and comes back, which puts it at the end of the list
+        self.mice.applyService(state(entry("bbbbbbbb", source=OTHER_NODE), nodes=(OTHER_NODE,)))
+        self.mice.applyService(both)
+        self.assertEqual(self.mice.displayNames(), {"aaaaaaaa": NAME, "bbbbbbbb": NAME + " 2"})
+
     def testALowReadingWarnsOnce(self):
         warnings = self.sentWarnings()
         self.mice.applyService(state(entry(percent=9, lastRead=1000.0)))

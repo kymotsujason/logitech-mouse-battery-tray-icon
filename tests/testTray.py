@@ -87,6 +87,21 @@ class TrayTextTests(unittest.TestCase):
         self.assertEqual(tray.mouseLine(NAME, asleep, now=LAST_READ), NAME + ", asleep, 69% at " + clock)
         self.assertEqual(tray.mouseLine(NAME, asleep, now=LAST_READ + 3 * 86400), NAME + ", asleep, 69% on " + day + " at " + clock)
 
+    def linesFor(self, state):
+        mouseList = mice.MouseList()
+        mouseList.applyService(state)
+        lines = tray.statusLines(mouseList)
+        mouseList.stop()
+        sip.delete(mouseList)
+        return lines
+
+    def testADeniedNodeIsShownNextToAnOpenOne(self):
+        self.assertEqual(self.linesFor(ServiceState(False, False, ("/dev/hidraw18",), ("/dev/hidraw30",), ())), ["Move your mouse to wake it.", "Can't read the receiver or cable. Unplug it and plug it back in."])
+
+    def testADeniedNodeIsShownUnderTheMice(self):
+        entry = ServiceEntry("02bc524c", False, NAME, "/dev/hidraw18", hidpp.BatteryReading(69, 0), False, LAST_READ, LAST_READ)
+        self.assertEqual(self.linesFor(ServiceState(False, False, ("/dev/hidraw18",), ("/dev/hidraw30",), (entry,))), [NAME + ", 69%", "Can't read the receiver or cable. Unplug it and plug it back in."])
+
     def testALostServiceShowsTheLastReadingAndSaysSo(self):
         local = time.localtime(LAST_READ)
         stamp = " on " + mice.MONTH_NAMES[local.tm_mon - 1] + " " + str(local.tm_mday) + " at " + time.strftime("%H:%M", local)

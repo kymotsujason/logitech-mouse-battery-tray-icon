@@ -66,10 +66,14 @@ def statusLines(mouseList):
     names = mouseList.displayNames()
     lines = [mouseLine(names[mouse.key], mouse) for mouse in mouseList.mice]
     if (not lines):
-        return [mice.STATUS_TEXT[mouseList.status()]]
-    # the mice listed don't say the service is gone, and without it no HID++ reading or warning comes
-    if (mouseList.serviceLost()):
+        lines = [mice.STATUS_TEXT[mouseList.status()]]
+    elif (mouseList.serviceLost()):
+        # the mice listed don't say the service is gone, and without it no HID++ reading or warning comes
         lines.append(mice.STATUS_TEXT[mice.STATUS_NO_SERVICE])
+    # a receiver or cable the service can't open needs a replug whatever else the menu shows
+    denied = mice.STATUS_TEXT[mice.STATUS_DENIED]
+    if (mouseList.anyDenied() and denied not in lines):
+        lines.append(denied)
     return lines
 
 
