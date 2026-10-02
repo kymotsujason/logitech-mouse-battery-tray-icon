@@ -149,7 +149,7 @@ class CheckTests(unittest.TestCase):
 
     def testAStateThatStopsDecodingWhileWaitingKeepsTheLastState(self):
         bus = FakeServiceBus(stateText([MOUSE], busy=True), "not json")
-        self.assertEqual(self.runCheck(bus), (0, NAME + " (" + NODE + ")\n  81%, discharging\n" + check.OLD_TEXT + "\n"))
+        self.assertEqual(self.runCheck(bus), (0, NAME + " (" + NODE + ")\n  81%, discharging\n" + check.OLD_TEXT + "\n  The battery service answered with a state this version can't read.\n"))
 
     def testAReadTheServiceCouldntPlaceStillPrintsTheState(self):
         bus = FakeServiceBus(stateText([MOUSE]), readAllError="io.github.kymotsujason.LogitechMouseBattery1.Error.UnknownCaller")

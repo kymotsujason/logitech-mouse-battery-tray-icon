@@ -71,7 +71,7 @@ def readService(bus):
         state = serviceState.decodeState(arguments[0]) if (arguments and isinstance(arguments[0], str)) else None
         if (state is None):
             if (last is not None):
-                return (last, notes + [OLD_TEXT], None)
+                return (last, notes + [OLD_TEXT, "  " + UNREADABLE_TEXT], None)
             return (None, [], [UNREADABLE_TEXT, SEE_WHY_TEXT])
         last = state
         if (not state.busy):
