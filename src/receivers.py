@@ -198,6 +198,8 @@ class ReceiverList(QObject):
         self.nodes = {}
         self.denied = set()
         self.deniedSignatures = {}
+        # each path's device node the last time it was denied, which outlives an open so a new device or new access is told from the same one failing again
+        self.lastDeniedSignatures = {}
         self.mice = []
         self.stopped = False
         self.reportedErrors = set()
@@ -301,11 +303,13 @@ class ReceiverList(QObject):
             self.changed.emit()
 
     def openNode(self, path):
+        # taken before the attempt, so a group or mode udev sets right after a failed open still counts as a change at the next scan
+        signature = nodeSignature(path)
         try:
             node = hidpp.HidppNode.open(path)
         except OSError as error:
             self.reportError(path, "Couldn't open", error)
-            self.deny(path)
+            self.deny(path, signature)
             return
         # a node whose pipe or thread can't be made is closed and left for the retry instead of leaking its fd, and the worker's messages queue on this thread until the state below exists
         worker = None
@@ -317,7 +321,7 @@ class ReceiverList(QObject):
                 worker.closePipe()
             node.close()
             self.reportError(path, "Couldn't start", error)
-            self.deny(path)
+            self.deny(path, signature)
             return
         retryTimer = singleShotTimer(self, WAKE_RETRY_MS, lambda: self.requestSearch(path))
         identifyTimer = singleShotTimer(self, IDENTIFY_GAP_MS, lambda: self.runDeferredIdentifies(path))
@@ -329,9 +333,15 @@ class ReceiverList(QObject):
             print("Opened " + path, file=sys.stderr)
         self.requestSearch(path)
 
-    def deny(self, path):
+    def deny(self, path, signature):
+        # a path denied with a different device node than last time is a new device or new access, so the retry starts over at its shortest wait
+        if (path not in self.lastDeniedSignatures or self.lastDeniedSignatures[path] != signature):
+            self.deniedRetryMs = DENIED_RETRY_MS
+            if (self.deniedTimer.isActive()):
+                self.deniedTimer.start(self.deniedRetryMs)
+        self.lastDeniedSignatures[path] = signature
         self.denied.add(path)
-        self.deniedSignatures[path] = nodeSignature(path)
+        self.deniedSignatures[path] = signature
 
     def keepDenied(self, paths):
         # a path discovery no longer lists may be a different device that took the same hidraw number
@@ -461,12 +471,19 @@ class ReceiverList(QObject):
         kind = item[0]
         if (kind == "search"):
             self.finishSearch(state)
+            # a request the device turned away says nothing about what's paired, so the search runs again after the retry wait
+            if (error is not None):
+                state.retryTimer.start()
             # a first search that raises would otherwise leave the menu saying it's looking until something else redraws it
             self.changed.emit()
-        elif (kind == "read"):
+            return
+        if (kind == "read"):
             self.settleRead(state, item[1])
         elif (kind == "identify"):
             self.settleIdentify(state, item[1])
+        mouse = self.findByNode(state.path, item[1])
+        if (error is not None and mouse is not None):
+            self.retryLater(mouse)
 
     def onLost(self, state, error):
         path = state.path
@@ -481,7 +498,7 @@ class ReceiverList(QObject):
             self.printRemoved(path)
         self.closeNode(path)
         if (listed):
-            self.deny(path)
+            self.deny(path, nodeSignature(path))
             self.updateDeniedTimer()
         self.searchAll()
         self.changed.emit()
@@ -672,12 +689,16 @@ class ReceiverList(QObject):
 
     def requestReportSearch(self, state, slot):
         state.retrySlots.add(slot)
-        # the search running now ends by arming the retry when it doesn't resolve this slot
-        if (state.searching):
-            return
         # a slot that keeps reporting but never resolves would otherwise hold its node in back to back searches, so the retry wait spaces them
         now = time.monotonic()
-        if (state.retryTimer.isActive() or (state.reportSearchAt is not None and (now - state.reportSearchAt) * 1000 < WAKE_RETRY_MS)):
+        gapPassed = state.reportSearchAt is None or (now - state.reportSearchAt) * 1000 >= WAKE_RETRY_MS
+        if (state.searching):
+            # a new pairing's notice during a search gets the search right after it, while later reports in the gap ride on the retry the search arms
+            if (gapPassed):
+                state.reportSearchAt = now
+                state.searchAgain = True
+            return
+        if (state.retryTimer.isActive() or not gapPassed):
             if (not state.retryTimer.isActive()):
                 state.retryTimer.start()
             return

@@ -799,6 +799,79 @@ class ReceiverListTests(unittest.TestCase):
         # one shared second, where each busy node used to get a second of its own
         self.assertLess(took, 1.5)
 
+    def failFirstWrite(self):
+        realWrite = hidpp.HidppNode.writeReport
+        failed = []
+
+        def flakyWrite(node, *args):
+            if (not failed):
+                failed.append(1)
+                raise OSError(errno.ETIMEDOUT, "Connection timed out")
+            return realWrite(node, *args)
+        return mock.patch.object(hidpp.HidppNode, "writeReport", flakyWrite)
+
+    def testASearchTurnedAwayIsTriedAgain(self):
+        self.nodes.add(RECEIVER, mouseHandler())
+        with self.failFirstWrite():
+            self.mice.start()
+            self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"]))
+
+    def testAnIdentifyTurnedAwayReadsTheKnownMouseAgain(self):
+        receiver = self.nodes.add(RECEIVER, mouseHandler())
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"] and not self.mice.isBusy()))
+        self.putToSleep(receiver)
+        receiver.handler = mouseHandler()
+        with self.failFirstWrite():
+            receiver.send(LINK_UP)
+            self.assertTrue(waitUntil(lambda: not self.mouse().asleep, timeout=2.0))
+
+    def testANoticeDuringASearchGetsItsSearchRightAfter(self):
+        first = mouseHandler()
+        second = mouseHandler(slot=2, unitId=bytes.fromhex("bbbbbbbb"))
+        paired = [False]
+
+        def handler(request):
+            if (request[1] != 2):
+                return first(request)
+            if (not paired[0]):
+                # the new mouse pairs while the first search pings, so its notice lands during that search
+                paired[0] = True
+                return [bytes([0x10, 2, 0x41, 0x10, 0x00, 0x00, 0x00])]
+            return second(request)
+
+        with mock.patch.object(receivers, "WAKE_RETRY_MS", 5000):
+            self.nodes.add(RECEIVER, handler)
+            self.mice.start()
+            self.assertTrue(waitUntil(lambda: set(self.keys()) == {"02bc524c", "bbbbbbbb"}, timeout=2.0))
+
+    def testANewlyDeniedPathStartsTheBackoffOver(self):
+        self.nodes.deny(RECEIVER)
+        self.mice.start()
+        self.holdDeniedRetry()
+        self.nodes.deny(CABLE)
+        self.mice.scanNodes()
+        self.assertEqual((self.mice.denied, self.mice.deniedTimer.interval()), ({RECEIVER, CABLE}, 100))
+
+    def testAccessGrantedRightAfterAFailedOpenIsSeenAtTheNextScan(self):
+        generation = [0]
+        realOpen = self.nodes.open
+
+        def openThenGrant(path, onEvent=None):
+            try:
+                return realOpen(path, onEvent)
+            finally:
+                # udev changes the node's group just after the open failed
+                generation[0] += 1
+
+        self.nodes.deny(RECEIVER)
+        with mock.patch.object(receivers, "nodeSignature", lambda path: (path, generation[0])), mock.patch.object(hidpp.HidppNode, "open", openThenGrant):
+            self.mice.start()
+            self.holdDeniedRetry()
+            self.nodes.allow(RECEIVER, mouseHandler())
+            self.mice.onDevChanged("/dev")
+            self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"]))
+
     def testAWriteTurnedAwayKeepsTheNodeAndItsMouse(self):
         self.nodes.add(RECEIVER, mouseHandler())
         self.mice.start()
