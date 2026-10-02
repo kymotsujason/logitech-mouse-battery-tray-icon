@@ -33,27 +33,34 @@ def seatKeepsAccess(path, sysRoot, udevRoot):
         return False
 
 
-def closeNode(path, keepAcl=False):
-    if (not keepAcl):
-        try:
-            os.removexattr(path, ACL_ATTRIBUTE)
-        except OSError as error:
-            if (error.errno not in NO_ACL_ERRORS):
-                raise
-    os.chown(path, 0, grp.getgrnam(GROUP).gr_gid)
+def closeNode(path, gid, keepAcl=False):
+    # the group goes on before the ACL comes off, so a step that fails leaves the node open to the seat rather than to no one
+    os.chown(path, 0, gid)
     os.chmod(path, 0o660)
+    if (keepAcl):
+        return
+    try:
+        os.removexattr(path, ACL_ATTRIBUTE)
+    except OSError as error:
+        if (error.errno not in NO_ACL_ERRORS):
+            raise
 
 
 def main(sysRoot="/sys/class/hidraw", devRoot="/dev", udevRoot="/run/udev/data"):
+    try:
+        gid = grp.getgrnam(GROUP).gr_gid
+    except KeyError:
+        print("Couldn't find the " + GROUP + " group, so no node was changed")
+        return 1
     failed = False
     for path in hidpp.findHidppNodes(sysRoot, devRoot):
         kept = seatKeepsAccess(path, sysRoot, udevRoot)
         try:
-            closeNode(path, keepAcl=kept)
+            closeNode(path, gid, keepAcl=kept)
         except FileNotFoundError:
             # the node went away, or a container's /sys shows a host node its /dev doesn't have
             continue
-        except (OSError, KeyError) as error:
+        except OSError as error:
             print("Couldn't close access to " + path + ": " + str(error))
             failed = True
             continue

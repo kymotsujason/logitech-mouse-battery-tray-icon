@@ -51,6 +51,8 @@ class ClearAccessTests(unittest.TestCase):
         self.removed.append((path, name))
 
     def changeOwner(self, path, uid, gid):
+        if (not os.path.exists(path)):
+            raise FileNotFoundError(errno.ENOENT, "No such file or directory", path)
         self.owners.append((path, uid, gid))
 
     def addNode(self, name, hidId="0003:0000046D:0000C54F", driver="hid-generic", descriptor=C54F_HIDPP, present=True, number=None):
@@ -114,14 +116,22 @@ class ClearAccessTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("Couldn't close access to " + first + ": [Errno 1] Operation not permitted\n", output)
         self.assertIn("Closed access to " + second + "\n", output)
-        self.assertEqual(self.owners, [(second, 0, GROUP_ID)])
+        self.assertEqual(self.owners, [(first, 0, GROUP_ID), (second, 0, GROUP_ID)])
 
-    def testAMissingGroupIsPrintedForEachNode(self):
-        self.addNode("hidraw4")
-        self.addNode("hidraw5")
+    def testAMissingGroupLeavesEveryNodeAsItWas(self):
+        paths = [self.addNode("hidraw4"), self.addNode("hidraw5")]
         with mock.patch.object(clearAccess.grp, "getgrnam", side_effect=KeyError("getgrnam(): name not found: 'logitech-mouse-battery'")):
             code, output = self.runClear()
-        self.assertEqual((code, output.count("Couldn't close access to "), self.owners), (1, 2, []))
+        self.assertEqual((code, output), (1, "Couldn't find the logitech-mouse-battery group, so no node was changed\n"))
+        self.assertEqual((self.removed, self.owners, [self.mode(path) for path in paths]), ([], [], [0o666, 0o666]))
+
+    def testTheGroupAndModeGoOnBeforeTheAclComesOff(self):
+        path = self.addNode("hidraw4")
+        steps = []
+        realChmod = os.chmod
+        with mock.patch.object(clearAccess.os, "chown", lambda *args: steps.append("chown")), mock.patch.object(clearAccess.os, "chmod", lambda *args: steps.append("chmod") or realChmod(*args)), mock.patch.object(clearAccess.os, "removexattr", lambda *args: steps.append("removexattr")):
+            self.assertEqual(self.runClear(), (0, "Closed access to " + path + "\n"))
+        self.assertEqual(steps, ["chown", "chmod", "removexattr"])
 
     def testANodeAnotherRuleGivesTheSeatKeepsItsAclButGetsItsOwnerAndMode(self):
         path = self.addNode("hidraw4", number="243:4")
