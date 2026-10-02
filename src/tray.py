@@ -299,7 +299,9 @@ class MouseBatteryApp(QObject):
         panelColor.askPortalColorScheme(self.sessionBus, self, lambda scheme, error: self.onPortalScheme(scheme, error, False))
 
     def onPortalScheme(self, scheme, error, firstRead):
-        self.portalScheme = scheme
+        # a read that failed says nothing about the scheme, which a SettingChanged may have set while it waited
+        if (error is None):
+            self.portalScheme = scheme
         # the portal can still be starting at login, so a first read that got no answer gets one more try
         if (firstRead and error == NO_REPLY):
             self.portalTimer.start()

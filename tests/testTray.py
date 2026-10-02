@@ -410,6 +410,13 @@ class AppTests(unittest.TestCase):
         self.assertEqual((len(asked), mouseApp.portalScheme), (2, 1))
         self.assertNotEqual(mouseApp.cachedColor, QColor("#123456"))
 
+    def testAFailedPortalReadKeepsTheSchemeASignalSet(self):
+        mouseApp = self.makeApp(True)
+        # SettingChanged already said prefer light while the read waited
+        mouseApp.portalScheme = 2
+        mouseApp.onPortalScheme(0, notify.NO_REPLY, False)
+        self.assertEqual(mouseApp.portalScheme, 2)
+
     def testTheColorSchemeIsReadWithoutABlockingCall(self):
         mouseApp = self.makeApp(True)
         blocking = []
