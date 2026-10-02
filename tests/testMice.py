@@ -9,6 +9,7 @@ from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
 
 import hidpp
+import lowBattery
 import mice
 import upower
 from serviceState import ServiceEntry, ServiceState
@@ -277,6 +278,14 @@ class MouseListTests(unittest.TestCase):
 
     def testAMouseWithAUnitIdIsntWarnedAgainAfterTheNodeGoes(self):
         self.assertEqual(self.warningsAcrossTheNodeGoing("02bc524c", False), [9])
+
+    def testFreshUnitIdsOnOneSlotWarnAFewTimesAndLeaveNothingBehind(self):
+        warnings = self.sentWarnings()
+        for i in range(20):
+            self.mice.applyService(state(entry("%08x" % i, percent=9)))
+        self.assertEqual(len(warnings), lowBattery.NOTICE_LIMIT)
+        # only the mouse still in the list can have anything armed
+        self.assertLessEqual(set(self.mice.warner.sent), {"%08x" % 19})
 
     def testAUPowerMouseMergesWithTheSameHidppMouse(self):
         warnings = self.sentWarnings()

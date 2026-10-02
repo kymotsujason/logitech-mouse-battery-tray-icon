@@ -10,7 +10,11 @@ def discharging(percent):
 
 class WarnerTests(unittest.TestCase):
     def setUp(self):
-        self.warner = lowBattery.LowBatteryWarner()
+        self.now = 1000.0
+        self.warner = lowBattery.LowBatteryWarner(clock=lambda: self.now)
+
+    def windowPasses(self):
+        self.now += lowBattery.NOTICE_WINDOW_SECONDS
 
     def updateAndSend(self, key, reading, asleep):
         percent = self.warner.update(key, reading, asleep)
@@ -29,11 +33,13 @@ class WarnerTests(unittest.TestCase):
     def testExternalPowerResets(self):
         self.updateAndSend("m", discharging(9), False)
         self.assertIsNone(self.updateAndSend("m", hidpp.BatteryReading(9, 1), False))
+        self.windowPasses()
         self.assertEqual(self.updateAndSend("m", discharging(9), False), 9)
 
     def testExternalPowerWithoutAPercentageResets(self):
         self.updateAndSend("m", discharging(9), False)
         self.assertIsNone(self.updateAndSend("m", hidpp.BatteryReading(None, 1, level="low"), False))
+        self.windowPasses()
         self.assertEqual(self.updateAndSend("m", discharging(8), False), 8)
 
     def testDischargingWithoutAPercentageNeitherWarnsNorResets(self):
@@ -53,8 +59,42 @@ class WarnerTests(unittest.TestCase):
         self.assertIsNone(self.updateAndSend("m", discharging(8), False))
 
     def testOnlyADischargingReadingAboveTwentyArmsBothWarningsAgain(self):
-        results = [self.updateAndSend("m", discharging(percent), False) for percent in (10, 5, 20, 10, 5, 21, 10, 5)]
-        self.assertEqual(results, [10, 5, None, None, None, None, 10, 5])
+        results = [self.updateAndSend("m", discharging(percent), False) for percent in (10, 5, 20, 10, 5)]
+        self.windowPasses()
+        results += [self.updateAndSend("m", discharging(percent), False) for percent in (20, 10, 5, 21, 10, 5)]
+        self.assertEqual(results, [10, 5, None, None, None, None, None, None, None, 10, 5])
+
+    def testAMouseThatKeepsArmingAgainGetsEachWarningOnceAWindow(self):
+        results = []
+        for i in range(10):
+            results.append(self.updateAndSend("m", discharging(9), False))
+            self.updateAndSend("m", discharging(25), False)
+        self.assertEqual(results, [9] + [None] * 9)
+        self.windowPasses()
+        self.assertEqual(self.updateAndSend("m", discharging(9), False), 9)
+
+    def testFreshKeysAtALowLevelStopAtTheLimit(self):
+        results = [self.updateAndSend(str(key), discharging(9), False) for key in range(20)]
+        self.assertEqual(results, [9] * lowBattery.NOTICE_LIMIT + [None] * (20 - lowBattery.NOTICE_LIMIT))
+        self.assertLessEqual(len(self.warner.notices), lowBattery.NOTICE_LIMIT)
+
+    def testAWarningHeldBackByTheLimitGoesOutOnceTheWindowAllowsIt(self):
+        for key in range(lowBattery.NOTICE_LIMIT):
+            self.updateAndSend(str(key), discharging(9), False)
+        self.assertIsNone(self.updateAndSend("late", discharging(9), False))
+        self.windowPasses()
+        self.assertEqual(self.updateAndSend("late", discharging(9), False), 9)
+
+    def testForgettingAKeyDropsItsArmingButNotItsRecentWarnings(self):
+        self.updateAndSend("m", discharging(9), False)
+        self.warner.forget("m")
+        self.assertNotIn("m", self.warner.sent)
+        self.assertIsNone(self.updateAndSend("m", discharging(9), False))
+
+    def testForgettingAPathKeyLetsTheNextMouseThereBeWarned(self):
+        self.updateAndSend("/dev/hidraw4#1", discharging(9), False)
+        self.warner.forget("/dev/hidraw4#1", pathKey=True)
+        self.assertEqual(self.updateAndSend("/dev/hidraw4#1", discharging(9), False), 9)
 
     def testHighReadingsThatArentAwakeAndDischargingDontArmThemAgain(self):
         self.updateAndSend("m", discharging(9), False)

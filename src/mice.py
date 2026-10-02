@@ -166,9 +166,8 @@ class MouseList(QObject):
 
     def removeMouse(self, mouse):
         self.mice.remove(mouse)
-        # a unit id or serial stays with its mouse and clears itself above REARM_PERCENT, while a path key can pass to a different mouse
-        if (mouse.pathKey):
-            self.warner.forget(mouse.key)
+        # a device can name a fresh unit id at every identify, so nothing is kept armed for a key that's gone
+        self.warner.forget(mouse.key, mouse.pathKey)
 
     def markWarningSent(self, key, percent):
         self.warner.markSent(key, percent)
