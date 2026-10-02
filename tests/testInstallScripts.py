@@ -29,7 +29,7 @@ STEPS = [
     "systemctl reload dbus.service",
     "udevadm control --reload",
     "udevadm trigger --subsystem-match=hidraw --action=change",
-    "udevadm settle",
+    "udevadm settle --timeout=30",
     "python3 -I -B /usr/share/logitech-mouse-battery/clearAccess.py",
     "systemctl reset-failed logitech-mouse-battery.service",
     "systemctl try-restart --no-block logitech-mouse-battery.service",

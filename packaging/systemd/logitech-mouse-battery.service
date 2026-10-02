@@ -4,17 +4,20 @@ Documentation=https://github.com/kymotsujason/logitech-mouse-battery-tray-icon
 # DeviceAllow=char-hidraw takes hidraw's major from /proc/devices at start, and a kernel with HID as a module has none until hid loads
 Wants=modprobe@hid.service
 After=modprobe@hid.service
+# a start that takes seconds to fail still fills the burst inside the interval, while twenty starts 2 s apart outlast it once each one takes over a second to fail
 StartLimitIntervalSec=60
-StartLimitBurst=20
+StartLimitBurst=5
 
 [Service]
 Type=dbus
 BusName=io.github.kymotsujason.LogitechMouseBattery
 ExecStart=/usr/bin/python3 -B /usr/share/logitech-mouse-battery/service.py
+# the journal would otherwise tag every line python3
+SyslogIdentifier=logitech-mouse-battery
 User=logitech-mouse-battery
 Group=logitech-mouse-battery
 Restart=on-failure
-RestartSec=2
+RestartSec=5
 NoNewPrivileges=yes
 CapabilityBoundingSet=
 ProtectSystem=strict

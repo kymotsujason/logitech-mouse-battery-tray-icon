@@ -33,7 +33,8 @@ step "reloading systemd" systemctl daemon-reload
 step "reloading the system bus" systemctl reload dbus.service
 step "reloading the udev rules" udevadm control --reload
 step "applying the rule to plugged in receivers and cables" udevadm trigger --subsystem-match=hidraw --action=change
-step "waiting for udev" udevadm settle
+# settle waits on the whole queue, so a stuck event elsewhere holds the transaction only this long
+step "waiting for udev" udevadm settle --timeout=30
 # until the trigger settles a node can still carry the old uaccess tag, which would put its ACL back
 step "closing the access 1.0.x gave" python3 -I -B "$APP_DIR/clearAccess.py"
 step "clearing the service's failed starts" clearFailedStarts

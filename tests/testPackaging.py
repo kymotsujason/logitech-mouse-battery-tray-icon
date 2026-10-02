@@ -124,8 +124,15 @@ class ServiceFileTests(unittest.TestCase):
     def testTheUnitRunsTheServiceAsItsOwnUser(self):
         sections = iniSections(os.path.join(PACKAGING, "systemd", UNIT_NAME))
         service = sections["Service"]
-        self.assertEqual({key: service[key] for key in ("Type", "BusName", "ExecStart", "User", "Group", "Restart", "RestartSec")}, {"Type": "dbus", "BusName": serviceState.SERVICE_NAME, "ExecStart": "/usr/bin/python3 -B /usr/share/logitech-mouse-battery/service.py", "User": USER, "Group": USER, "Restart": "on-failure", "RestartSec": "2"})
-        self.assertEqual((sections["Unit"]["StartLimitIntervalSec"], sections["Unit"]["StartLimitBurst"]), ("60", "20"))
+        self.assertEqual({key: service[key] for key in ("Type", "BusName", "ExecStart", "User", "Group", "Restart", "SyslogIdentifier")}, {"Type": "dbus", "BusName": serviceState.SERVICE_NAME, "ExecStart": "/usr/bin/python3 -B /usr/share/logitech-mouse-battery/service.py", "User": USER, "Group": USER, "Restart": "on-failure", "SyslogIdentifier": USER})
+
+    def testAServiceThatKeepsFailingSlowlyStillHitsItsStartLimit(self):
+        sections = iniSections(os.path.join(PACKAGING, "systemd", UNIT_NAME))
+        restartSeconds = int(sections["Service"]["RestartSec"])
+        interval, burst = int(sections["Unit"]["StartLimitIntervalSec"]), int(sections["Unit"]["StartLimitBurst"])
+        # a start that takes up to 5 s to fail, such as python3 importing PyQt6 on a cold cache, has to fill the burst inside the interval, or the restarts never stop
+        self.assertLess((restartSeconds + 5) * burst, interval)
+        self.assertGreaterEqual(restartSeconds * (burst - 1), 10)
         # it starts when udev or a caller wants it, never at boot by itself
         self.assertNotIn("Install", sections)
 
@@ -152,10 +159,10 @@ class ServiceFileTests(unittest.TestCase):
         self.assertEqual(sections, {"D-BUS Service": {"Name": serviceState.SERVICE_NAME, "Exec": "/bin/false", "User": USER, "SystemdService": UNIT_NAME}})
 
     def testThePacmanHookRunsAfterTheBusReload(self):
-        name = "logitech-mouse-battery.hook"
-        # pacman runs PostTransaction hooks in file name order, and the bus has to hold the new policy first
-        self.assertLess("dbus-reload.hook", name)
-        self.assertLess("35-systemd-udev-reload.hook", name)
+        name = re.search(r"usr/share/libalpm/hooks/([^\"\s]+)", readText("packaging", "aur", "PKGBUILD")).group(1)
+        # pacman runs PostTransaction hooks in file name order, and the group, the bus policy, and the udev rules have to be in place first
+        for earlier in ("30-systemd-sysusers.hook", "35-systemd-udev-reload.hook", "dbus-reload.hook"):
+            self.assertLess(earlier, name)
         lines = readText("packaging", "alpm", name).splitlines()
         for line in ("Type = Path", "Operation = Install", "Operation = Upgrade", "Target = usr/share/logitech-mouse-battery/*", "When = PostTransaction", "Exec = /usr/share/logitech-mouse-battery/afterInstall.sh"):
             self.assertIn(line, lines)
