@@ -16,6 +16,7 @@ XML = """
   <interface name="test.FakeUPower">
     <method name="SetPresent"><arg type="b" direction="in"/></method>
     <method name="FailNextGetAll"><arg type="s" direction="in"/></method>
+    <method name="SetHanging"><arg type="b" direction="in"/></method>
   </interface>
 </node>
 """
@@ -39,7 +40,7 @@ def readPercent():
         return 55.0
 
 
-state = {"percent": readPercent(), "present": True, "failNext": None}
+state = {"percent": readPercent(), "present": True, "failNext": None, "hanging": False, "held": []}
 
 
 def properties():
@@ -56,7 +57,14 @@ def onCall(conn, sender, path, interface, method, params, invocation):
                 log("present " + str(present))
         elif (method == "FailNextGetAll"):
             state["failNext"] = params.unpack()[0]
+        elif (method == "SetHanging"):
+            state["hanging"] = params.unpack()[0]
         invocation.return_value(None)
+        return
+    if (state["hanging"]):
+        # a hung UPower takes the call and never answers, so the caller waits out its whole timeout
+        state["held"].append(invocation)
+        log("held " + method)
         return
     if (method == "EnumerateDevices"):
         invocation.return_value(GLib.Variant("(ao)", ([MOUSE_PATH] if state["present"] else [],)))

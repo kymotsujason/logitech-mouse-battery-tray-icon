@@ -58,33 +58,47 @@ def mouseFromProperties(path, props):
     return UPowerMouse(path, serial or path, model, reading, pathKey=not serial)
 
 
-def callMethod(bus, path, interface, method, arguments=None):
+def methodCall(path, interface, method, arguments=None):
     message = QDBusMessage.createMethodCall(SERVICE, path, interface, method)
     if (arguments is not None):
         message.setArguments(arguments)
-    reply = dbusCalls.call(bus, message)
+    return message
+
+
+def enumerateCall():
+    return methodCall(ROOT_PATH, SERVICE, "EnumerateDevices")
+
+
+def getAllCall(path):
+    return methodCall(path, PROPERTIES_INTERFACE, "GetAll", [DEVICE_INTERFACE])
+
+
+def pathsFrom(reply):
     error = dbusCalls.failure(reply)
     if (error is not None):
-        return (None, error)
-    return (reply.arguments(), None)
-
-
-def enumeratePaths(bus):
-    arguments, error = callMethod(bus, ROOT_PATH, SERVICE, "EnumerateDevices")
-    if (error is not None):
         return ([], error)
+    arguments = reply.arguments()
     if (not arguments):
         return ([], None)
     return ([dbusCalls.pathText(path) for path in arguments[0]], None)
 
 
-def getProperties(bus, path):
-    arguments, error = callMethod(bus, path, PROPERTIES_INTERFACE, "GetAll", [DEVICE_INTERFACE])
+def propertiesFrom(reply):
+    error = dbusCalls.failure(reply)
     if (error is not None):
         return (None, error)
+    arguments = reply.arguments()
     if (not arguments):
         return ({}, None)
     return (arguments[0], None)
+
+
+def enumeratePaths(bus):
+    return pathsFrom(dbusCalls.call(bus, enumerateCall()))
+
+
+def getProperties(bus, path):
+    return propertiesFrom(dbusCalls.call(bus, getAllCall(path)))
 
 
 def listMice(bus=None):
@@ -121,6 +135,10 @@ class UPowerWatcher(QObject):
         self.retryTimer.setSingleShot(True)
         self.retryTimer.timeout.connect(self.onRetry)
         self.ownerWatcher = None
+        # a reply to a call made before an owner change or a stop belongs to a UPower that's gone
+        self.generation = 0
+        self.refreshing = set()
+        self.refreshAgain = set()
 
     def start(self):
         # subscribing before listing keeps a device added in between from going missing
@@ -134,6 +152,9 @@ class UPowerWatcher(QObject):
         self.retryTimer.stop()
         self.retryPaths.clear()
         self.enumerateDue = False
+        self.generation += 1
+        self.refreshing.clear()
+        self.refreshAgain.clear()
 
     def watchOwner(self):
         # after a UPower restart the old paths and readings can be stale, so a new owner means listing again
@@ -151,7 +172,13 @@ class UPowerWatcher(QObject):
         self.listDevices()
 
     def listDevices(self):
-        paths, error = enumeratePaths(self.bus)
+        generation = self.generation
+        dbusCalls.callLater(self.bus, enumerateCall(), lambda reply: self.onListed(generation, reply), self)
+
+    def onListed(self, generation, reply):
+        if (generation != self.generation):
+            return
+        paths, error = pathsFrom(reply)
         if (error is not None):
             if (error not in ABSENT_ERRORS):
                 self.enumerateDue = True
@@ -175,7 +202,24 @@ class UPowerWatcher(QObject):
             self.refresh(path)
 
     def refresh(self, path):
-        props, error = getProperties(self.bus, path)
+        # a device gets one GetAll at a time, and changes during it ask for one more, so a burst of signals can't stack up calls
+        if (path in self.refreshing):
+            self.refreshAgain.add(path)
+            return
+        self.refreshing.add(path)
+        generation = self.generation
+        dbusCalls.callLater(self.bus, getAllCall(path), lambda reply: self.onRefreshed(generation, path, reply), self)
+
+    def onRefreshed(self, generation, path, reply):
+        if (generation != self.generation):
+            return
+        self.refreshing.discard(path)
+        if (path in self.refreshAgain):
+            # the device changed after this call went out, so its answer may already be old
+            self.refreshAgain.discard(path)
+            self.refresh(path)
+            return
+        props, error = propertiesFrom(reply)
         if (error is not None):
             self.retryPaths.discard(path)
             if (error in GONE_ERRORS):

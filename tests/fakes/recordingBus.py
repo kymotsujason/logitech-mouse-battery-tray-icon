@@ -1,4 +1,4 @@
-from PyQt6.QtDBus import QDBusMessage
+from PyQt6.QtDBus import QDBusMessage, QDBusPendingCall
 
 
 class RecordingBus:
@@ -12,3 +12,6 @@ class RecordingBus:
 
     def call(self, message, mode=None, timeout=None):
         return QDBusMessage()
+
+    def asyncCall(self, message, timeout=None):
+        return QDBusPendingCall.fromCompletedCall(QDBusMessage())

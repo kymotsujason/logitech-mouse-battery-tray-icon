@@ -1,10 +1,12 @@
 import os
+import time
 import unittest
 from unittest import mock
 
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
-from PyQt6.QtDBus import QDBusConnection, QDBusMessage, QDBusServiceWatcher, QDBusVariant
+from PyQt6.QtCore import QTimer
+from PyQt6.QtDBus import QDBusConnection, QDBusMessage, QDBusPendingCall, QDBusServiceWatcher, QDBusVariant
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
 
@@ -139,23 +141,28 @@ class WatcherOwnerTests(unittest.TestCase):
         self.watcher.watchOwner()
         self.assertEqual(self.watcher.ownerWatcher.watchedServices(), [upower.SERVICE])
         self.assertEqual(self.watcher.ownerWatcher.watchMode(), QDBusServiceWatcher.WatchModeFlag.WatchForOwnerChange)
-        with mock.patch.object(upower, "enumeratePaths", return_value=([], None)):
-            self.watcher.ownerWatcher.serviceOwnerChanged.emit(upower.SERVICE, ":1.5", "")
+        self.watcher.ownerWatcher.serviceOwnerChanged.emit(upower.SERVICE, ":1.5", "")
         self.assertEqual(sorted(self.removed), sorted([PATH, OTHER_PATH]))
 
     def testANewOwnerDropsTheOldMiceAndListsAgain(self):
-        with mock.patch.object(upower, "enumeratePaths", return_value=([PATH], None)):
-            self.watcher.onOwnerChanged(upower.SERVICE, ":1.5", ":1.9")
+        self.watcher.bus = ScriptedBus(lambda message: message.createReply([[PATH]]))
+        self.watcher.onOwnerChanged(upower.SERVICE, ":1.5", ":1.9")
         self.assertEqual(sorted(self.removed), sorted([PATH, OTHER_PATH]))
         self.assertEqual(self.watcher.paths, set())
-        self.assertEqual(self.refreshed, [PATH])
+        self.assertTrue(waitFor(lambda: self.refreshed == [PATH]))
 
     def testUPowerGoingAwayOnlyDropsTheMice(self):
-        with mock.patch.object(upower, "enumeratePaths") as enumerate:
-            self.watcher.onOwnerChanged(upower.SERVICE, ":1.5", "")
+        self.watcher.bus = ScriptedBus(lambda message: message.createReply([[PATH]]))
+        self.watcher.onOwnerChanged(upower.SERVICE, ":1.5", "")
         self.assertEqual(sorted(self.removed), sorted([PATH, OTHER_PATH]))
-        self.assertEqual(self.watcher.paths, set())
-        self.assertFalse(enumerate.called)
+        self.assertEqual((self.watcher.paths, self.watcher.bus.calls), (set(), []))
+
+    def testAListingStartedBeforeAnOwnerChangeIsSetAside(self):
+        self.watcher.bus = ScriptedBus(lambda message: message.createReply([[OTHER_PATH]]))
+        self.watcher.listDevices()
+        self.watcher.onOwnerChanged(upower.SERVICE, ":1.5", "")
+        QTest.qWait(50)
+        self.assertEqual(self.refreshed, [])
 
 
 class WatcherSubscriptionTests(unittest.TestCase):
@@ -180,9 +187,26 @@ class ScriptedBus(RecordingBus):
         self.calls.append((message.member(), message.path(), timeout))
         return self.answer(message)
 
+    def asyncCall(self, message, timeout=None):
+        self.calls.append((message.member(), message.path(), timeout))
+        return QDBusPendingCall.fromCompletedCall(self.answer(message))
+
 
 def failWith(name):
     return lambda message: message.createErrorReply(name, "failed on purpose")
+
+
+def waitFor(condition, timeout=3.0):
+    for i in range(int(timeout * 50)):
+        if (condition()):
+            return True
+        QTest.qWait(20)
+    return condition()
+
+
+def settle():
+    # a scripted answer reaches the watcher from the event loop, a pass after the call
+    QTest.qWait(20)
 
 
 class RetryTests(unittest.TestCase):
@@ -199,33 +223,39 @@ class RetryTests(unittest.TestCase):
     def testEveryCallHasTheDefaultTimeout(self):
         bus, watcher = self.makeWatcher(lambda message: message.createReply([[]]))
         watcher.start()
+        settle()
         self.assertEqual(bus.calls, [("EnumerateDevices", upower.ROOT_PATH, 2000)])
 
     def testAFailedListingIsRetried(self):
         bus, watcher = self.makeWatcher(failWith("org.freedesktop.DBus.Error.NoReply"))
         watcher.start()
-        self.assertTrue(watcher.enumerateDue and watcher.retryTimer.isActive())
+        self.assertTrue(waitFor(lambda: watcher.enumerateDue and watcher.retryTimer.isActive()))
 
     def testNoUPowerOnTheBusIsntRetried(self):
         for name in upower.ABSENT_ERRORS:
             with self.subTest(name=name):
                 bus, watcher = self.makeWatcher(failWith(name))
                 watcher.start()
+                settle()
+                self.assertEqual(len(bus.calls), 1)
                 self.assertFalse(watcher.enumerateDue or watcher.retryTimer.isActive())
 
     def testARetriedListingThatFindsNoUPowerStopsListing(self):
         names = ["org.freedesktop.DBus.Error.NoReply", "org.freedesktop.DBus.Error.ServiceUnknown"]
         bus, watcher = self.makeWatcher(lambda message: message.createErrorReply(names.pop(0), "failed on purpose"))
         watcher.start()
-        self.assertTrue(watcher.enumerateDue)
+        self.assertTrue(waitFor(lambda: watcher.enumerateDue))
         watcher.retryTimer.stop()
         watcher.onRetry()
+        settle()
+        self.assertEqual(len(bus.calls), 2)
         self.assertEqual((watcher.enumerateDue, watcher.retryTimer.isActive()), (False, False))
 
     def testAFailedGetAllKeepsTheMouseAndRetries(self):
         bus, watcher = self.makeWatcher(failWith("org.freedesktop.DBus.Error.NoReply"))
         watcher.paths.add(PATH)
         watcher.refresh(PATH)
+        self.assertTrue(waitFor(lambda: PATH in watcher.retryPaths))
         self.assertEqual((self.removed, PATH in watcher.paths, PATH in watcher.retryPaths, watcher.retryTimer.isActive()), ([], True, True, True))
 
     def testAGoneDeviceIsRemoved(self):
@@ -236,29 +266,41 @@ class RetryTests(unittest.TestCase):
                 bus, watcher = self.makeWatcher(failWith(name))
                 watcher.paths.add(PATH)
                 watcher.refresh(PATH)
+                self.assertTrue(waitFor(lambda: self.removed))
                 self.assertEqual((self.removed, watcher.retryPaths), ([PATH], set()))
 
     def testRetriesBackOffUpToACap(self):
-        with mock.patch.object(upower, "RETRY_MS", 10), mock.patch.object(upower, "RETRY_MAX_MS", 40):
+        # long enough that no retry fires while the test waits for each answer
+        with mock.patch.object(upower, "RETRY_MS", 1000), mock.patch.object(upower, "RETRY_MAX_MS", 4000):
             bus, watcher = self.makeWatcher(failWith("org.freedesktop.DBus.Error.NoReply"))
             intervals = []
             for i in range(4):
                 watcher.retryTimer.stop()
                 watcher.refresh(PATH)
+                self.assertTrue(waitFor(lambda: watcher.retryTimer.isActive()))
                 intervals.append(watcher.retryTimer.interval())
-        self.assertEqual(intervals, [10, 20, 40, 40])
+        self.assertEqual(intervals, [1000, 2000, 4000, 4000])
 
     def testAnOwnerChangeCancelsEveryRetry(self):
         bus, watcher = self.makeWatcher(failWith("org.freedesktop.DBus.Error.NoReply"))
         watcher.refresh(PATH)
+        self.assertTrue(waitFor(lambda: watcher.retryTimer.isActive()))
         watcher.onOwnerChanged(upower.SERVICE, ":1.5", "")
         self.assertEqual((watcher.retryPaths, watcher.enumerateDue, watcher.retryTimer.isActive()), (set(), False, False))
 
     def testStopEndsTheRetries(self):
         bus, watcher = self.makeWatcher(failWith("org.freedesktop.DBus.Error.NoReply"))
         watcher.refresh(PATH)
+        self.assertTrue(waitFor(lambda: watcher.retryTimer.isActive()))
         watcher.stop()
         self.assertFalse(watcher.retryTimer.isActive())
+
+    def testAReplyAfterAStopIsSetAside(self):
+        bus, watcher = self.makeWatcher(lambda message: message.createReply([{"Type": 5, "NativePath": "hidpp_battery_0", "Serial": "1"}]))
+        watcher.refresh(PATH)
+        watcher.stop()
+        settle()
+        self.assertEqual((self.changed, watcher.paths), ([], set()))
 
 
 class BusTests(unittest.TestCase):
@@ -285,6 +327,8 @@ class BusTests(unittest.TestCase):
         watcher.mouseChanged.connect(self.changes.append)
         watcher.mouseRemoved.connect(self.removals.append)
         watcher.start()
+        # the first listing answers later now, and a test that drives the fake has to wait for it first
+        self.assertTrue(self.waitFor(lambda: self.changes))
         return watcher
 
     def control(self, method, value):
@@ -305,6 +349,7 @@ class BusTests(unittest.TestCase):
 
     def testListsTheMouseWithAPlainPath(self):
         self.makeWatcher()
+        self.assertTrue(self.waitFor(lambda: self.changes))
         self.assertEqual([(mouse.path, type(mouse.path), mouse.key) for mouse in self.changes], [("/org/freedesktop/UPower/devices/mouse_hidpp_battery_0", str, "12ab34cd")])
 
     def testListMiceReadsTheFake(self):
@@ -325,6 +370,33 @@ class BusTests(unittest.TestCase):
             self.setPercent("54")
             self.assertTrue(self.waitFor(lambda: self.changes[-1].reading.percent == 54))
         self.assertEqual(self.removals, [])
+
+    def testAHungUPowerLeavesTheEventLoopRunning(self):
+        watcher = self.makeWatcher()
+        self.assertTrue(self.waitFor(lambda: self.changes))
+        self.control("SetHanging", True)
+        ticks = []
+        timer = QTimer()
+        timer.timeout.connect(lambda: ticks.append(1))
+        timer.start(10)
+        started = time.monotonic()
+        watcher.refresh(PATH)
+        returned = time.monotonic() - started
+        self.assertTrue(self.waitFor(lambda: PATH in watcher.retryPaths, timeout=5.0))
+        timer.stop()
+        # the audit measured 0 ticks over the 2.10 s a GetAll to a hung UPower held the tray
+        self.assertLess(returned, 0.1)
+        self.assertGreater(len(ticks), 100)
+        self.assertEqual(self.removals, [])
+
+    def testABurstOfChangesDuringAHungGetAllAsksOnce(self):
+        watcher = self.makeWatcher()
+        self.assertTrue(self.waitFor(lambda: self.changes))
+        self.control("SetHanging", True)
+        for i in range(5):
+            watcher.refresh(PATH)
+        QTest.qWait(300)
+        self.assertEqual(self.bus.lines(self.log).count("held GetAll"), 1)
 
     def testAnUnknownObjectErrorRemovesTheMouse(self):
         self.makeWatcher()
