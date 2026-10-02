@@ -46,7 +46,7 @@ The icon is a mouse that fills up with the battery level and shows the percentag
 - `PRO X3 SUPERSTRIKE, charging, 82%`
 - `PRO X3 SUPERSTRIKE, asleep, 69% at 21:40`
 
-Opening the menu takes a fresh reading from each mouse it reads over HID++, while UPower keeps the others current on its own. A mouse that has gone to sleep shows its last reading and the time it was taken.
+Opening the menu takes a fresh reading from each mouse it reads over HID++, while UPower keeps the others current on its own. A mouse that has gone to sleep shows its last reading and the time it was taken. If the battery service can't be reached, the menu says so under the mice, and the ones it reads keep their last reading and its time until it's back.
 
 ## GNOME
 
@@ -54,7 +54,7 @@ GNOME's top bar has no system tray of its own, so Mouse Battery needs the AppInd
 
 ## Check from a terminal
 
-`logitech-mouse-battery check` prints each mouse it can read with its battery, and says what to do when it can't read one.
+`logitech-mouse-battery check` prints each mouse it can read with its battery, and says what to do when it can't read one. When it can't reach the battery service it names the error, and when the service turns its read down it says the readings may be old.
 
 ## Which mice work
 
@@ -67,7 +67,7 @@ It has been tested with the PRO X3 SUPERSTRIKE on its receiver and on its cable,
 
 ## What the udev rule allows
 
-The rule hands the HID++ interface of any Logitech USB device that the kernel leaves to its generic HID driver, such as a receiver or a mouse on its cable, to the `logitech-mouse-battery` group, when that interface's report descriptor passes the app's own check. The check rejects any interface with a keyboard, keypad, or mouse collection and any receiver interface that carries a paired keyboard's keystrokes. Only Mouse Battery's service runs in that group, as its own system user in a systemd sandbox, and it offers nothing but battery readings on the system bus. Any local user may read those readings and ask for a new read. The service runs at most one read a second, and each account gets five reads at once and then one every 30 seconds. Nothing this package installs lets a program you run open the receiver or cable, or send it HID++ commands.
+The rule hands the HID++ interface of any Logitech USB device that the kernel leaves to its generic HID driver, such as a receiver or a mouse on its cable, to the `logitech-mouse-battery` group, when that interface's report descriptor passes the app's own check. The check rejects any interface with a keyboard, keypad, or mouse collection and any receiver interface that carries a paired keyboard's keystrokes. Only Mouse Battery's service runs in that group, as its own system user in a systemd sandbox, and it offers nothing but battery readings on the system bus. Any local user may read those readings, which include each mouse's name, its unit id, and when it last woke and was read, and any local user may ask for a new read. The service runs at most one read a second, and each account gets five reads at once and then one every 30 seconds, after which a read is turned down with an error. Nothing this package installs lets a program you run open the receiver or cable, or send it HID++ commands.
 
 Another package's udev rule can still give your account access of its own, as Solaar's does for every Logitech receiver. A current Solaar keeps that access when Mouse Battery is installed. However, the older Solaar that Debian 12 and Ubuntu 24.04 ship loses it until the receiver is plugged in again or the computer restarts.
 
