@@ -23,6 +23,7 @@ import dbusCalls
 import exceptionHooks
 import hidpp
 import installWatch
+import lowBattery
 import mice
 import notify
 import panelColor
@@ -226,6 +227,18 @@ class AppTests(unittest.TestCase):
             held[0](7, None)
             mouseApp.mouseList.applyUPower(upower.UPowerMouse(PATH, "12ab34cd", "MX Master 3", hidpp.BatteryReading(7, 0)))
         self.assertEqual(len(held), 1)
+
+    def testFreshLowMiceInOneStateStopAtTheLimitWhileTheirNoticesAreOnTheirWay(self):
+        mouseApp = self.makeApp(True)
+        held = []
+
+        def send(summary, body, actions=(), onAction=None, onSent=None):
+            held.append(onSent)
+
+        entries = tuple(ServiceEntry("%08x" % key, False, NAME, "/dev/hidraw18", hidpp.BatteryReading(9, 0), False, LAST_READ, LAST_READ) for key in range(lowBattery.NOTICE_LIMIT + 3))
+        with mock.patch.object(mouseApp.notifier, "send", send):
+            mouseApp.mouseList.applyService(ServiceState(False, False, ("/dev/hidraw18",), (), entries))
+        self.assertEqual(len(held), lowBattery.NOTICE_LIMIT)
 
     def testALowBatteryNoticeMakesNoBlockingCall(self):
         mouseApp = self.makeApp(True)

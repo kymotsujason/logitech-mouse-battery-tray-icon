@@ -19,7 +19,7 @@ class WarnerTests(unittest.TestCase):
     def updateAndSend(self, key, reading, asleep):
         percent = self.warner.update(key, reading, asleep)
         if (percent is not None):
-            self.warner.markSent(key, percent)
+            self.warner.confirm(key, percent)
         return percent
 
     def testWarnsOnceAtTenAndOnceAtFive(self):
@@ -103,11 +103,38 @@ class WarnerTests(unittest.TestCase):
         self.assertIsNone(self.updateAndSend("m", discharging(50), True))
         self.assertIsNone(self.updateAndSend("m", discharging(9), False))
 
-    def testAWarningStaysDueUntilItsMarkedSent(self):
+    def testAWarningOnItsWayIsntHandedOutAgain(self):
         self.assertEqual(self.warner.update("m", discharging(9), False), 9)
+        self.assertIsNone(self.warner.update("m", discharging(9), False))
+
+    def testAWarningGivenBackIsDueAgain(self):
         self.assertEqual(self.warner.update("m", discharging(9), False), 9)
-        self.warner.markSent("m", 9)
-        self.assertIsNone(self.warner.update("m", discharging(8), False))
+        self.warner.giveBack("m", 9)
+        self.assertEqual(self.warner.update("m", discharging(8), False), 8)
+
+    def testWarningsOnTheirWayCountAgainstTheLimit(self):
+        results = [self.warner.update(str(key), discharging(9), False) for key in range(10)]
+        self.assertEqual(results, [9] * lowBattery.NOTICE_LIMIT + [None] * (10 - lowBattery.NOTICE_LIMIT))
+
+    def testAWarningGivenBackLeavesRoomUnderTheLimit(self):
+        for key in range(lowBattery.NOTICE_LIMIT):
+            self.warner.update(str(key), discharging(9), False)
+        self.warner.giveBack("0", 9)
+        self.assertEqual(self.warner.update("late", discharging(9), False), 9)
+
+    def testTheCriticalWarningGoesOutWhileTheLowOneIsOnItsWay(self):
+        self.assertEqual(self.warner.update("m", discharging(9), False), 9)
+        self.assertEqual(self.warner.update("m", discharging(4), False), 4)
+        self.warner.giveBack("m", 9)
+        self.warner.confirm("m", 4)
+        self.assertIsNone(self.warner.update("m", discharging(4), False))
+
+    def testAnAnswerForAForgottenKeyLeavesNothingBehind(self):
+        self.warner.update("m", discharging(9), False)
+        self.warner.forget("m")
+        self.warner.confirm("m", 9)
+        self.warner.giveBack("m", 9)
+        self.assertNotIn("m", self.warner.sent)
 
     def testAsleepNeverWarns(self):
         self.assertIsNone(self.updateAndSend("m", discharging(4), True))

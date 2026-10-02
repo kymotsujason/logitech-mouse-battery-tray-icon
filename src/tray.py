@@ -120,7 +120,6 @@ class MouseBatteryApp(QObject):
         self.cachedColor = None
         self.aboutBox = None
         self.noticeErrors = set()
-        self.noticesOnTheirWay = set()
         self.mouseList = mice.MouseList()
         self.mouseList.changed.connect(self.updateTray)
         self.mouseList.lowBattery.connect(self.onLowBattery)
@@ -214,20 +213,17 @@ class MouseBatteryApp(QObject):
         return (enabled, error)
 
     def onLowBattery(self, key, name, percent):
-        # the warning stays due until the server takes it, so a reading that comes while it's on its way doesn't send it again
-        if (key in self.noticesOnTheirWay):
-            return
-        self.noticesOnTheirWay.add(key)
+        # the warner counts the warning as sent from here on, so a reading that comes while it's on its way doesn't send it again
         self.notifier.send("Mouse battery low", name + " has " + str(percent) + "% left.", onSent=lambda notificationId, error: self.onLowBatterySent(key, name, percent, notificationId, error))
 
     def onLowBatterySent(self, key, name, percent, notificationId, error):
-        self.noticesOnTheirWay.discard(key)
         # NoReply means the bus already handed the message to the server (or is starting the server for it), and asking again after a timeout would send it twice
         if (notificationId is None and error != NO_REPLY):
-            # the warning stays due and goes out again with the next reading, so each failure is printed once
+            # the warning is given back, so it goes out again with the next reading, and each failure is printed once
             if ((key, error) not in self.noticeErrors):
                 self.noticeErrors.add((key, error))
                 print("Couldn't send the low battery notice for " + name + ": " + str(error), file=sys.stderr)
+            self.mouseList.markWarningFailed(key, percent)
             return
         self.mouseList.markWarningSent(key, percent)
 

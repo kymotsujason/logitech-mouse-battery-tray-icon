@@ -175,7 +175,10 @@ class MouseList(QObject):
         self.warner.forget(mouse.key, mouse.pathKey)
 
     def markWarningSent(self, key, percent):
-        self.warner.markSent(key, percent)
+        self.warner.confirm(key, percent)
+
+    def markWarningFailed(self, key, percent):
+        self.warner.giveBack(key, percent)
 
     def applyUPower(self, upowerMouse):
         mouse = self.mouseFor(upowerMouse.key, pathKey=upowerMouse.pathKey)
