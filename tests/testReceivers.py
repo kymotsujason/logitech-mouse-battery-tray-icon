@@ -845,6 +845,50 @@ class ReceiverListTests(unittest.TestCase):
             self.mice.start()
             self.assertTrue(waitUntil(lambda: set(self.keys()) == {"02bc524c", "bbbbbbbb"}, timeout=2.0))
 
+    def testAReportDuringARetrySearchRidesOnTheRetry(self):
+        self.nodes.add(RECEIVER, silent)
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: not self.mice.nodes[RECEIVER].searching))
+        state = self.mice.nodes[RECEIVER]
+        # the last search a report started was long ago, so only the retry's own search can count toward the gap
+        state.reportSearchAt = time.monotonic() - 60
+        state.retryTimer.start(0)
+        self.assertTrue(waitUntil(lambda: state.searching))
+        self.mice.onReport(state, OTHER_REPORT)
+        self.assertFalse(state.searchAgain)
+
+    def testARetryDuringARunningSearchQueuesNoOther(self):
+        self.nodes.add(RECEIVER, silent)
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: not self.mice.nodes[RECEIVER].searching))
+        state = self.mice.nodes[RECEIVER]
+        self.mice.requestSearch(RECEIVER)
+        # a search that outlasts the retry wait would otherwise get another one queued behind it every time
+        state.retryTimer.start(0)
+        QTest.qWait(30)
+        self.assertEqual((state.searching, state.searchAgain), (True, False))
+
+    def testANewDenialPullsTheRetryInButNeverPushesItOut(self):
+        self.nodes.deny(RECEIVER)
+        self.mice.start()
+        self.mice.deniedTimer.start(30)
+        self.nodes.deny(CABLE)
+        self.mice.scanNodes()
+        # Qt can report a millisecond or two of rounding, while a push out would read about 100
+        self.assertLessEqual(self.mice.deniedTimer.remainingTime(), 50)
+
+    def testANewDenialDuringARetryGetsTheShortestWait(self):
+        with mock.patch.object(receivers, "DENIED_RETRY_MAX_MS", 10000):
+            self.nodes.deny(RECEIVER)
+            self.mice.start()
+            for i in range(3):
+                self.mice.retryDenied()
+            # the device is replaced while still denied, which the next retry meets as a new device node
+            self.nodes.add(RECEIVER, silent)
+            self.nodes.deny(RECEIVER)
+            self.mice.retryDenied()
+        self.assertEqual(self.mice.deniedTimer.interval(), 100)
+
     def testANewlyDeniedPathStartsTheBackoffOver(self):
         self.nodes.deny(RECEIVER)
         self.mice.start()

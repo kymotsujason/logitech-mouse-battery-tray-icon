@@ -323,7 +323,7 @@ class ReceiverList(QObject):
             self.reportError(path, "Couldn't start", error)
             self.deny(path, signature)
             return
-        retryTimer = singleShotTimer(self, WAKE_RETRY_MS, lambda: self.requestSearch(path))
+        retryTimer = singleShotTimer(self, WAKE_RETRY_MS, lambda: self.retrySearch(path))
         identifyTimer = singleShotTimer(self, IDENTIFY_GAP_MS, lambda: self.runDeferredIdentifies(path))
         self.nodes[path] = NodeState(path, worker, retryTimer, identifyTimer)
         self.denied.discard(path)
@@ -337,7 +337,8 @@ class ReceiverList(QObject):
         # a path denied with a different device node than last time is a new device or new access, so the retry starts over at its shortest wait
         if (path not in self.lastDeniedSignatures or self.lastDeniedSignatures[path] != signature):
             self.deniedRetryMs = DENIED_RETRY_MS
-            if (self.deniedTimer.isActive()):
+            # the timer is shared, so a new denial can bring the next retry closer but never push another path's further away
+            if (self.deniedTimer.isActive() and self.deniedTimer.remainingTime() > self.deniedRetryMs):
                 self.deniedTimer.start(self.deniedRetryMs)
         self.lastDeniedSignatures[path] = signature
         self.denied.add(path)
@@ -381,9 +382,10 @@ class ReceiverList(QObject):
     def retryDenied(self):
         before = (set(self.nodes), set(self.denied))
         self.keepDenied(hidpp.findHidppNodes())
+        # doubled before the opens, so a new device node one of them meets starts its wait over at the shortest
+        self.deniedRetryMs = min(self.deniedRetryMs * 2, DENIED_RETRY_MAX_MS)
         for path in list(self.denied):
             self.openNode(path)
-        self.deniedRetryMs = min(self.deniedRetryMs * 2, DENIED_RETRY_MAX_MS)
         self.deniedTimer.stop()
         self.updateDeniedTimer()
         if ((set(self.nodes), set(self.denied)) != before):
@@ -411,6 +413,17 @@ class ReceiverList(QObject):
         # a notice that comes in while this search runs has to keep its slot out of what the search skips
         state.noticedSlots.clear()
         state.worker.queueWork(("search", frozenset(state.skipped), time.monotonic()))
+
+    def retrySearch(self, path):
+        state = self.nodes.get(path)
+        if (state is None):
+            return
+        # a search already running looks at every waiting slot and arms the retry again when one stays unresolved
+        if (state.searching):
+            return
+        # the retry's search counts toward the gap, so a report during it rides on the retry it arms instead of queueing another
+        state.reportSearchAt = time.monotonic()
+        self.requestSearch(path)
 
     def finishSearch(self, state):
         state.searching = False
