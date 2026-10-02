@@ -95,6 +95,56 @@ class WorkerTests(unittest.TestCase):
         self.device.unplug()
         self.assertEqual(nextMessage(self.messages, "lost")[:2], ("lost", self.worker))
 
+    def failWrites(self, count, code):
+        realWrite = self.worker.node.writeReport
+        failed = []
+
+        def flakyWrite(*args):
+            if (len(failed) < count):
+                failed.append(1)
+                raise OSError(code, os.strerror(code))
+            return realWrite(*args)
+        self.worker.node.writeReport = flakyWrite
+
+    def testAWriteTurnedAwayFailsOnlyItsItem(self):
+        self.startWorker(mouseHandler())
+        self.failWrites(1, errno.ETIMEDOUT)
+        self.worker.queueWork(("read", 1, FEATURE, 0.0))
+        message = nextMessage(self.messages, "failed")
+        self.assertEqual((message[2], message[3].errno), (("read", 1, FEATURE, 0.0), errno.ETIMEDOUT))
+        self.worker.queueWork(("read", 1, FEATURE, 0.0))
+        self.assertEqual(nextMessage(self.messages, "read")[3], (hidpp.ANSWER, hidpp.BatteryReading(81, 0)))
+
+    def testWritesTurnedAwayThreeTimesInARowLoseTheNode(self):
+        self.startWorker(mouseHandler())
+        self.failWrites(3, errno.EPIPE)
+        for i in range(3):
+            self.worker.queueWork(("read", 1, FEATURE, 0.0))
+        self.assertEqual(nextMessage(self.messages, "lost")[2].errno, errno.EPIPE)
+
+    def testAnItemThatWorksStartsTheCountOver(self):
+        self.startWorker(mouseHandler())
+        realWrite = self.worker.node.writeReport
+        # each read is one write, so this fails two reads, lets one through, and fails two more
+        outcomes = [False, False, True, False, False, True]
+
+        def patternedWrite(*args):
+            if (not outcomes.pop(0)):
+                raise OSError(errno.EPIPE, "Broken pipe")
+            return realWrite(*args)
+        self.worker.node.writeReport = patternedWrite
+        kinds = []
+        for i in range(6):
+            self.worker.queueWork(("read", 1, FEATURE, 0.0))
+            kinds.append(self.messages.get(timeout=2.0)[0])
+        self.assertEqual(kinds, ["failed", "failed", "read", "failed", "failed", "read"])
+
+    def testAWriteToAGoneDeviceLosesTheNodeAtOnce(self):
+        self.startWorker(mouseHandler())
+        self.failWrites(1, errno.ENODEV)
+        self.worker.queueWork(("read", 1, FEATURE, 0.0))
+        self.assertEqual(nextMessage(self.messages, "lost")[2].errno, errno.ENODEV)
+
     def testStopEndsTheThreadAndClosesThePipe(self):
         self.startWorker(mouseHandler())
         self.worker.stop()
@@ -732,6 +782,24 @@ class ReceiverListTests(unittest.TestCase):
         self.assertFalse(self.mouse().wakeTimer.isActive())
         receiver.send(bytes([0x11, 1, 5, 0x00, 64, 0x04, 0, 0]).ljust(20, b"\x00"))
         self.assertTrue(waitUntil(lambda: self.mouse().reading == hidpp.BatteryReading(64, 0)))
+
+    def testAWriteTurnedAwayKeepsTheNodeAndItsMouse(self):
+        self.nodes.add(RECEIVER, mouseHandler())
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"] and not self.mice.isBusy()))
+        realWrite = hidpp.HidppNode.writeReport
+        failed = []
+
+        def flakyWrite(node, *args):
+            if (not failed):
+                failed.append(1)
+                raise OSError(errno.ETIMEDOUT, "Connection timed out")
+            return realWrite(node, *args)
+        with mock.patch.object(hidpp.HidppNode, "writeReport", flakyWrite):
+            self.mice.readAll()
+            self.assertTrue(waitUntil(lambda: failed and not self.mice.isBusy()))
+        self.assertEqual((self.keys(), list(self.mice.nodes), self.mice.denied), (["02bc524c"], [RECEIVER], set()))
+        self.assertEqual(self.errors.getvalue(), "Request failed on " + RECEIVER + ": ETIMEDOUT\n")
 
     def putToSleep(self, receiver):
         receiver.handler = silent

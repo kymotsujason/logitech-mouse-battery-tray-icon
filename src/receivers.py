@@ -25,6 +25,9 @@ STABLE_MS = 60 * 1000
 SETTLE_CEILING_MS = 5 * 1000
 # one identify costs about a dozen requests, so this holds a stream of link up notices to the rate a read already runs at
 IDENTIFY_GAP_MS = 1000
+# a write a stalled hub or a busy receiver turns away fails only its request, while these, or an end of file with no errno, mean the device is gone
+GONE_ERRNOS = (errno.ENODEV, errno.EIO, errno.ESHUTDOWN, errno.EBADF, errno.ENXIO, errno.ENOENT)
+TRANSIENT_ERROR_LIMIT = 3
 
 
 class NodeWorker(threading.Thread):
@@ -39,6 +42,7 @@ class NodeWorker(threading.Thread):
         self.pipeLock = threading.Lock()
         self.wakeRead, self.wakeWrite = os.pipe()
         os.set_blocking(self.wakeWrite, False)
+        self.transientErrors = 0
         node.onEvent = self.onEvent
 
     def onEvent(self, report):
@@ -102,8 +106,12 @@ class NodeWorker(threading.Thread):
                 return
             try:
                 self.post(self.runItem(item))
-            except OSError:
-                raise
+                self.transientErrors = 0
+            except OSError as error:
+                if (error.errno is None or error.errno in GONE_ERRNOS or self.transientErrors + 1 >= TRANSIENT_ERROR_LIMIT):
+                    raise
+                self.transientErrors += 1
+                self.post(("failed", self, item, error))
             except Exception:
                 # sys.excepthook never sees another thread's exceptions, so print it here and keep serving the node
                 traceback.print_exc()
@@ -398,7 +406,7 @@ class ReceiverList(QObject):
         elif (kind == "identified"):
             self.onIdentified(state, message[2], message[3], message[4])
         elif (kind == "failed"):
-            self.onFailed(state, message[2])
+            self.onFailed(state, message[2], message[3] if len(message) > 3 else None)
         elif (kind == "lost"):
             self.onLost(state, message[2])
 
@@ -428,7 +436,9 @@ class ReceiverList(QObject):
             self.finishSearch(state)
         self.changed.emit()
 
-    def onFailed(self, state, item):
+    def onFailed(self, state, item, error=None):
+        if (error is not None):
+            self.reportError(state.path, "Request failed on", error)
         kind = item[0]
         if (kind == "search"):
             self.finishSearch(state)
