@@ -39,6 +39,10 @@ class InstallWatchTests(unittest.TestCase):
         self.removals = []
         self.watcher.removed.connect(lambda: self.removals.append(1))
 
+    def tearDown(self):
+        for timer in (self.watcher.timer, self.watcher.retryTimer, self.watcher.checkTimer):
+            timer.stop()
+
     def testAFileChangeStartsTheTimer(self):
         with mock.patch.object(installWatch.os, "execv"), tempfile.TemporaryDirectory() as folder:
             installedCopy(folder, installWatch.VERSION)
@@ -82,11 +86,29 @@ class InstallWatchTests(unittest.TestCase):
         self.assertEqual(execv.call_args.args[1], [sys.executable, "-B", os.path.join(folder, "tray.py")])
         self.assertEqual(errors, "")
 
-    def testABrokenTrayPyFailsTheRealImportCheck(self):
+    def testABrokenTrayPyFailsTheRealImportCheckAndSaysWhy(self):
         with tempfile.TemporaryDirectory() as folder:
             execv, errors = self.runCheck(folder, "import notThere\n")
+            self.watcher.retryTimer.stop()
         self.assertFalse(execv.called)
-        self.assertEqual(errors, "Version 9.9.9 didn't import, so " + installWatch.VERSION + " keeps running\n")
+        self.assertEqual(errors, "Version 9.9.9 didn't import, so " + installWatch.VERSION + " keeps running\n  ModuleNotFoundError: No module named 'notThere'\n")
+
+    def testAFailedCheckIsTriedAgain(self):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(installWatch, "CHECK_RETRY_MS", (100,)):
+            execv, errors = self.runCheck(folder, "import notThere\n")
+            # the rest of the install lands after the first check failed
+            with open(os.path.join(folder, "tray.py"), "w") as f:
+                f.write("")
+            with mock.patch.object(installWatch, "APP_FOLDER", folder), mock.patch.object(installWatch.os, "execv", execv), contextlib.redirect_stderr(io.StringIO()):
+                self.assertTrue(waitFor(lambda: execv.called, timeout=10.0))
+
+    def testAFailingCheckIsTriedAFewTimesThenLeft(self):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(installWatch, "CHECK_RETRY_MS", (50, 50)), mock.patch.object(self.watcher, "startCheck", wraps=self.watcher.startCheck) as startCheck:
+            self.runCheck(folder, "import notThere\n")
+            with mock.patch.object(installWatch, "APP_FOLDER", folder), contextlib.redirect_stderr(io.StringIO()):
+                self.assertTrue(waitFor(lambda: startCheck.call_count == 3 and self.watcher.check is None, timeout=10.0))
+                QTest.qWait(300)
+        self.assertEqual((startCheck.call_count, self.watcher.retryTimer.isActive()), (3, False))
 
     def testAFailedExecKeepsRunning(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -134,7 +156,7 @@ class InstallWatchTests(unittest.TestCase):
             installedCopy(folder, "9.9.9")
             with open(os.path.join(folder, "tray.py"), "w") as f:
                 f.write("import time\ntime.sleep(0.5)\n")
-            with mock.patch.object(installWatch, "APP_FOLDER", folder), mock.patch.object(installWatch.os, "execv"):
+            with mock.patch.object(installWatch, "APP_FOLDER", folder), mock.patch.object(installWatch.os, "execv"), contextlib.redirect_stderr(io.StringIO()):
                 self.watcher.onChanged()
                 os.remove(os.path.join(folder, "tray.py"))
                 self.watcher.onChanged()
