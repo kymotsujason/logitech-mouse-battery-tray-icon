@@ -1,6 +1,8 @@
 import contextlib
 import io
+import json
 import os
+import subprocess
 import sys
 import tempfile
 import time
@@ -9,11 +11,12 @@ from unittest import mock
 
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
+from PyQt6 import sip
 from PyQt6.QtCore import QCoreApplication, QEvent
 from PyQt6.QtDBus import QDBusConnection
 from PyQt6.QtGui import QAction, QColor, QPalette, QSessionManager
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QApplication, QSystemTrayIcon
+from PyQt6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
 import autostart
 import exceptionHooks
@@ -33,6 +36,7 @@ app = QApplication.instance() or QApplication([])
 NAME = "PRO X3 SUPERSTRIKE"
 LAST_READ = 1000000.0
 PATH = "/org/freedesktop/UPower/devices/mouse_hidpp_battery_0"
+FAKES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fakes")
 
 
 def makeMouse(reading, asleep=False):
@@ -292,6 +296,28 @@ class AppTests(unittest.TestCase):
         self.assertTrue(first.isVisible())
         self.assertIn("Mouse Battery " + tray.VERSION, first.text())
         first.close()
+
+    def testAboutOpenedAgainAfterOkIsANewBox(self):
+        mouseApp = self.makeApp(True)
+        mouseApp.showAbout()
+        first = mouseApp.aboutBox
+        first.button(QMessageBox.StandardButton.Ok).click()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
+        mouseApp.showAbout()
+        self.assertTrue(sip.isdeleted(first))
+        self.assertTrue(mouseApp.aboutBox.isVisible())
+        mouseApp.aboutBox.close()
+
+    def testAboutKeepsOneOkButtonUnderKdesMessageDialog(self):
+        env = {key: value for key, value in os.environ.items() if key not in ("DISPLAY", "WAYLAND_DISPLAY")}
+        env.update(QT_QPA_PLATFORM="offscreen", QT_QPA_PLATFORMTHEME="kde")
+        result = subprocess.run([sys.executable, os.path.join(FAKES, "aboutCycles.py")], env=env, capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        cycles = json.loads(result.stdout.splitlines()[-1])
+        if (not cycles["helper"]):
+            self.skipTest("Qt didn't load a platform theme with its own message dialog, such as KDE's")
+        # KDE's helper adds the buttons again each time the same box is shown
+        self.assertEqual(cycles["counts"], [1, 1, 1])
 
     def testTheBaseColorIsCachedUntilTheReadTimerFires(self):
         mouseApp = self.makeApp(True)
