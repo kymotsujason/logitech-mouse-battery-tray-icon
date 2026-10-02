@@ -143,9 +143,17 @@ class CheckTests(unittest.TestCase):
         bus = FakeServiceBus("org.freedesktop.DBus.Error.NoReply")
         self.assertEqual(self.runCheck(bus), (1, unreachable("org.freedesktop.DBus.Error.NoReply")))
 
-    def testAGetStateThatFailsWhileWaitingKeepsTheLastState(self):
+    def testAGetStateThatFailsWhileWaitingKeepsTheLastStateAndNamesTheError(self):
         bus = FakeServiceBus(stateText([MOUSE], busy=True), "org.freedesktop.DBus.Error.NoReply")
+        self.assertEqual(self.runCheck(bus), (0, NAME + " (" + NODE + ")\n  81%, discharging\n" + check.OLD_TEXT + "\n  org.freedesktop.DBus.Error.NoReply: failed\n"))
+
+    def testAStateThatStopsDecodingWhileWaitingKeepsTheLastState(self):
+        bus = FakeServiceBus(stateText([MOUSE], busy=True), "not json")
         self.assertEqual(self.runCheck(bus), (0, NAME + " (" + NODE + ")\n  81%, discharging\n" + check.OLD_TEXT + "\n"))
+
+    def testAReadTheServiceCouldntPlaceStillPrintsTheState(self):
+        bus = FakeServiceBus(stateText([MOUSE]), readAllError="io.github.kymotsujason.LogitechMouseBattery1.Error.UnknownCaller")
+        self.assertEqual(self.runCheck(bus), (0, NAME + " (" + NODE + ")\n  81%, discharging\nThe battery service couldn't tell which account asked, so these readings may be old.\n"))
 
     def testAStateThatDoesntDecodeSaysSo(self):
         self.assertEqual(self.runCheck(FakeServiceBus("not json")), (1, "The battery service answered with a state this version can't read.\n" + SEE_WHY))

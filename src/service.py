@@ -18,7 +18,7 @@ BROADCAST_MS = 200
 READ_ALL_BURST = 5
 READ_ALL_REFILL_SECONDS = 30
 READ_ALL_LIMITED = serviceState.READ_ALL_LIMITED
-CALLER_UNKNOWN = "org.freedesktop.DBus.Error.Failed"
+CALLER_UNKNOWN = serviceState.CALLER_UNKNOWN
 
 
 @pyqtClassInfo("D-Bus Interface", serviceState.INTERFACE)

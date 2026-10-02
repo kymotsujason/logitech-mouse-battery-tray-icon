@@ -254,7 +254,7 @@ class ServiceTests(unittest.TestCase):
         self.startWithMouse()
         adaptor = self.served[1]
         with mock.patch.object(adaptor, "callerOf", lambda message: None):
-            self.assertEqual(self.caller.call("ReadAll"), "org.freedesktop.DBus.Error.Failed")
+            self.assertEqual(self.caller.call("ReadAll"), "io.github.kymotsujason.LogitechMouseBattery1.Error.UnknownCaller")
 
     def testAGetStateDuringTheBroadcastWaitStillLetsTheBroadcastOut(self):
         adaptor = self.served[1]

@@ -7,8 +7,9 @@ import hidpp
 SERVICE_NAME = "io.github.kymotsujason.LogitechMouseBattery"
 OBJECT_PATH = "/io/github/kymotsujason/LogitechMouseBattery"
 INTERFACE = "io.github.kymotsujason.LogitechMouseBattery1"
-# the error a ReadAll gets when its account's budget is spent
+# the errors a ReadAll gets when its account's budget is spent, and when the bus can't say which account sent it
 READ_ALL_LIMITED = "org.freedesktop.DBus.Error.LimitsExceeded"
+CALLER_UNKNOWN = "io.github.kymotsujason.LogitechMouseBattery1.Error.UnknownCaller"
 STATE_VERSION = 1
 STATE_KEYS = ("version", "busy", "searching", "nodes", "deniedPaths", "mice")
 ENTRY_KEYS = ("key", "pathKey", "name", "source", "percent", "charging", "millivolts", "level", "asleep", "lastRead", "wokeAt")

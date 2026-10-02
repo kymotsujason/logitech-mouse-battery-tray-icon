@@ -19,6 +19,7 @@ WAIT_SECONDS = 10.0
 QUIET_TEXT = "No mouse answered. Move your mouse to wake it, then run this again."
 OLD_TEXT = "Some mice were still being read, so their readings may be old."
 LIMITED_TEXT = "Reads are limited right now, so these readings may be old."
+UNKNOWN_CALLER_TEXT = "The battery service couldn't tell which account asked, so these readings may be old."
 UNREADABLE_TEXT = "The battery service answered with a state this version can't read."
 SEE_WHY_TEXT = "  Run \"systemctl status logitech-mouse-battery\" to see why."
 
@@ -50,10 +51,13 @@ def readService(bus):
     # a terminal may block, so this waits for the reads it asked for, and gives back the state, the lines to print under it, and the lines to print when there's no state
     notes = []
     reply, error = callService(bus, "ReadAll", READ_ALL_TIMEOUT_MS)
+    # the service turned the read down but answered, so its state is still worth printing
+    refusals = {serviceState.READ_ALL_LIMITED: LIMITED_TEXT, serviceState.CALLER_UNKNOWN: UNKNOWN_CALLER_TEXT}
     if (error is not None):
-        if (not error.startswith(serviceState.READ_ALL_LIMITED + ":")):
+        name = error.partition(":")[0]
+        if (name not in refusals):
             return (None, [], unreachable(error))
-        notes.append(LIMITED_TEXT)
+        notes.append(refusals[name])
     deadline = time.monotonic() + WAIT_SECONDS
     last = None
     while (True):
@@ -61,11 +65,13 @@ def readService(bus):
         if (error is not None):
             # a state the service gave a moment ago is still worth printing, marked as possibly old
             if (last is not None):
-                return (last, notes + [OLD_TEXT], None)
+                return (last, notes + [OLD_TEXT, "  " + error], None)
             return (None, [], unreachable(error))
         arguments = reply.arguments()
         state = serviceState.decodeState(arguments[0]) if (arguments and isinstance(arguments[0], str)) else None
         if (state is None):
+            if (last is not None):
+                return (last, notes + [OLD_TEXT], None)
             return (None, [], [UNREADABLE_TEXT, SEE_WHY_TEXT])
         last = state
         if (not state.busy):
