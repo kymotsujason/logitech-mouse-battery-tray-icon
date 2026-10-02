@@ -783,6 +783,22 @@ class ReceiverListTests(unittest.TestCase):
         receiver.send(bytes([0x11, 1, 5, 0x00, 64, 0x04, 0, 0]).ljust(20, b"\x00"))
         self.assertTrue(waitUntil(lambda: self.mouse().reading == hidpp.BatteryReading(64, 0)))
 
+    def testStoppingWaitsForBusyNodesTogether(self):
+        self.nodes.add(RECEIVER, mouseHandler())
+        self.nodes.add(CABLE, mouseHandler(slot=0xFF, unitId=bytes.fromhex("aaaaaaaa")))
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: len(self.keys()) == 2 and not self.mice.isBusy()))
+        for path in (RECEIVER, CABLE):
+            self.nodes.devices[path].handler = silent
+        with mock.patch.object(hidpp, "REQUEST_TIMEOUT", 3.0):
+            self.mice.readAll()
+            QTest.qWait(100)
+            started = time.monotonic()
+            self.mice.stop()
+            took = time.monotonic() - started
+        # one shared second, where each busy node used to get a second of its own
+        self.assertLess(took, 1.5)
+
     def testAWriteTurnedAwayKeepsTheNodeAndItsMouse(self):
         self.nodes.add(RECEIVER, mouseHandler())
         self.mice.start()

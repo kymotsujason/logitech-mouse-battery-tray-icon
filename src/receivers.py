@@ -28,6 +28,7 @@ IDENTIFY_GAP_MS = 1000
 # a write a stalled hub or a busy receiver turns away fails only its request, while these, or an end of file with no errno, mean the device is gone
 GONE_ERRNOS = (errno.ENODEV, errno.EIO, errno.ESHUTDOWN, errno.EBADF, errno.ENXIO, errno.ENOENT)
 TRANSIENT_ERROR_LIMIT = 3
+STOP_WAIT_SECONDS = 1.0
 
 
 class NodeWorker(threading.Thread):
@@ -62,9 +63,12 @@ class NodeWorker(threading.Thread):
                 # a full pipe already holds a wake the thread hasn't read
                 pass
 
-    def stop(self, timeout=1.0):
+    def signalStop(self):
         self.stopping.set()
         self.wake()
+
+    def stop(self, timeout=STOP_WAIT_SECONDS):
+        self.signalStop()
         if (self.is_alive() and threading.current_thread() is not self):
             self.join(timeout)
 
@@ -217,8 +221,12 @@ class ReceiverList(QObject):
         self.stopped = True
         for timer in (self.deniedTimer, self.settleTimer, self.readAllTimer):
             timer.stop()
+        # every worker hears the stop first, so busy nodes share one wait instead of taking turns
+        for state in self.nodes.values():
+            state.worker.signalStop()
+        deadline = time.monotonic() + STOP_WAIT_SECONDS
         for path in list(self.nodes):
-            self.closeNode(path)
+            self.closeNode(path, timeout=max(0.0, deadline - time.monotonic()))
 
     def isBusy(self):
         # a queued batch isn't work in flight, and any local caller can keep one queued, which would hold every check at its full wait
@@ -336,7 +344,7 @@ class ReceiverList(QObject):
     def forgetErrors(self, path):
         self.reportedErrors = {entry for entry in self.reportedErrors if entry[0] != path}
 
-    def closeNode(self, path):
+    def closeNode(self, path, timeout=STOP_WAIT_SECONDS):
         state = self.nodes.pop(path, None)
         if (state is None):
             return
@@ -344,7 +352,7 @@ class ReceiverList(QObject):
             if (timer is not None):
                 timer.stop()
                 timer.deleteLater()
-        state.worker.stop()
+        state.worker.stop(timeout)
         for mouse in list(self.mice):
             if (mouse.nodePath == path):
                 self.removeMouse(mouse)
