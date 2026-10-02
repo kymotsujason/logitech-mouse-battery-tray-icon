@@ -21,7 +21,11 @@ NODE = "/dev/hidraw18"
 LAST_READ = 1790000000.0
 MOUSE = {"key": "02bc524c", "pathKey": False, "name": NAME, "source": NODE, "percent": 81, "charging": 0, "millivolts": None, "level": None, "asleep": False, "lastRead": LAST_READ, "wokeAt": LAST_READ - 1000}
 QUIET = "No mouse answered. Move your mouse to wake it, then run this again.\n"
-UNREACHABLE = "Can't reach the battery service.\n"
+SEE_WHY = "  Run \"systemctl status logitech-mouse-battery\" to see why.\n"
+
+
+def unreachable(error):
+    return "Can't reach the battery service.\n  " + error + ": failed\n" + SEE_WHY
 
 
 def stateText(entries=(), nodes=(NODE,), denied=(), busy=False):
@@ -131,21 +135,29 @@ class CheckTests(unittest.TestCase):
     def testAQuietNodeSaysToWakeTheMouse(self):
         self.assertEqual(self.runCheck(FakeServiceBus(stateText())), (1, QUIET))
 
-    def testAFailingReadAllMeansNoService(self):
-        bus = FakeServiceBus(stateText([MOUSE]), readAllError="org.freedesktop.DBus.Error.ServiceUnknown")
-        self.assertEqual(self.runCheck(bus), (1, UNREACHABLE))
+    def testAFailingReadAllNamesItsError(self):
+        bus = FakeServiceBus(stateText([MOUSE]), readAllError="org.freedesktop.DBus.Error.AccessDenied")
+        self.assertEqual(self.runCheck(bus), (1, unreachable("org.freedesktop.DBus.Error.AccessDenied")))
 
-    def testAGetStateThatFailsWhileWaitingMeansNoService(self):
+    def testAFailingFirstGetStateNamesItsError(self):
+        bus = FakeServiceBus("org.freedesktop.DBus.Error.NoReply")
+        self.assertEqual(self.runCheck(bus), (1, unreachable("org.freedesktop.DBus.Error.NoReply")))
+
+    def testAGetStateThatFailsWhileWaitingKeepsTheLastState(self):
         bus = FakeServiceBus(stateText([MOUSE], busy=True), "org.freedesktop.DBus.Error.NoReply")
-        self.assertEqual(self.runCheck(bus), (1, UNREACHABLE))
+        self.assertEqual(self.runCheck(bus), (0, NAME + " (" + NODE + ")\n  81%, discharging\n" + check.OLD_TEXT + "\n"))
 
-    def testAStateThatDoesntDecodeMeansNoService(self):
-        self.assertEqual(self.runCheck(FakeServiceBus("not json")), (1, UNREACHABLE))
+    def testAStateThatDoesntDecodeSaysSo(self):
+        self.assertEqual(self.runCheck(FakeServiceBus("not json")), (1, "The battery service answered with a state this version can't read.\n" + SEE_WHY))
+
+    def testARefusedReadPrintsTheStateAndSaysItMayBeOld(self):
+        bus = FakeServiceBus(stateText([MOUSE]), readAllError="org.freedesktop.DBus.Error.LimitsExceeded")
+        self.assertEqual(self.runCheck(bus), (0, NAME + " (" + NODE + ")\n  81%, discharging\nReads are limited right now, so these readings may be old.\n"))
 
     def testNoServiceStillListsUPowerMice(self):
         with self.withUPower():
             bus = FakeServiceBus(stateText(), readAllError="org.freedesktop.DBus.Error.ServiceUnknown")
-            self.assertEqual(self.runCheck(bus), (0, "MX Master 3 (UPower)\n  55%, discharging\n" + UNREACHABLE))
+            self.assertEqual(self.runCheck(bus), (0, "MX Master 3 (UPower)\n  55%, discharging\n" + unreachable("org.freedesktop.DBus.Error.ServiceUnknown")))
 
 
 if (__name__ == "__main__"):

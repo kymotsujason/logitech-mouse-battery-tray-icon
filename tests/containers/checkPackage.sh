@@ -91,7 +91,7 @@ output=$($name check 2>&1)
 status=$?
 lastLine=$(echo "$output" | tail -1)
 case "$lastLine" in
-    "No Logitech mouse found."|"No mouse answered. Move your mouse to wake it, then run this again."|"Can't reach the battery service.") known=yes ;;
+    "No Logitech mouse found."|"No mouse answered. Move your mouse to wake it, then run this again."|"  Run \"systemctl status logitech-mouse-battery\" to see why.") known=yes ;;
     *) known="no ($lastLine)" ;;
 esac
 check "the terminal check exits 1" "$status" "1"

@@ -203,7 +203,7 @@ class ServiceTests(unittest.TestCase):
         caller = Caller(self.connectTo("other"))
         started = time.monotonic()
         while (time.monotonic() - started < 0.8):
-            self.assertIsInstance(caller.call("ReadAll"), list)
+            self.assertIn(caller.call("ReadAll"), ([], service.READ_ALL_LIMITED))
             self.assertIsNotNone(self.caller.state())
         QTest.qWait(1500)
         self.assertEqual(batteryReads(device) - before, 2)
@@ -211,7 +211,8 @@ class ServiceTests(unittest.TestCase):
     def readAllLoop(self, caller, seconds):
         started = time.monotonic()
         while (time.monotonic() - started < seconds):
-            self.assertIsInstance(caller.call("ReadAll"), list)
+            # every call is answered, with a read or with the refusal once the account's budget runs out
+            self.assertIn(caller.call("ReadAll"), ([], service.READ_ALL_LIMITED))
 
     def testOneAccountsLoopOfReadAllRunsOutOfItsBurst(self):
         device = self.startWithMouse()
@@ -240,6 +241,34 @@ class ServiceTests(unittest.TestCase):
             before = batteryReads(device)
             caller.call("ReadAll")
             self.assertTrue(waitUntil(lambda: batteryReads(device) > before))
+
+    def testARefusedReadAllAnswersWithAnError(self):
+        self.startWithMouse()
+        caller = Caller(self.connectTo("other"))
+        with mock.patch.object(service, "READ_ALL_BURST", 1):
+            answers = [caller.call("ReadAll"), caller.call("ReadAll")]
+        self.assertEqual(answers, [[], "org.freedesktop.DBus.Error.LimitsExceeded"])
+
+    def testAReadAllFromACallerItCantPlaceAnswersWithAnError(self):
+        self.startWithMouse()
+        adaptor = self.served[1]
+        with mock.patch.object(adaptor, "callerOf", lambda message: None):
+            self.assertEqual(self.caller.call("ReadAll"), "org.freedesktop.DBus.Error.Failed")
+
+    def testAGetStateDuringTheBroadcastWaitStillLetsTheBroadcastOut(self):
+        adaptor = self.served[1]
+        emitted = []
+        adaptor.StateChanged.connect(emitted.append)
+        current = ["A"]
+        with mock.patch.object(serviceState, "encodeState", lambda receiverList: current[0]):
+            adaptor.sentState = "A"
+            current[0] = "B"
+            adaptor.onChanged()
+            self.assertEqual(adaptor.GetState(), "B")
+            # the state goes back to the one last sent before the wait ends, and the caller still holds B
+            current[0] = "A"
+            self.assertTrue(waitUntil(lambda: not adaptor.broadcastTimer.isActive()))
+        self.assertEqual(emitted, ["A"])
 
     def testTheCallerIsTheAccountBehindTheConnection(self):
         self.startWithMouse()

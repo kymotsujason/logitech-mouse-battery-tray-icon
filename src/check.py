@@ -18,6 +18,9 @@ WAIT_SECONDS = 10.0
 # the tray's waiting text has no "run this again", so the terminal keeps its own line
 QUIET_TEXT = "No mouse answered. Move your mouse to wake it, then run this again."
 OLD_TEXT = "Some mice were still being read, so their readings may be old."
+LIMITED_TEXT = "Reads are limited right now, so these readings may be old."
+UNREADABLE_TEXT = "The battery service answered with a state this version can't read."
+SEE_WHY_TEXT = "  Run \"systemctl status logitech-mouse-battery\" to see why."
 
 
 def printMouse(name, source, reading, asleep=False, lastRead=None):
@@ -35,35 +38,50 @@ def callService(bus, member, timeoutMs):
     message = QDBusMessage.createMethodCall(serviceState.SERVICE_NAME, serviceState.OBJECT_PATH, serviceState.INTERFACE, member)
     reply = dbusCalls.call(bus, message, timeoutMs)
     if (dbusCalls.failure(reply) is not None):
-        return None
-    return reply
+        return (None, reply.errorName() + ": " + reply.errorMessage())
+    return (reply, None)
+
+
+def unreachable(error):
+    return [mice.STATUS_TEXT[mice.STATUS_NO_SERVICE], "  " + error, SEE_WHY_TEXT]
 
 
 def readService(bus):
-    # a terminal may block, so this waits for the reads it asked for, and gives back None when the service can't be reached
-    if (callService(bus, "ReadAll", READ_ALL_TIMEOUT_MS) is None):
-        return (None, False)
+    # a terminal may block, so this waits for the reads it asked for, and gives back the state, the lines to print under it, and the lines to print when there's no state
+    notes = []
+    reply, error = callService(bus, "ReadAll", READ_ALL_TIMEOUT_MS)
+    if (error is not None):
+        if (not error.startswith(serviceState.READ_ALL_LIMITED + ":")):
+            return (None, [], unreachable(error))
+        notes.append(LIMITED_TEXT)
     deadline = time.monotonic() + WAIT_SECONDS
+    last = None
     while (True):
-        reply = callService(bus, "GetState", dbusCalls.DEFAULT_TIMEOUT_MS)
-        arguments = reply.arguments() if reply is not None else []
+        reply, error = callService(bus, "GetState", dbusCalls.DEFAULT_TIMEOUT_MS)
+        if (error is not None):
+            # a state the service gave a moment ago is still worth printing, marked as possibly old
+            if (last is not None):
+                return (last, notes + [OLD_TEXT], None)
+            return (None, [], unreachable(error))
+        arguments = reply.arguments()
         state = serviceState.decodeState(arguments[0]) if (arguments and isinstance(arguments[0], str)) else None
         if (state is None):
-            return (None, False)
+            return (None, [], [UNREADABLE_TEXT, SEE_WHY_TEXT])
+        last = state
         if (not state.busy):
-            return (state, False)
+            return (state, notes, None)
         if (time.monotonic() >= deadline):
-            return (state, True)
+            return (state, notes + [OLD_TEXT], None)
         time.sleep(POLL_MS / 1000)
 
 
-def printService(state, stillBusy):
+def printService(state, notes):
     for path in state.deniedPaths:
         print("No access to " + path + ". Unplug the receiver or cable and plug it back in.")
     for entry in state.mice:
         printMouse(entry.name, entry.source, entry.reading, entry.asleep, entry.lastRead)
-    if (stillBusy):
-        print(OLD_TEXT)
+    for note in notes:
+        print(note)
     return len(state.mice)
 
 
@@ -83,13 +101,14 @@ def main(bus=None):
     app = QCoreApplication.instance() or QCoreApplication(sys.argv[:1])
     if (bus is None):
         bus = QDBusConnection.systemBus()
-    state, stillBusy = readService(bus)
+    state, notes, problem = readService(bus)
     found = 0
     if (state is not None):
-        found += printService(state, stillBusy)
+        found += printService(state, notes)
     found += checkUPower(bus)
     if (state is None):
-        print(mice.STATUS_TEXT[mice.STATUS_NO_SERVICE])
+        for line in problem:
+            print(line)
     elif (found == 0 and not state.nodes and not state.deniedPaths):
         print(mice.STATUS_TEXT[mice.STATUS_NONE])
     elif (found == 0 and state.nodes):

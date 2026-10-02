@@ -16,6 +16,8 @@ BROADCAST_MS = 200
 # any local account may ask for a read, so each account gets a few at once and then one per refill, against the tray's own read every 300 s
 READ_ALL_BURST = 5
 READ_ALL_REFILL_SECONDS = 30
+READ_ALL_LIMITED = serviceState.READ_ALL_LIMITED
+CALLER_UNKNOWN = "org.freedesktop.DBus.Error.Failed"
 
 
 @pyqtClassInfo("D-Bus Interface", serviceState.INTERFACE)
@@ -37,15 +39,28 @@ class BatteryService(QDBusAbstractAdaptor):
 
     @pyqtSlot(result=str)
     def GetState(self):
-        return serviceState.encodeState(self.receiverList)
+        state = serviceState.encodeState(self.receiverList)
+        # the state can go back to the last one sent before the wait ends, which would leave this caller holding one no broadcast corrects
+        if (self.broadcastTimer.isActive() and state != self.sentState):
+            self.sentState = None
+        return state
 
     # QtDBus hands a slot the call itself when its last argument is a QDBusMessage, and leaves it out of the method's D-Bus signature
     @pyqtSlot(QDBusMessage)
     def ReadAll(self, message):
         caller = self.callerOf(message)
-        if (caller is None or not self.takeRead(caller)):
+        if (caller is None):
+            self.refuse(message, CALLER_UNKNOWN, "Couldn't tell which account asked for the read.")
+            return
+        if (not self.takeRead(caller)):
+            self.refuse(message, READ_ALL_LIMITED, "Each account gets " + str(READ_ALL_BURST) + " reads at once and then one every " + str(READ_ALL_REFILL_SECONDS) + " seconds.")
             return
         self.receiverList.requestReadAll()
+
+    def refuse(self, message, name, text):
+        # an empty reply would look like a read that ran, so a caller couldn't tell its readings may be old
+        message.setDelayedReply(True)
+        self.bus.send(message.createErrorReply(name, text))
 
     def callerOf(self, message):
         # a unique name is new on every connection, so the budget follows the account behind it
