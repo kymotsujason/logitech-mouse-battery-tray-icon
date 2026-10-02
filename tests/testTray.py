@@ -19,6 +19,7 @@ from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
 import autostart
+import dbusCalls
 import exceptionHooks
 import hidpp
 import installWatch
@@ -334,14 +335,30 @@ class AppTests(unittest.TestCase):
     def testAPortalThatDoesntAnswerYetIsAskedOnceMore(self):
         mouseApp = self.makeApp(True)
         reads = [(0, notify.NO_REPLY), (1, None)]
-        with mock.patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": "GNOME"}), mock.patch.object(tray.panelColor, "readPortalColorScheme", side_effect=reads) as read:
+        asked = []
+
+        def ask(bus, owner, onAnswer):
+            asked.append(1)
+            onAnswer(*reads.pop(0))
+
+        with mock.patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": "GNOME"}), mock.patch.object(tray.panelColor, "askPortalColorScheme", ask):
             mouseApp.watchColors()
             self.assertTrue(mouseApp.portalTimer.isActive())
             mouseApp.cachedColor = QColor("#123456")
             mouseApp.portalTimer.stop()
             mouseApp.onPortalRetry()
-        self.assertEqual((read.call_count, mouseApp.portalScheme), (2, 1))
+            self.assertFalse(mouseApp.portalTimer.isActive())
+        self.assertEqual((len(asked), mouseApp.portalScheme), (2, 1))
         self.assertNotEqual(mouseApp.cachedColor, QColor("#123456"))
+
+    def testTheColorSchemeIsReadWithoutABlockingCall(self):
+        mouseApp = self.makeApp(True)
+        blocking = []
+        realCall = dbusCalls.call
+        with mock.patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": "GNOME"}), mock.patch.object(dbusCalls, "call", lambda bus, message, *args: blocking.append(message.member()) or realCall(bus, message, *args)):
+            mouseApp.watchColors()
+            QTest.qWait(50)
+        self.assertEqual(blocking, [])
 
     def testTheTrayShowsOnceTheHostIsReady(self):
         mouseApp = self.makeApp(False)
@@ -363,7 +380,7 @@ class AppTests(unittest.TestCase):
         mouseApp = self.makeApp(True)
         bus = RecordingBus()
         mouseApp.sessionBus = bus
-        with mock.patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": "GNOME"}), mock.patch.object(tray.panelColor, "readPortalColorScheme", return_value=(0, None)):
+        with mock.patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": "GNOME"}), mock.patch.object(tray.panelColor, "askPortalColorScheme"):
             mouseApp.watchColors()
         self.assertIn((panelColor.PORTAL_SERVICE, panelColor.PORTAL_PATH, panelColor.SETTINGS_INTERFACE, "SettingChanged"), bus.subscriptions)
 

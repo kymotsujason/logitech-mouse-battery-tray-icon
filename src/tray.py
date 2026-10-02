@@ -284,13 +284,16 @@ class MouseBatteryApp(QObject):
         self.watchPlasmarc()
         if ("GNOME" in panelColor.desktopNames(os.environ)):
             self.sessionBus.connect(panelColor.PORTAL_SERVICE, panelColor.PORTAL_PATH, panelColor.SETTINGS_INTERFACE, "SettingChanged", self.onPortalSetting)
-            self.portalScheme, error = panelColor.readPortalColorScheme(self.sessionBus)
-            # the portal can still be starting at login, so a read that got no answer gets one more try
-            if (error == NO_REPLY):
-                self.portalTimer.start()
+            panelColor.askPortalColorScheme(self.sessionBus, self, lambda scheme, error: self.onPortalScheme(scheme, error, True))
 
     def onPortalRetry(self):
-        self.portalScheme, error = panelColor.readPortalColorScheme(self.sessionBus)
+        panelColor.askPortalColorScheme(self.sessionBus, self, lambda scheme, error: self.onPortalScheme(scheme, error, False))
+
+    def onPortalScheme(self, scheme, error, firstRead):
+        self.portalScheme = scheme
+        # the portal can still be starting at login, so a first read that got no answer gets one more try
+        if (firstRead and error == NO_REPLY):
+            self.portalTimer.start()
         self.onColorsChanged()
 
     def watchPlasmarc(self):

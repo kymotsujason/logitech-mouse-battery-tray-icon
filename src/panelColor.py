@@ -81,19 +81,24 @@ def baseColor(env, configHome, dirs, portalScheme, paletteColor):
     return QColor(paletteColor)
 
 
-def readPortalColorScheme(bus):
-    error = None
-    for method in ("ReadOne", "Read"):
-        message = QDBusMessage.createMethodCall(PORTAL_SERVICE, PORTAL_PATH, SETTINGS_INTERFACE, method)
-        message.setArguments([APPEARANCE, "color-scheme"])
-        reply = dbusCalls.call(bus, message)
+def portalRead(method):
+    message = QDBusMessage.createMethodCall(PORTAL_SERVICE, PORTAL_PATH, SETTINGS_INTERFACE, method)
+    message.setArguments([APPEARANCE, "color-scheme"])
+    return message
+
+
+def askPortalColorScheme(bus, owner, onAnswer, method="ReadOne"):
+    # onAnswer gets the scheme and the error name, or None, once the portal answers
+    def onReply(reply):
         error = dbusCalls.failure(reply)
-        if (error is None):
-            if (not reply.arguments()):
-                return (0, None)
-            value = dbusCalls.plain(reply.arguments()[0])
-            return (value if isinstance(value, int) else 0, None)
         # only a portal older than ReadOne gets asked with Read
-        if (error != UNKNOWN_METHOD):
-            return (0, error)
-    return (0, error)
+        if (error == UNKNOWN_METHOD and method == "ReadOne"):
+            askPortalColorScheme(bus, owner, onAnswer, "Read")
+            return
+        if (error is not None or not reply.arguments()):
+            onAnswer(0, error)
+            return
+        value = dbusCalls.plain(reply.arguments()[0])
+        onAnswer(value if isinstance(value, int) else 0, None)
+
+    dbusCalls.callLater(bus, portalRead(method), onReply, owner)
