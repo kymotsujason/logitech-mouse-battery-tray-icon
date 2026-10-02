@@ -50,7 +50,7 @@ IDENTIFY_BUDGET = 5.0
 SEARCH_BUDGET = 20.0
 
 CHARGING_NAMES = ["discharging", "charging", "charging slowly", "full", "charging error", "pending charge", "unknown"]
-# HID++ defines the first five codes, and the last two only come from UPower's states
+# HID++ defines the first five codes, and the last two come from UPower's states and the 0x1001 voltage status
 HIDPP_STATUS_COUNT = 5
 CHARGING_DISCHARGING = 0
 CHARGING_CHARGING = 1
@@ -352,6 +352,9 @@ def identifySlot(node, slot, deadline=None):
         return (UNKNOWN, None)
     # the battery goes first, since a device decides how slowly it answers each name chunk and the reading is what the identify is for
     outcome, reading = readBattery(node, feature, deadline)
+    # a read cut off by the budget says the identify ran out of time, not that the mouse went quiet, so the slot is left to be looked at again
+    if (outcome == TIMEOUT and time.monotonic() >= deadline):
+        return (UNKNOWN, None)
     name = readName(node, slot, deadline)
     return (FOUND, FoundMouse(slot, unitId, name, feature, reading, outcome))
 

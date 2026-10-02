@@ -206,6 +206,17 @@ class DeviceTests(unittest.TestCase):
         self.assertEqual((result.mice, result.unknown), ((), frozenset({1})))
         self.assertEqual([request for request in self.device.requests if request[2] != 0 or (request[3] >> 4) != 1], [])
 
+    def testAnIdentifyWhoseBudgetRunsOutAtTheBatteryIsUnknown(self):
+        answer = mouseHandler()
+
+        def slowInfoAndBattery(request):
+            if ((request[2], request[3] >> 4) in ((3, 0), (5, 1))):
+                time.sleep(0.3)
+            return answer(request)
+        self.device = FakeDevice(slowInfoAndBattery)
+        # the unit id takes most of the budget, so the battery read times out on the budget instead of the mouse going quiet
+        self.assertEqual(hidpp.identifySlot(self.device.node(), 1, time.monotonic() + 0.45), (hidpp.UNKNOWN, None))
+
     def testARequestWithItsBudgetSpentSendsNothing(self):
         self.device = FakeDevice(mouseHandler())
         self.assertEqual(self.device.node().requestOutcome(1, 0, 0, bytes([0x10, 0x04]), timeout=-0.5), (hidpp.TIMEOUT, None))
@@ -456,7 +467,7 @@ class TextTests(unittest.TestCase):
 
     def testCleanTextDropsLineAndParagraphSeparators(self):
         # a host that breaks lines at these would show a fake line in the tooltip or a notice
-        self.assertEqual(hidpp.cleanText("MX PRO X3, 100% "), "MXPRO X3, 100%")
+        self.assertEqual(hidpp.cleanText("MX\u2028PRO X3, 100%\u2029"), "MXPRO X3, 100%")
 
     def testVoltageChargeStatesFollowTheKernel(self):
         states = {flags: hidpp.voltageCharging(flags) for flags in (0x00, 0x80, 0x81, 0x82, 0x83, 0x87)}
