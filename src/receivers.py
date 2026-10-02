@@ -17,6 +17,12 @@ SETTLE_MS = 1500
 DENIED_RETRY_MS = 5 * 1000
 DENIED_RETRY_MAX_MS = 300 * 1000
 READ_ALL_GAP_MS = 1000
+# a node that served this long before it died counts as a one-off rather than a failing device, so its backoff and its printed error start over
+STABLE_MS = 60 * 1000
+# /dev churn restarts the settle wait, and this caps how far the scan it delays can be pushed out
+SETTLE_CEILING_MS = 5 * 1000
+# one identify costs about a dozen requests, so this holds a stream of link up notices to the rate a read already runs at
+IDENTIFY_GAP_MS = 1000
 
 
 class NodeWorker(threading.Thread):
@@ -139,10 +145,13 @@ class ReceiverMouse:
 
 
 class NodeState:
-    def __init__(self, path, worker, retryTimer):
+    def __init__(self, path, worker, retryTimer, identifyTimer=None):
         self.path = path
         self.worker = worker
         self.retryTimer = retryTimer
+        self.identifyTimer = identifyTimer
+        self.openedAt = time.monotonic()
+        self.identifiedAt = {}
         self.skipped = set()
         self.searching = False
         self.searchAgain = False
@@ -173,6 +182,7 @@ class ReceiverList(QObject):
         self.deniedTimer = singleShotTimer(self, DENIED_RETRY_MS, self.retryDenied)
         # udev sets the node's group and mode a moment after it shows up, so wait before looking at it
         self.settleTimer = singleShotTimer(self, SETTLE_MS, self.scanNodes)
+        self.settleSince = None
         self.readAllTimer = singleShotTimer(self, READ_ALL_GAP_MS, self.runReadAll)
         self.lastReadAll = None
         self.devWatcher = QFileSystemWatcher(["/dev"], self)
@@ -189,8 +199,7 @@ class ReceiverList(QObject):
             self.closeNode(path)
 
     def isBusy(self):
-        if (self.readAllTimer.isActive()):
-            return True
+        # a queued batch isn't work in flight, and any local caller can keep one queued, which would hold every check at its full wait
         return any(state.searching or state.pendingReads or state.pendingIdentifies for state in self.nodes.values())
 
     def isSearching(self):
@@ -224,21 +233,32 @@ class ReceiverList(QObject):
         self.deniedRetryMs = DENIED_RETRY_MS
         if (self.deniedTimer.isActive()):
             self.deniedTimer.start(self.deniedRetryMs)
-        self.settleTimer.start()
+        now = time.monotonic()
+        if (self.settleSince is None or not self.settleTimer.isActive()):
+            self.settleSince = now
+        # steady churn would otherwise push the scan out for as long as it lasts, so the wait a burst can add up to is capped
+        waited = (now - self.settleSince) * 1000
+        self.settleTimer.start(max(1, int(min(SETTLE_MS, SETTLE_CEILING_MS - waited))))
 
     def scanNodes(self):
+        self.settleSince = None
+        before = (set(self.nodes), set(self.denied))
         paths = hidpp.findHidppNodes()
         removed = [path for path in self.nodes if path not in paths]
         for path in removed:
             self.closeNode(path)
         self.denied &= set(paths)
+        # a node that shows up at a path discovery dropped is a new device, so its errors get printed again
+        self.reportedErrors = {entry for entry in self.reportedErrors if entry[0] in paths}
         for path in paths:
             if (path not in self.nodes):
                 self.openNode(path)
         if (removed):
             self.searchAll()
         self.updateDeniedTimer()
-        self.changed.emit()
+        # a scan that found nothing new has no state for the tray to redraw, and every /dev change runs one
+        if ((set(self.nodes), set(self.denied)) != before):
+            self.changed.emit()
 
     def openNode(self, path):
         try:
@@ -247,12 +267,22 @@ class ReceiverList(QObject):
             self.reportError(path, "Couldn't open", error)
             self.denied.add(path)
             return
-        self.forgetErrors(path)
-        self.denied.discard(path)
-        worker = NodeWorker(path, node, self.message.emit)
+        # a node whose pipe or thread can't be made is closed and left for the retry instead of leaking its fd, and the worker's messages queue on this thread until the state below exists
+        worker = None
+        try:
+            worker = NodeWorker(path, node, self.message.emit)
+            worker.start()
+        except (OSError, RuntimeError) as error:
+            if (worker is not None):
+                worker.closePipe()
+            node.close()
+            self.reportError(path, "Couldn't start", error)
+            self.denied.add(path)
+            return
         retryTimer = singleShotTimer(self, WAKE_RETRY_MS, lambda: self.requestSearch(path))
-        self.nodes[path] = NodeState(path, worker, retryTimer)
-        worker.start()
+        identifyTimer = singleShotTimer(self, IDENTIFY_GAP_MS, lambda: self.runDeferredIdentifies(path))
+        self.nodes[path] = NodeState(path, worker, retryTimer, identifyTimer)
+        self.denied.discard(path)
         self.requestSearch(path)
 
     def reportError(self, path, what, error):
@@ -271,8 +301,10 @@ class ReceiverList(QObject):
         state = self.nodes.pop(path, None)
         if (state is None):
             return
-        state.retryTimer.stop()
-        state.retryTimer.deleteLater()
+        for timer in (state.retryTimer, state.identifyTimer):
+            if (timer is not None):
+                timer.stop()
+                timer.deleteLater()
         state.worker.stop()
         for mouse in list(self.mice):
             if (mouse.nodePath == path):
@@ -291,9 +323,9 @@ class ReceiverList(QObject):
             self.changed.emit()
 
     def updateDeniedTimer(self):
+        # the wait it reached stands, since a node that opens and dies again would otherwise get the shortest wait every cycle
         if (not self.denied):
             self.deniedTimer.stop()
-            self.deniedRetryMs = DENIED_RETRY_MS
         elif (not self.deniedTimer.isActive()):
             self.deniedTimer.start(self.deniedRetryMs)
 
@@ -376,6 +408,9 @@ class ReceiverList(QObject):
 
     def onLost(self, state, error):
         path = state.path
+        if ((time.monotonic() - state.openedAt) * 1000 >= STABLE_MS):
+            self.forgetErrors(path)
+            self.deniedRetryMs = DENIED_RETRY_MS
         self.reportError(path, "Lost", error)
         self.closeNode(path)
         if (path in hidpp.findHidppNodes()):
@@ -489,8 +524,26 @@ class ReceiverList(QObject):
             # a newer link up notice gets its own identify once the pending one is done
             state.identifyAgain.add(slot)
             return
+        now = time.monotonic()
+        last = state.identifiedAt.get(slot)
+        waited = None if last is None else (now - last) * 1000
+        # the notice isn't dropped, it waits out the gap, so a slot that keeps announcing itself costs one identify per gap instead of one each
+        if (waited is not None and waited < IDENTIFY_GAP_MS):
+            state.identifyAgain.add(slot)
+            if (not state.identifyTimer.isActive()):
+                state.identifyTimer.start(max(1, int(IDENTIFY_GAP_MS - waited)))
+            return
+        state.identifiedAt[slot] = now
+        state.identifyAgain.discard(slot)
         state.pendingIdentifies.add(slot)
-        state.worker.queueWork(("identify", slot, time.monotonic()))
+        state.worker.queueWork(("identify", slot, now))
+
+    def runDeferredIdentifies(self, path):
+        state = self.nodes.get(path)
+        if (state is None):
+            return
+        for slot in sorted(state.identifyAgain):
+            self.requestIdentify(state, slot)
 
     def settleIdentify(self, state, slot):
         state.pendingIdentifies.discard(slot)
@@ -539,6 +592,9 @@ class ReceiverList(QObject):
             if (report[2] == hidpp.CONNECTION_NOTIFICATION):
                 state.skipped.discard(slot)
                 self.requestSearch(state.path)
+            return
+        # a search only ever pings the slots HID++ defines, so a report from any other one can never resolve and would ask for a search per report
+        if (slot not in hidpp.DEVICE_SLOTS):
             return
         state.retrySlots.add(slot)
         self.requestSearch(state.path)

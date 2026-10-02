@@ -325,6 +325,35 @@ class ReceiverListTests(unittest.TestCase):
         self.mice.onDevChanged("/dev")
         self.assertTrue(waitUntil(lambda: self.keys() == [] and self.mice.nodes == {}))
 
+    def testAScanEmitsOnlyWhenItOpensOrDropsANode(self):
+        self.nodes.add(RECEIVER, mouseHandler())
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"] and not self.mice.isBusy()))
+        changes = []
+        self.mice.changed.connect(lambda: changes.append(1))
+        self.mice.scanNodes()
+        self.assertEqual(changes, [])
+        self.nodes.add(CABLE, silent)
+        self.mice.scanNodes()
+        self.assertEqual(changes, [1])
+
+    def testSteadyDevChurnStillScansWithinTheCeiling(self):
+        scans = []
+
+        def countingFind(*args):
+            scans.append(1)
+            return self.nodes.find()
+
+        with mock.patch.object(receivers, "SETTLE_MS", 300), mock.patch.object(receivers, "SETTLE_CEILING_MS", 600), mock.patch.object(hidpp, "findHidppNodes", countingFind):
+            self.mice.settleTimer.setInterval(300)
+            self.mice.start()
+            scans.clear()
+            # a change every 100 ms would restart a plain 300 ms wait forever
+            for i in range(20):
+                self.mice.onDevChanged("/dev")
+                QTest.qWait(100)
+        self.assertGreaterEqual(len(scans), 2)
+
     def testAReplyFromAnUnknownSlotStartsNoSearch(self):
         receiver = self.nodes.add(RECEIVER, mouseHandler())
         self.mice.start()
@@ -335,6 +364,18 @@ class ReceiverListTests(unittest.TestCase):
         # software id 0x0A, so it answers some other program's request
         report[3] = 0x0A
         receiver.send(bytes(report))
+        QTest.qWait(300)
+        self.assertEqual(pingsTo(receiver, 2), before)
+
+    def testAReportFromASlotHidppNeverPingsStartsNoSearch(self):
+        receiver = self.nodes.add(RECEIVER, mouseHandler())
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"] and not self.mice.isBusy()))
+        before = pingsTo(receiver, 2)
+        report = bytearray(OTHER_REPORT)
+        report[1] = 9
+        for i in range(5):
+            receiver.send(bytes(report))
         QTest.qWait(300)
         self.assertEqual(pingsTo(receiver, 2), before)
 
@@ -412,8 +453,8 @@ class ReceiverListTests(unittest.TestCase):
         self.nodes.remove(RECEIVER)
         self.assertTrue(waitUntil(lambda: self.keys() == [] and self.mice.nodes == {}))
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
-        # the node's retry timer and the mouse's wake timer
-        self.assertEqual(len(self.mice.findChildren(QTimer)), before - 2)
+        # the node's retry and identify timers, and the mouse's wake timer
+        self.assertEqual(len(self.mice.findChildren(QTimer)), before - 3)
 
     def testAMouseFoundAgainAfterAReplugGetsAWorkingWakeRetry(self):
         hooked = []
@@ -445,6 +486,33 @@ class ReceiverListTests(unittest.TestCase):
         self.assertEqual((self.mice.nodes, self.mice.denied, self.mice.isSearching()), ({}, {RECEIVER}, False))
         self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"], timeout=2.0))
         self.assertEqual(self.mice.denied, set())
+
+    def testANodeWhoseWorkerCantStartIsClosedAndTriedAgain(self):
+        first = "/dev/hidraw10"
+        self.nodes.add(first, mouseHandler(unitId=bytes.fromhex("aaaaaaaa")))
+        self.nodes.add(RECEIVER, mouseHandler(unitId=bytes.fromhex("bbbbbbbb")))
+        realOpen = self.nodes.open
+        realStart = receivers.NodeWorker.start
+        opened = []
+        failed = []
+
+        def recordingOpen(path, onEvent=None):
+            node = realOpen(path, onEvent)
+            opened.append(node)
+            return node
+
+        def failingStart(worker):
+            if (worker.path == first and not failed):
+                failed.append(worker)
+                raise RuntimeError("can't start new thread")
+            realStart(worker)
+
+        with mock.patch.object(hidpp.HidppNode, "open", recordingOpen), mock.patch.object(receivers.NodeWorker, "start", failingStart):
+            self.mice.start()
+            self.assertEqual((sorted(self.mice.nodes), self.mice.denied), ([RECEIVER], {first}))
+            self.assertEqual((opened[0].fd, failed[0].wakeRead, failed[0].wakeWrite), (None, None, None))
+            self.assertIn("Couldn't start " + first + ": can't start new thread\n", self.errors.getvalue())
+            self.assertTrue(waitUntil(lambda: sorted(self.keys()) == ["aaaaaaaa", "bbbbbbbb"], timeout=2.0))
 
     def testALateLostMessageAfterStopDoesNothing(self):
         self.nodes.add(RECEIVER, mouseHandler())
@@ -545,6 +613,26 @@ class ReceiverListTests(unittest.TestCase):
             receiver.handler = mouseHandler(unitId=bytes.fromhex("11223344"))
             self.assertTrue(waitUntil(lambda: self.keys() == ["11223344"], timeout=4.0))
 
+    def testAStreamOfLinkUpNoticesCostsOneIdentifyPerGap(self):
+        receiver = self.nodes.add(RECEIVER, mouseHandler())
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"] and not self.mice.isBusy()))
+        realIdentify = hidpp.identifySlot
+        identifies = []
+
+        def countingIdentify(node, slot, *args):
+            identifies.append(slot)
+            return realIdentify(node, slot, *args)
+
+        with mock.patch.object(hidpp, "identifySlot", countingIdentify):
+            # each notice comes after the last identify finished, so only the gap can hold them back
+            for i in range(5):
+                receiver.send(LINK_UP)
+                QTest.qWait(60)
+            during = len(identifies)
+            QTest.qWait(receivers.IDENTIFY_GAP_MS + 300)
+        self.assertEqual((during, len(identifies)), (1, 2))
+
     def testAFailedReadDoesntBlockTheNextOne(self):
         self.nodes.add(RECEIVER, mouseHandler())
         self.mice.start()
@@ -639,6 +727,46 @@ class ReceiverListTests(unittest.TestCase):
             self.assertEqual(intervals, [100, 200, 400, 400])
             self.mice.onDevChanged("/dev")
             self.assertEqual(self.mice.deniedTimer.interval(), 100)
+
+    def testANodeThatKeepsDyingAfterItOpensBacksOff(self):
+        with mock.patch.object(receivers, "DENIED_RETRY_MAX_MS", 10000):
+            self.nodes.add(RECEIVER, mouseHandler())
+            self.mice.start()
+            intervals = []
+            for i in range(3):
+                self.mice.onLost(self.mice.nodes[RECEIVER], OSError(errno.EIO, "Input/output error"))
+                intervals.append(self.mice.deniedTimer.interval())
+                self.mice.retryDenied()
+        self.assertEqual(intervals, [100, 200, 400])
+
+    def testANodeThatKeepsDyingAfterItOpensPrintsItsLossOnce(self):
+        self.nodes.add(RECEIVER, mouseHandler())
+        self.mice.start()
+        for i in range(3):
+            self.mice.onLost(self.mice.nodes[RECEIVER], OSError(errno.EIO, "Input/output error"))
+            self.mice.retryDenied()
+        self.assertEqual(self.errors.getvalue(), "Lost " + RECEIVER + ": EIO\n")
+
+    def testANodeThatServedAWhileStartsItsBackoffAndItsPrintingOver(self):
+        with mock.patch.object(receivers, "DENIED_RETRY_MAX_MS", 10000):
+            self.nodes.add(RECEIVER, mouseHandler())
+            self.mice.start()
+            for i in range(2):
+                self.mice.onLost(self.mice.nodes[RECEIVER], OSError(errno.EIO, "Input/output error"))
+                self.mice.retryDenied()
+            state = self.mice.nodes[RECEIVER]
+            state.openedAt -= receivers.STABLE_MS / 1000
+            self.mice.onLost(state, OSError(errno.EIO, "Input/output error"))
+        self.assertEqual((self.mice.deniedTimer.interval(), self.errors.getvalue()), (100, ("Lost " + RECEIVER + ": EIO\n") * 2))
+
+    def testAnErrorIsPrintedAgainForAPathThatWentAwayAndCameBack(self):
+        self.nodes.deny(RECEIVER)
+        self.mice.start()
+        self.nodes.denied.discard(RECEIVER)
+        self.mice.scanNodes()
+        self.nodes.deny(RECEIVER)
+        self.mice.scanNodes()
+        self.assertEqual(self.errors.getvalue(), ("Couldn't open " + RECEIVER + ": EACCES\n") * 2)
 
     def testADeniedPathThatsNoLongerListedIsntOpened(self):
         self.nodes.deny(RECEIVER)
@@ -788,7 +916,8 @@ class ReceiverListTests(unittest.TestCase):
         self.assertTrue(waitUntil(lambda: not self.mice.isBusy()))
         for i in range(5):
             self.mice.requestReadAll()
-        self.assertEqual((self.mice.readAllTimer.isActive(), self.mice.isBusy()), (True, True))
+        # a batch waiting its turn isn't work in flight, since any local caller can keep one queued
+        self.assertEqual((self.mice.readAllTimer.isActive(), self.mice.isBusy()), (True, False))
         self.assertTrue(waitUntil(lambda: not self.mice.isBusy()))
         QTest.qWait(400)
         self.assertEqual(batteryReads(receiver) - before, 2)

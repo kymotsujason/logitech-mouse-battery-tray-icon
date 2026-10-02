@@ -127,14 +127,15 @@ class ServiceTests(unittest.TestCase):
         state = serviceState.decodeState(answer[0])
         self.assertEqual((state.nodes, [(entry.key, entry.reading.percent) for entry in state.mice]), ((RECEIVER,), [("02bc524c", 81)]))
 
-    def testBusyWhileAReadIsPendingAndWhileABatchWaits(self):
+    def testBusyWhileAReadIsPendingButNotWhileABatchWaits(self):
         device = self.startWithMouse()
         device.handler = silent
         self.caller.call("ReadAll")
         self.assertTrue(self.caller.state().busy)
         self.assertTrue(waitUntil(lambda: not self.caller.state().busy))
         self.caller.call("ReadAll")
-        self.assertEqual((self.receiverList.readAllTimer.isActive(), self.caller.state().busy), (True, True))
+        # a queued batch would otherwise let any local caller hold busy true, which makes every check wait its full ten seconds
+        self.assertEqual((self.receiverList.readAllTimer.isActive(), self.caller.state().busy), (True, False))
         self.assertTrue(waitUntil(lambda: not self.caller.state().busy, timeout=4.0))
 
     def testStateChangedFollowsAReadAndARepeatedReportButNotANoChangeReport(self):
