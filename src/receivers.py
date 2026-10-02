@@ -201,6 +201,8 @@ class ReceiverList(QObject):
         self.mice = []
         self.stopped = False
         self.reportedErrors = set()
+        # what was last printed for each path, so a node that keeps opening and dying prints its open once instead of each cycle
+        self.lastPrinted = {}
         # workers emit this from their own threads, so Qt queues it onto this object's thread
         self.message.connect(self.onMessage)
         self.deniedRetryMs = DENIED_RETRY_MS
@@ -279,6 +281,7 @@ class ReceiverList(QObject):
         paths = hidpp.findHidppNodes()
         removed = [path for path in self.nodes if path not in paths]
         for path in removed:
+            self.printRemoved(path)
             self.closeNode(path)
         self.keepDenied(paths)
         # a node that shows up at a path discovery dropped is a new device, so its errors get printed again
@@ -321,6 +324,9 @@ class ReceiverList(QObject):
         self.nodes[path] = NodeState(path, worker, retryTimer, identifyTimer)
         self.denied.discard(path)
         self.deniedSignatures.pop(path, None)
+        if (self.lastPrinted.get(path) != "Opened"):
+            self.lastPrinted[path] = "Opened"
+            print("Opened " + path, file=sys.stderr)
         self.requestSearch(path)
 
     def deny(self, path):
@@ -339,7 +345,12 @@ class ReceiverList(QObject):
         if ((path, what, detail) in self.reportedErrors):
             return
         self.reportedErrors.add((path, what, detail))
+        self.lastPrinted[path] = what
         print(what + " " + path + ": " + detail, file=sys.stderr)
+
+    def printRemoved(self, path):
+        self.lastPrinted[path] = "Removed"
+        print("Removed " + path, file=sys.stderr)
 
     def forgetErrors(self, path):
         self.reportedErrors = {entry for entry in self.reportedErrors if entry[0] != path}
@@ -462,9 +473,14 @@ class ReceiverList(QObject):
         if ((time.monotonic() - state.openedAt) * 1000 >= STABLE_MS):
             self.forgetErrors(path)
             self.deniedRetryMs = DENIED_RETRY_MS
-        self.reportError(path, "Lost", error)
+        # a node discovery no longer lists was unplugged, which reads as an I/O error just like a failing one
+        listed = path in hidpp.findHidppNodes()
+        if (listed):
+            self.reportError(path, "Lost", error)
+        else:
+            self.printRemoved(path)
         self.closeNode(path)
-        if (path in hidpp.findHidppNodes()):
+        if (listed):
             self.deny(path)
             self.updateDeniedTimer()
         self.searchAll()

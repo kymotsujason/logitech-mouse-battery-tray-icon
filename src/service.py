@@ -10,6 +10,7 @@ from PyQt6.QtDBus import QDBusAbstractAdaptor, QDBusConnection, QDBusMessage
 import serviceState
 from exceptionHooks import installExceptionHooks
 from receivers import ReceiverList
+from version import VERSION
 
 # a device can send a report every millisecond, and each one would otherwise be its own encode and system bus broadcast
 BROADCAST_MS = 200
@@ -130,6 +131,8 @@ def main(bus=None):
     # exiting 1 lets systemd restart a service that started before the bus loaded its policy
     if (served is None):
         return 1
+    # an upgrade restarts the service, so the journal shows which version took over
+    print("Mouse Battery service " + VERSION + " started", file=sys.stderr)
     # the wakeup fd is one of these sockets, so they're held until the loop ends instead of being freed and closed under the signal handler
     sigterm = quitOnSigterm(app)
     receiverList.start()

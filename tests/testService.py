@@ -18,6 +18,7 @@ import hidpp
 import receivers
 import service
 import serviceState
+import version
 from tests.fakes.fakeDevice import FakeNodes, mouseHandler
 from tests.fakes.privateBus import PrivateBus, requireTools
 
@@ -311,6 +312,10 @@ class ServiceProcessTests(unittest.TestCase):
         self.assertTrue(waitUntil(lambda: self.caller.state() is not None, timeout=15.0))
         self.assertIsNone(self.privateBus.fakes[-1][0].poll())
         self.assertTrue(self.privateBus.waitForLine(log, "RuntimeError: the first state fails"))
+
+    def testTheServiceSaysItStartedWithItsVersion(self):
+        log = self.privateBus.startFake("runService.py")
+        self.assertTrue(self.privateBus.waitForLine(log, "Mouse Battery service " + version.VERSION + " started"))
 
     def testSigtermStopsTheServiceThroughItsShutdownPath(self):
         self.privateBus.startFake("runService.py")

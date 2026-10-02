@@ -815,7 +815,7 @@ class ReceiverListTests(unittest.TestCase):
             self.mice.readAll()
             self.assertTrue(waitUntil(lambda: failed and not self.mice.isBusy()))
         self.assertEqual((self.keys(), list(self.mice.nodes), self.mice.denied), (["02bc524c"], [RECEIVER], set()))
-        self.assertEqual(self.errors.getvalue(), "Request failed on " + RECEIVER + ": ETIMEDOUT\n")
+        self.assertEqual(self.errors.getvalue(), "Opened " + RECEIVER + "\nRequest failed on " + RECEIVER + ": ETIMEDOUT\n")
 
     def putToSleep(self, receiver):
         receiver.handler = silent
@@ -925,7 +925,8 @@ class ReceiverListTests(unittest.TestCase):
         for i in range(3):
             self.mice.onLost(self.mice.nodes[RECEIVER], OSError(errno.EIO, "Input/output error"))
             self.mice.retryDenied()
-        self.assertEqual(self.errors.getvalue(), "Lost " + RECEIVER + ": EIO\n")
+        # the node opens again after each loss, and only a change in what was last printed for it gets a line
+        self.assertEqual(self.errors.getvalue(), "Opened " + RECEIVER + "\nLost " + RECEIVER + ": EIO\nOpened " + RECEIVER + "\n")
 
     def testANodeThatServedAWhileStartsItsBackoffAndItsPrintingOver(self):
         with mock.patch.object(receivers, "DENIED_RETRY_MAX_MS", 10000):
@@ -937,7 +938,7 @@ class ReceiverListTests(unittest.TestCase):
             state = self.mice.nodes[RECEIVER]
             state.openedAt -= receivers.STABLE_MS / 1000
             self.mice.onLost(state, OSError(errno.EIO, "Input/output error"))
-        self.assertEqual((self.mice.deniedTimer.interval(), self.errors.getvalue()), (100, ("Lost " + RECEIVER + ": EIO\n") * 2))
+        self.assertEqual((self.mice.deniedTimer.interval(), self.errors.getvalue()), (100, ("Opened " + RECEIVER + "\nLost " + RECEIVER + ": EIO\n") * 2))
 
     def testAnErrorIsPrintedAgainForAPathThatWentAwayAndCameBack(self):
         self.nodes.deny(RECEIVER)
@@ -984,13 +985,26 @@ class ReceiverListTests(unittest.TestCase):
         self.mice.retryDenied()
         self.assertEqual(self.errors.getvalue(), "Couldn't open " + RECEIVER + ": EACCES\n")
 
-    def testALostNodeIsPrintedWithItsError(self):
+    def testANodeThatOpensIsPrinted(self):
+        self.nodes.add(RECEIVER, mouseHandler())
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"]))
+        self.assertEqual(self.errors.getvalue(), "Opened " + RECEIVER + "\n")
+
+    def testAnUnpluggedNodeIsPrintedAsRemoved(self):
         self.nodes.add(RECEIVER, mouseHandler())
         self.mice.start()
         self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"]))
         self.nodes.remove(RECEIVER)
         self.assertTrue(waitUntil(lambda: self.keys() == []))
-        self.assertIn("Lost " + RECEIVER + ": HID++ node closed\n", self.errors.getvalue())
+        self.assertEqual(self.errors.getvalue(), "Opened " + RECEIVER + "\nRemoved " + RECEIVER + "\n")
+
+    def testANodeDiscoveryDropsIsPrintedAsRemoved(self):
+        self.nodes.add(RECEIVER, mouseHandler())
+        self.mice.start()
+        self.nodes.hide(RECEIVER)
+        self.mice.scanNodes()
+        self.assertEqual(self.errors.getvalue(), "Opened " + RECEIVER + "\nRemoved " + RECEIVER + "\n")
 
     def testAnOpenErrorAfterALossWithTheSameErrnoIsStillPrinted(self):
         receiver = self.nodes.add(RECEIVER, mouseHandler())
@@ -1002,7 +1016,7 @@ class ReceiverListTests(unittest.TestCase):
             receiver.send(OTHER_REPORT)
             self.assertTrue(waitUntil(lambda: RECEIVER not in self.mice.nodes or self.mice.nodes[RECEIVER].worker is not worker))
         self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"] and self.mice.denied == set()))
-        self.assertEqual(self.errors.getvalue(), "Lost " + RECEIVER + ": EIO\nCouldn't open " + RECEIVER + ": EIO\n")
+        self.assertEqual(self.errors.getvalue(), "Opened " + RECEIVER + "\nLost " + RECEIVER + ": EIO\nCouldn't open " + RECEIVER + ": EIO\nOpened " + RECEIVER + "\n")
 
     def testAFailedFirstSearchEmitsAndStopsSearching(self):
         self.nodes.add(RECEIVER, silent)
