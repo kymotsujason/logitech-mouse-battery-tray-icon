@@ -302,7 +302,7 @@ class VersionMentionTests(unittest.TestCase):
 
 
 WORKFLOWS = os.path.join(REPO, ".github", "workflows")
-CHECKOUT = "uses: actions/checkout@v7\n        with:\n          persist-credentials: false\n"
+CHECKOUT = "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n"
 
 
 class WorkflowTests(unittest.TestCase):
@@ -316,8 +316,23 @@ class WorkflowTests(unittest.TestCase):
     def testOnlyTheReleaseJobCanWrite(self):
         text = self.read("release.yml")
         self.assertIn("\npermissions:\n  contents: read\n", text)
-        self.assertEqual(text.count("contents: write"), 1)
-        self.assertIn("\n    permissions:\n      contents: write\n", self.releaseJob())
+        for permission in ("contents: write", "id-token: write", "attestations: write"):
+            self.assertEqual(text.count(permission), 1, permission)
+        self.assertIn("\n    permissions:\n      contents: write\n      id-token: write\n      attestations: write\n", self.releaseJob())
+        self.assertNotIn("write", self.read("ci.yml"))
+
+    def testEveryActionIsPinnedToACommit(self):
+        for name in ("release.yml", "ci.yml"):
+            uses = [line.strip() for line in self.read(name).splitlines() if line.strip().startswith(("uses:", "- uses:"))]
+            self.assertGreater(len(uses), 0, name)
+            for line in uses:
+                self.assertRegex(line, r"^(- )?uses: [\w.-]+/[\w.-]+@[0-9a-f]{40} # v\d+\.\d+\.\d+$", name)
+
+    def testTheReleaseAttestsEveryChecksummedAssetBeforePublishing(self):
+        release = self.releaseJob()
+        self.assertIn("uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2\n        with:\n          subject-checksums: dist/SHA256SUMS\n", release)
+        self.assertLess(release.index("> SHA256SUMS"), release.index("subject-checksums"))
+        self.assertLess(release.index("subject-checksums"), release.index("gh release create"))
 
     def testOnlyMainPublishes(self):
         self.assertIn("    if: needs.check.outputs.released == 'false' && github.ref == 'refs/heads/main'\n", self.releaseJob())
@@ -357,6 +372,16 @@ class WorkflowTests(unittest.TestCase):
         ci = self.read("ci.yml")
         for script in ("tests/live/checkLateTray.sh", "packaging/tarball.sh", "packaging/build.sh", "packaging/buildArch.sh", "tests/containers/testPackages.sh", "tests/containers/testUpgrade.sh", "tests/booted/checkService.sh"):
             self.assertIn("run: " + script + "\n", ci)
+
+    def testTheBuildImagesArePinnedByDigest(self):
+        for script in ("build.sh", "buildArch.sh"):
+            with open(os.path.join(PACKAGING, script)) as f:
+                lines = f.read().splitlines()
+            runs = [line for line in lines if line.strip().startswith("docker run")]
+            images = [line for line in lines if line.startswith("image=")]
+            self.assertEqual((len(runs), len(images)), (1, 1), script)
+            self.assertRegex(images[0], r"^image=[\w./-]+(:[\w.-]+)?@sha256:[0-9a-f]{64}$", script)
+            self.assertIn(' "$image" ', runs[0], script)
 
     def testTheAurBundleCarriesTheInstallFile(self):
         self.assertIn('run: tar -czf "dist/logitech-mouse-battery-$VERSION-aur.tar.gz" -C dist/aur PKGBUILD .SRCINFO logitech-mouse-battery.install\n', self.releaseJob())

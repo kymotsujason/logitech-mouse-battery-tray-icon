@@ -11,7 +11,9 @@ if [ ! -f "$repo/dist/$tarball" ]; then
     exit 1
 fi
 mkdir -p "$repo/dist/aur"
-docker run --rm -v "$repo:/repo" -e TARBALL="$tarball" -e OWNER="$(id -u):$(id -g)" archlinux:latest bash -c '
+# archlinux:latest from 2026-09-21, named by its digest since a tag can be moved to a different image, while pacman checks the signature of every package -Syu brings in
+image=archlinux@sha256:f3691b4dde62ba4c4b6f0ae2c1fbf28e8c0c8c4b9a35c7e06dc1f70e21aa29f6
+docker run --rm -v "$repo:/repo" -e TARBALL="$tarball" -e OWNER="$(id -u):$(id -g)" "$image" bash -c '
 set -eu
 # the image turns on debug packages, which need debugedit even for a package with no binaries
 if ! pacman -Syu --noconfirm --needed fakeroot debugedit pacman-contrib > /tmp/pacman.log 2>&1; then

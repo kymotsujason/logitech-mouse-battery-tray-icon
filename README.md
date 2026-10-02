@@ -28,6 +28,12 @@ sudo pacman -U ./logitech-mouse-battery-1.1.0-1-any.pkg.tar.zst
 
 An AUR package is ready and will follow once the AUR opens account registrations again.
 
+From 1.1.1 on, each file in a release comes with a signed record of the commit and the workflow run that built it. With the GitHub CLI, this checks a download before you install it:
+
+```bash
+gh attestation verify ./logitech-mouse-battery-1.1.0-1-any.pkg.tar.zst --repo kymotsujason/logitech-mouse-battery-tray-icon
+```
+
 The package also installs a udev rule that hands your receiver or cable to Mouse Battery's service, and applies it to devices that are already plugged in, so there's no need to replug anything.
 
 ## Use
