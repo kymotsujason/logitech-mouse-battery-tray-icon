@@ -733,6 +733,35 @@ class ReceiverListTests(unittest.TestCase):
         receiver.send(bytes([0x11, 1, 5, 0x00, 64, 0x04, 0, 0]).ljust(20, b"\x00"))
         self.assertTrue(waitUntil(lambda: self.mouse().reading == hidpp.BatteryReading(64, 0)))
 
+    def putToSleep(self, receiver):
+        receiver.handler = silent
+        self.mice.readAll()
+        self.assertTrue(waitUntil(lambda: self.mouse().asleep and not self.mice.nodes[RECEIVER].pendingReads))
+
+    def testAnAsleepMouseWhoseReadAnswersAnErrorIsReadAgain(self):
+        receiver = self.nodes.add(RECEIVER, mouseHandler())
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"] and not self.mice.nodes[RECEIVER].searching))
+        self.putToSleep(receiver)
+        # a busy receiver answers with an error while the mouse is there
+        receiver.handler = mouseHandler(answers={(5, 0): [0x0F, 0x02]})
+        self.mice.readAll()
+        self.assertTrue(waitUntil(lambda: not self.mice.nodes[RECEIVER].pendingReads))
+        receiver.handler = mouseHandler()
+        self.assertTrue(waitUntil(lambda: not self.mouse().asleep, timeout=2.0))
+
+    def testAKnownMouseWhoseIdentifyCantFinishIsReadAgain(self):
+        receiver = self.nodes.add(RECEIVER, mouseHandler())
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"] and not self.mice.nodes[RECEIVER].searching))
+        self.putToSleep(receiver)
+        identified = []
+        self.mice.message.connect(lambda message: identified.append(message[3][0]) if message[0] == "identified" else None)
+        receiver.send(LINK_UP)
+        self.assertTrue(waitUntil(lambda: identified == [hidpp.UNKNOWN]))
+        receiver.handler = mouseHandler()
+        self.assertTrue(waitUntil(lambda: not self.mouse().asleep, timeout=2.0))
+
     def testANoticeDuringASearchKeepsItsSlotFromBeingSkipped(self):
         keyboardFirst = [True]
         keyboard = mouseHandler(slot=2, kind=0)

@@ -509,8 +509,8 @@ class ReceiverList(QObject):
         if (outcome == hidpp.ANSWER):
             self.applyReading(mouse, reading, woke=woke)
         elif (outcome == hidpp.ERROR):
-            # the device answered with an error, so it's awake and its last reading stands, while a mouse with no reading yet gets a few quick reads before it waits for its next event or the timed read
-            if (mouse.reading is None and mouse.errorRetries < ERROR_RETRY_LIMIT):
+            # the device answered with an error, such as a busy receiver, so it's there and its last reading stands, and a few quick reads follow before it waits for its next event or the timed read
+            if (mouse.errorRetries < ERROR_RETRY_LIMIT):
                 mouse.errorRetries += 1
                 self.retryLater(mouse)
         elif (mouse.batteryEventAt is not None and mouse.batteryEventAt >= queuedAt):
@@ -596,6 +596,11 @@ class ReceiverList(QObject):
             if (mouse is not None):
                 self.removeMouse(mouse)
             state.skipped.add(slot)
+        elif (result == hidpp.UNKNOWN):
+            mouse = self.findByNode(state.path, slot)
+            # the slot announced itself but didn't finish answering, so its known mouse is read once more after a wait instead of staying asleep until the timed read
+            if (mouse is not None):
+                self.retryLater(mouse)
         self.changed.emit()
 
     def retryLater(self, mouse):
