@@ -47,9 +47,17 @@ class StateTests(unittest.TestCase):
         self.assertEqual(serviceState.decodeState(EXAMPLE), ServiceState(False, False, ("/dev/hidraw4",), (), (EXAMPLE_ENTRY,)))
 
     def testAStateRoundTripsWithEveryField(self):
-        mouse = FakeMouse("/dev/hidraw7#2", "/dev/hidraw7", hidpp.BatteryReading(None, 3, millivolts=3900, level="good"), pathKey=True, asleep=True, lastRead=1790000100.5, wokeAt=1790000000.25)
+        mouse = FakeMouse("/dev/hidraw7#2", "/dev/hidraw7", hidpp.BatteryReading(None, 3, millivolts=3900, level="good"), pathKey=True, asleep=True, lastRead=1790000100.0, wokeAt=1790000000.0)
         state = serviceState.decodeState(serviceState.encodeState(FakeList([mouse], ["/dev/hidraw7"], ["/dev/hidraw9"], busy=True, searching=True)))
-        self.assertEqual(state, ServiceState(True, True, ("/dev/hidraw7",), ("/dev/hidraw9",), (ServiceEntry("/dev/hidraw7#2", True, None, "/dev/hidraw7", hidpp.BatteryReading(None, 3, 3900, "good"), True, 1790000100.5, 1790000000.25),)))
+        self.assertEqual(state, ServiceState(True, True, ("/dev/hidraw7",), ("/dev/hidraw9",), (ServiceEntry("/dev/hidraw7#2", True, None, "/dev/hidraw7", hidpp.BatteryReading(None, 3, 3900, "good"), True, 1790000100.0, 1790000000.0),)))
+
+    def testStampsGoOutInWholeSecondsSoARepeatedReadingEncodesTheSame(self):
+        reading = hidpp.BatteryReading(53, 0)
+        first = FakeList([FakeMouse("a", "/dev/hidraw1", reading, lastRead=1790000100.2, wokeAt=1790000000.9)], ["/dev/hidraw1"], [])
+        second = FakeList([FakeMouse("a", "/dev/hidraw1", reading, lastRead=1790000100.7, wokeAt=1790000000.1)], ["/dev/hidraw1"], [])
+        self.assertEqual(serviceState.encodeState(first), serviceState.encodeState(second))
+        entry = serviceState.decodeState(serviceState.encodeState(first)).mice[0]
+        self.assertEqual((entry.lastRead, entry.wokeAt), (1790000100, 1790000000))
 
     def testAMouseWithNoReadingYetHasNullReadingFields(self):
         fields = json.loads(serviceState.encodeState(FakeList([FakeMouse("02bc524c", "/dev/hidraw4")], ["/dev/hidraw4"], [])))

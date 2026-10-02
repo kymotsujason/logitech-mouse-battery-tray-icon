@@ -138,31 +138,57 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual((self.receiverList.readAllTimer.isActive(), self.caller.state().busy), (True, False))
         self.assertTrue(waitUntil(lambda: not self.caller.state().busy, timeout=4.0))
 
+    def subscribe(self):
+        self.assertTrue(self.clientBus.connect(serviceState.SERVICE_NAME, serviceState.OBJECT_PATH, serviceState.INTERFACE, "StateChanged", self.caller.onState))
+
+    def ageReading(self):
+        # stamps go out in whole seconds, so the reading is moved back a few for a repeat of it to be news
+        self.receiverList.mice[0].lastRead -= 5
+        self.receiverList.changed.emit()
+        self.assertTrue(waitUntil(lambda: self.caller.signals and self.caller.signals[-1] == serviceState.encodeState(self.receiverList)))
+        return serviceState.decodeState(self.caller.signals[-1]).mice[0].lastRead
+
     def testStateChangedFollowsAReadAndARepeatedReportButNotANoChangeReport(self):
         device = self.startWithMouse()
-        self.assertTrue(self.clientBus.connect(serviceState.SERVICE_NAME, serviceState.OBJECT_PATH, serviceState.INTERFACE, "StateChanged", self.caller.onState))
-        firstRead = self.receiverList.mice[0].lastRead
+        self.subscribe()
+        agedRead = self.ageReading()
+        count = len(self.caller.signals)
         device.send(REPEATED_BATTERY)
-        self.assertTrue(waitUntil(lambda: self.caller.signals))
-        self.assertGreater(serviceState.decodeState(self.caller.signals[-1]).mice[0].lastRead, firstRead)
+        self.assertTrue(waitUntil(lambda: len(self.caller.signals) > count))
+        self.assertGreater(serviceState.decodeState(self.caller.signals[-1]).mice[0].lastRead, agedRead)
         count = len(self.caller.signals)
         device.send(OTHER_REPORT)
-        QTest.qWait(300)
+        QTest.qWait(400)
         self.assertEqual(len(self.caller.signals), count)
+        self.ageReading()
+        count = len(self.caller.signals)
         self.caller.call("ReadAll")
         self.assertTrue(waitUntil(lambda: len(self.caller.signals) > count))
 
     def testAChangedSignalWithAnUnchangedStateSendsNoStateChanged(self):
         device = self.startWithMouse()
-        self.assertTrue(self.clientBus.connect(serviceState.SERVICE_NAME, serviceState.OBJECT_PATH, serviceState.INTERFACE, "StateChanged", self.caller.onState))
-        device.send(REPEATED_BATTERY)
-        self.assertTrue(waitUntil(lambda: self.caller.signals))
+        self.subscribe()
+        self.ageReading()
         count = len(self.caller.signals)
         self.receiverList.changed.emit()
-        QTest.qWait(300)
+        QTest.qWait(400)
         self.assertEqual(len(self.caller.signals), count)
         device.send(REPEATED_BATTERY)
         self.assertTrue(waitUntil(lambda: len(self.caller.signals) > count))
+
+    def testAFloodOfReportsGoesOutAFewTimesInsteadOfOncePerReport(self):
+        device = self.startWithMouse()
+        self.subscribe()
+        self.ageReading()
+        count = len(self.caller.signals)
+        # each report changes the level, so every one of them is a real change of state
+        for i in range(100):
+            device.send(bytes([0x11, 1, 5, 0x00, 80 - (i % 2), 0x04, 0, 0]).ljust(20, b"\x00"))
+        QTest.qWait(service.BROADCAST_MS * 3)
+        self.assertEqual(self.receiverList.mice[0].reading.percent, 79)
+        sent = self.caller.signals[count:]
+        self.assertLessEqual(len(sent), 5)
+        self.assertEqual(serviceState.decodeState(sent[-1]).mice[0].reading.percent, 79)
 
     def testSearchingGoesFalseAfterTheFirstSearchEvenWhileAnotherRuns(self):
         self.startWithMouse()

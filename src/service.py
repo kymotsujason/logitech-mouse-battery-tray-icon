@@ -2,12 +2,15 @@
 import signal
 import sys
 
-from PyQt6.QtCore import QCoreApplication, QObject, pyqtClassInfo, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QCoreApplication, QObject, QTimer, pyqtClassInfo, pyqtSignal, pyqtSlot
 from PyQt6.QtDBus import QDBusAbstractAdaptor, QDBusConnection
 
 import serviceState
 from exceptionHooks import installExceptionHooks
 from receivers import ReceiverList
+
+# a device can send a report every millisecond, and each one would otherwise be its own encode and system bus broadcast
+BROADCAST_MS = 200
 
 
 @pyqtClassInfo("D-Bus Interface", serviceState.INTERFACE)
@@ -19,6 +22,10 @@ class BatteryService(QDBusAbstractAdaptor):
         self.receiverList = receiverList
         self.sentState = None
         self.setAutoRelaySignals(True)
+        self.broadcastTimer = QTimer(self)
+        self.broadcastTimer.setSingleShot(True)
+        self.broadcastTimer.setInterval(BROADCAST_MS)
+        self.broadcastTimer.timeout.connect(self.broadcast)
         receiverList.changed.connect(self.onChanged)
 
     @pyqtSlot(result=str)
@@ -30,6 +37,11 @@ class BatteryService(QDBusAbstractAdaptor):
         self.receiverList.requestReadAll()
 
     def onChanged(self):
+        # changes during the wait ride along instead of restarting it, so a steady stream still goes out once per wait
+        if (not self.broadcastTimer.isActive()):
+            self.broadcastTimer.start()
+
+    def broadcast(self):
         state = serviceState.encodeState(self.receiverList)
         if (state != self.sentState):
             self.sentState = state

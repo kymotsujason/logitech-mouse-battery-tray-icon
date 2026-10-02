@@ -33,6 +33,11 @@ class ServiceState:
     mice: tuple
 
 
+def wholeSeconds(stamp):
+    # a repeated reading in the same second then encodes the same, so the service doesn't send it again
+    return None if stamp is None else math.floor(stamp)
+
+
 def entryFields(mouse):
     reading = mouse.reading
     return {
@@ -45,8 +50,8 @@ def entryFields(mouse):
         "millivolts": None if reading is None else reading.millivolts,
         "level": None if reading is None else reading.level,
         "asleep": mouse.asleep,
-        "lastRead": mouse.lastRead,
-        "wokeAt": mouse.wokeAt,
+        "lastRead": wholeSeconds(mouse.lastRead),
+        "wokeAt": wholeSeconds(mouse.wokeAt),
     }
 
 
