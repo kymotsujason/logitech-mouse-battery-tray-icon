@@ -307,6 +307,18 @@ class ReceiverListTests(unittest.TestCase):
         second[0] = mouseHandler(slot=2, unitId=bytes.fromhex("bbbbbbbb"))
         self.assertTrue(waitUntil(lambda: set(self.keys()) == {"aaaaaaaa", "bbbbbbbb"}, timeout=2.0))
 
+    def testASilentSlotThatKeepsReportingCostsOneSearchPerRetryWait(self):
+        with mock.patch.object(receivers, "WAKE_RETRY_MS", 5000):
+            receiver = self.nodes.add(RECEIVER, silent)
+            self.mice.start()
+            self.assertTrue(waitUntil(lambda: not self.mice.nodes[RECEIVER].searching))
+            before = pingsTo(receiver, 1)
+            for i in range(10):
+                receiver.send(OTHER_REPORT)
+                QTest.qWait(100)
+            self.assertTrue(waitUntil(lambda: not self.mice.nodes[RECEIVER].searching))
+        self.assertEqual(pingsTo(receiver, 1) - before, 1)
+
     def testASlotTheSearchSkippedIsntRetried(self):
         self.nodes.add(RECEIVER, silent)
         self.mice.start()

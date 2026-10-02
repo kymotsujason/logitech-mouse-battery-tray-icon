@@ -168,6 +168,7 @@ class NodeState:
         self.searchAgain = False
         self.searched = False
         self.followUp = False
+        self.reportSearchAt = None
         self.retrySlots = set()
         self.noticedSlots = set()
         self.pendingReads = set()
@@ -420,6 +421,9 @@ class ReceiverList(QObject):
                 state.followUp = True
             if (retry):
                 state.retryTimer.start()
+            else:
+                # a retry a report armed while it waited out the gap is answered by this search, which looked at every slot that's waiting
+                state.retryTimer.stop()
         finally:
             self.finishSearch(state)
         self.changed.emit()
@@ -620,12 +624,25 @@ class ReceiverList(QObject):
         if (slot in state.skipped):
             if (report[2] == hidpp.CONNECTION_NOTIFICATION):
                 state.skipped.discard(slot)
-                self.requestSearch(state.path)
+                self.requestReportSearch(state, slot)
             return
         # a search only ever pings the slots HID++ defines, so a report from any other one can never resolve and would ask for a search per report
         if (slot not in hidpp.DEVICE_SLOTS):
             return
+        self.requestReportSearch(state, slot)
+
+    def requestReportSearch(self, state, slot):
         state.retrySlots.add(slot)
+        # the search running now ends by arming the retry when it doesn't resolve this slot
+        if (state.searching):
+            return
+        # a slot that keeps reporting but never resolves would otherwise hold its node in back to back searches, so the retry wait spaces them
+        now = time.monotonic()
+        if (state.retryTimer.isActive() or (state.reportSearchAt is not None and (now - state.reportSearchAt) * 1000 < WAKE_RETRY_MS)):
+            if (not state.retryTimer.isActive()):
+                state.retryTimer.start()
+            return
+        state.reportSearchAt = now
         self.requestSearch(state.path)
 
     def onMouseReport(self, state, mouse, report):
