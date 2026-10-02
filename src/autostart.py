@@ -43,8 +43,12 @@ def writeText(path, text):
         if ((oldMode & stat.S_IWUSR) == 0 or info.st_uid != os.getuid()):
             raise PermissionError(errno.EACCES, "Permission denied", path)
     temp = path + ".new"
+    # a leftover or planted file at the temporary name goes first, and the new one is made fresh without following a link, so the text can't land in another file
+    with contextlib.suppress(FileNotFoundError):
+        os.unlink(temp)
     try:
-        with open(temp, "w", encoding="utf-8", errors="surrogateescape") as f:
+        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o666)
+        with os.fdopen(fd, "w", encoding="utf-8", errors="surrogateescape") as f:
             f.write(text)
             f.flush()
             os.fsync(f.fileno())

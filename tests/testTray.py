@@ -127,6 +127,18 @@ class ProcessTests(unittest.TestCase):
             self.assertTrue(again[0])
             again[1].close()
 
+    def testTheLockDoesntTruncateThroughALink(self):
+        with tempfile.TemporaryDirectory() as runtimeDir, tempfile.TemporaryDirectory() as other:
+            victim = os.path.join(other, "victim")
+            with open(victim, "w") as f:
+                f.write("keep")
+            os.symlink(victim, os.path.join(runtimeDir, tray.LOCK_NAME))
+            canRun, handle = tray.takeLock(runtimeDir)
+            if (handle is not None):
+                handle.close()
+            with open(victim) as f:
+                self.assertEqual((canRun, f.read()), (True, "keep"))
+
     def testNoRuntimeFolderMeansNoLock(self):
         self.assertEqual(tray.takeLock(None), (True, None))
         self.assertEqual(tray.takeLock(""), (True, None))

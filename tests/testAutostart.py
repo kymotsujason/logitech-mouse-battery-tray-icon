@@ -154,6 +154,19 @@ class AutostartTests(unittest.TestCase):
             with open(target) as f:
                 self.assertIn("Hidden=true", f.read())
 
+    def testALinkAtTheTemporaryNameIsntWrittenThrough(self):
+        os.makedirs(os.path.dirname(self.path))
+        with tempfile.TemporaryDirectory() as other:
+            victim = os.path.join(other, "victim")
+            with open(victim, "w") as f:
+                f.write("keep")
+            os.symlink(victim, self.path + ".new")
+            autostart.setEnabled(self.configHome, False)
+            with open(victim) as f:
+                self.assertEqual(f.read(), "keep")
+        self.assertFalse(os.path.islink(self.path))
+        self.assertIn("Hidden=true", self.read())
+
     def testA0400OverrideRaisesPermissionErrorAndIsLeftUnchanged(self):
         os.makedirs(os.path.dirname(self.path))
         original = "[Desktop Entry]\nType=Application\nName=Mouse Battery\nExec=logitech-mouse-battery\n"

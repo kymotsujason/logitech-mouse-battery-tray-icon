@@ -88,7 +88,9 @@ def takeLock(runtimeDir):
     if (not runtimeDir):
         return (True, None)
     try:
-        handle = open(os.path.join(runtimeDir, LOCK_NAME), "w")
+        # a link at the lock's name could point a run with someone else's environment at a file to truncate, so it isn't followed and nothing is truncated
+        fd = os.open(os.path.join(runtimeDir, LOCK_NAME), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        handle = os.fdopen(fd, "r+")
     except OSError:
         return (True, None)
     try:
