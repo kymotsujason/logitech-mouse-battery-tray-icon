@@ -34,7 +34,11 @@ def readEntry(path):
 
 def writeText(path, text):
     # the new text replaces the old file only once it's all on disk, so a failed write leaves the old override whole
+    folder = os.path.dirname(os.path.abspath(path))
     path = os.path.realpath(path)
+    # a link can lead into another account's files, such as /etc for a run as root with the user's config, so the file it leads to has to sit in a folder with the override folder's owner
+    if (os.stat(os.path.dirname(path)).st_uid != os.stat(folder).st_uid):
+        raise PermissionError(errno.EACCES, "Permission denied", path)
     oldMode = None
     if (os.path.exists(path)):
         info = os.stat(path)

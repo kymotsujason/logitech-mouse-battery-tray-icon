@@ -154,6 +154,30 @@ class AutostartTests(unittest.TestCase):
             with open(target) as f:
                 self.assertIn("Hidden=true", f.read())
 
+    def testALinkIntoAnotherAccountsFolderIsRefusedAndLeftUnchanged(self):
+        os.makedirs(os.path.dirname(self.path))
+        original = "[Desktop Entry]\nType=Application\nName=Mouse Battery\nExec=logitech-mouse-battery\n"
+        with tempfile.TemporaryDirectory() as other:
+            target = os.path.join(other, "real.desktop")
+            with open(target, "w") as f:
+                f.write(original)
+            os.symlink(target, self.path)
+            realStat = os.stat
+
+            def otherOwnerFor(path, *args, **kwargs):
+                info = realStat(path, *args, **kwargs)
+                # the folder the link leads into belongs to another account, as /etc does to root
+                if (os.path.abspath(path) == other):
+                    fields = list(info[:10])
+                    fields[4] = os.getuid() + 1
+                    return os.stat_result(fields)
+                return info
+
+            with mock.patch.object(autostart.os, "stat", otherOwnerFor), self.assertRaises(PermissionError):
+                autostart.setEnabled(self.configHome, False)
+            with open(target) as f:
+                self.assertEqual(f.read(), original)
+
     def testALinkAtTheTemporaryNameIsntWrittenThrough(self):
         os.makedirs(os.path.dirname(self.path))
         with tempfile.TemporaryDirectory() as other:
