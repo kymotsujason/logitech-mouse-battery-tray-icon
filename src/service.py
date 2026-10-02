@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 import signal
+import socket
 import sys
 import time
 
-from PyQt6.QtCore import QCoreApplication, QObject, QTimer, pyqtClassInfo, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QCoreApplication, QObject, QSocketNotifier, QTimer, pyqtClassInfo, pyqtSignal, pyqtSlot
 from PyQt6.QtDBus import QDBusAbstractAdaptor, QDBusConnection, QDBusMessage
 
 import serviceState
@@ -90,6 +91,19 @@ def serve(bus, receiverList):
     return (holder, adaptor)
 
 
+def quitOnSigterm(app):
+    # systemd stops the service with SIGTERM, and Python runs a handler only once Qt hands it control, which the wakeup byte's notifier does
+    reader, writer = socket.socketpair()
+    reader.setblocking(False)
+    writer.setblocking(False)
+    signal.set_wakeup_fd(writer.fileno())
+    # a quit asked for before the event loop runs would be lost, so it's queued
+    signal.signal(signal.SIGTERM, lambda number, frame: QTimer.singleShot(0, app.quit))
+    notifier = QSocketNotifier(reader.fileno(), QSocketNotifier.Type.Read, app)
+    notifier.activated.connect(lambda: reader.recv(64))
+    return (reader, writer, notifier)
+
+
 def main(bus=None):
     installExceptionHooks()
     signal.signal(signal.SIGINT, signal.SIG_DFL)
@@ -101,6 +115,8 @@ def main(bus=None):
     # exiting 1 lets systemd restart a service that started before the bus loaded its policy
     if (served is None):
         return 1
+    # the wakeup fd is one of these sockets, so they're held until the loop ends instead of being freed and closed under the signal handler
+    sigterm = quitOnSigterm(app)
     receiverList.start()
     code = app.exec()
     receiverList.stop()

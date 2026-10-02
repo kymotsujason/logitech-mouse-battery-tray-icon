@@ -1,5 +1,6 @@
 import io
 import os
+import signal
 import sys
 import time
 import unittest
@@ -281,6 +282,14 @@ class ServiceProcessTests(unittest.TestCase):
         self.assertTrue(waitUntil(lambda: self.caller.state() is not None, timeout=15.0))
         self.assertIsNone(self.privateBus.fakes[-1][0].poll())
         self.assertTrue(self.privateBus.waitForLine(log, "RuntimeError: the first state fails"))
+
+    def testSigtermStopsTheServiceThroughItsShutdownPath(self):
+        self.privateBus.startFake("runService.py")
+        self.assertTrue(waitUntil(lambda: self.caller.state() is not None, timeout=15.0))
+        process = self.privateBus.fakes[-1][0]
+        process.send_signal(signal.SIGTERM)
+        # main returns app.exec()'s code only after ReceiverList.stop() has closed every node, while an unhandled SIGTERM ends the process with -15
+        self.assertEqual(process.wait(10), 0)
 
 
 if (__name__ == "__main__"):
