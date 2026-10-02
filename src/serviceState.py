@@ -74,6 +74,19 @@ def isStamp(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
+def isCount(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def isReading(fields):
+    # a reading reaches comparisons and the icon inside Qt slots, so a field of the wrong type turns the state away instead of raising there
+    if (not isCount(fields["charging"])):
+        return False
+    if (not all(fields[key] is None or isCount(fields[key]) for key in ("percent", "millivolts"))):
+        return False
+    return fields["level"] is None or isinstance(fields["level"], str)
+
+
 def decodeEntry(fields):
     if (not isinstance(fields, dict) or any(key not in fields for key in ENTRY_KEYS)):
         return None
@@ -83,6 +96,8 @@ def decodeEntry(fields):
         return None
     reading = None
     if (fields["charging"] is not None):
+        if (not isReading(fields)):
+            return None
         reading = hidpp.BatteryReading(fields["percent"], fields["charging"], fields["millivolts"], fields["level"])
     name = fields["name"] if isinstance(fields["name"], str) else None
     return ServiceEntry(fields["key"], bool(fields["pathKey"]), name, fields["source"], reading, bool(fields["asleep"]), fields["lastRead"], fields["wokeAt"])

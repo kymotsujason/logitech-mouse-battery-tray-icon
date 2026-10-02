@@ -93,6 +93,17 @@ class StateTests(unittest.TestCase):
         self.assertIsNone(serviceState.decodeState(EXAMPLE.replace("1790000000.0", "NaN")))
         self.assertIsNone(serviceState.decodeState(exampleWith(lambda fields: fields.update(nodes="/dev/hidraw4"))))
 
+    def testAReadingFieldOfTheWrongTypeDecodesToNone(self):
+        cases = [("percent", "53"), ("percent", True), ("percent", 53.5), ("charging", "0"), ("charging", False), ("millivolts", "3900"), ("millivolts", [1]), ("level", 5)]
+        for key, value in cases:
+            self.assertIsNone(serviceState.decodeState(exampleWith(lambda fields: fields["mice"][0].update({key: value}))), (key, value))
+
+    def testAReadingWithOnlyAVoltageOrALevelStillDecodes(self):
+        voltage = exampleWith(lambda fields: fields["mice"][0].update(percent=None, millivolts=3900))
+        level = exampleWith(lambda fields: fields["mice"][0].update(percent=None, level="good"))
+        self.assertEqual(serviceState.decodeState(voltage).mice[0].reading, hidpp.BatteryReading(None, 0, 3900))
+        self.assertEqual(serviceState.decodeState(level).mice[0].reading, hidpp.BatteryReading(None, 0, level="good"))
+
     def testAnExtraKeyIsIgnored(self):
         def addExtras(fields):
             fields["later"] = 1
