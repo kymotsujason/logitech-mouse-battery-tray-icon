@@ -87,6 +87,17 @@ class WorkerTests(unittest.TestCase):
         self.device.send(event)
         self.assertEqual(nextMessage(self.messages, "report"), ("report", self.worker, event))
 
+    def testRepliesAndShortReportsStayOnTheWorker(self):
+        self.startWorker(mouseHandler())
+        # software id 0x0A, so it answers some other program's request
+        answer = bytearray(OTHER_REPORT)
+        answer[3] = 0x0A
+        event = bytes([0x11, 1, 5, 0x00, 42, 0x04, 0, 0]).ljust(20, b"\x00")
+        self.worker.onEvent(bytes([0x10, 1, 0x41]))
+        self.device.send(bytes(answer))
+        self.device.send(event)
+        self.assertEqual(nextMessage(self.messages, "report"), ("report", self.worker, event))
+
     def testExceptionInAWorkItemKeepsTheThreadRunning(self):
         self.startWorker(mouseHandler())
         with mock.patch.object(receivers.traceback, "print_exc") as printed, mock.patch.object(sys, "stderr", io.StringIO()):

@@ -63,6 +63,9 @@ class NodeWorker(threading.Thread):
         node.onEvent = self.onEvent
 
     def onEvent(self, report):
+        # each post is a queued hop onto the Qt thread, and another program polling the receiver gets a reply to every one of its requests, which the main thread drops anyway
+        if (len(report) < 5 or hidpp.isReply(report)):
+            return
         self.post(("report", self, report))
 
     def queueWork(self, item):
