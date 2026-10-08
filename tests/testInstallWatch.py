@@ -84,7 +84,7 @@ class InstallWatchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             execv, errors = self.runCheck(folder, "")
         self.assertEqual(execv.call_args.args[1], [sys.executable, "-B", os.path.join(folder, "tray.py")])
-        self.assertEqual(errors, "")
+        self.assertEqual(errors, "Starting version 9.9.9 in place of " + installWatch.VERSION + "\n")
 
     def testABrokenTrayPyFailsTheRealImportCheckAndSaysWhy(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -110,10 +110,26 @@ class InstallWatchTests(unittest.TestCase):
                 QTest.qWait(300)
         self.assertEqual((startCheck.call_count, self.watcher.retryTimer.isActive()), (3, False))
 
+    def testTheLastFailedRetrySaysItIsTheLast(self):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(installWatch, "CHECK_RETRY_MS", (50,)), mock.patch.object(self.watcher, "startCheck", wraps=self.watcher.startCheck) as startCheck:
+            self.runCheck(folder, "import notThere\n")
+            errors = io.StringIO()
+            with mock.patch.object(installWatch, "APP_FOLDER", folder), contextlib.redirect_stderr(errors):
+                self.assertTrue(waitFor(lambda: startCheck.call_count == 2 and self.watcher.check is None, timeout=10.0))
+        self.assertEqual(errors.getvalue().splitlines()[-1], "Not checking version 9.9.9 again until the app folder changes")
+
+    def testABrokenStderrDoesNotStopTheRestart(self):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(installWatch.sys, "stderr", mock.Mock(write=mock.Mock(side_effect=OSError(5, "I/O error")))):
+            installedCopy(folder, "9.9.9")
+            execv = mock.Mock()
+            with mock.patch.object(installWatch, "APP_FOLDER", folder), mock.patch.object(installWatch.os, "execv", execv):
+                self.watcher.onChanged()
+                self.assertTrue(waitFor(lambda: execv.called, timeout=10.0))
+
     def testAFailedExecKeepsRunning(self):
         with tempfile.TemporaryDirectory() as folder:
             execv, errors = self.runCheck(folder, "", execv=mock.Mock(side_effect=OSError(8, "Exec format error")))
-        self.assertEqual(errors, "Version 9.9.9 couldn't start ([Errno 8] Exec format error), so " + installWatch.VERSION + " keeps running\n")
+        self.assertEqual(errors, "Starting version 9.9.9 in place of " + installWatch.VERSION + "\nVersion 9.9.9 couldn't start ([Errno 8] Exec format error), so " + installWatch.VERSION + " keeps running\n")
 
     def testACheckThatRunsTooLongIsStoppedAndKeepsRunning(self):
         with tempfile.TemporaryDirectory() as folder, mock.patch.object(installWatch, "CHECK_TIMEOUT_MS", 300):

@@ -346,6 +346,14 @@ class MouseBatteryApp(QObject):
             self.updateTray()
 
 
+def printLine(text):
+    # the journal's end of stderr can go away under a running tray, and a print that raises here would end startup
+    try:
+        print(text, file=sys.stderr)
+    except (OSError, ValueError):
+        pass
+
+
 def neverRestart(manager):
     # autostart opens the app at login, so a restored session would start a second copy
     manager.setRestartHint(QSessionManager.RestartHint.RestartNever)
@@ -370,6 +378,7 @@ def main():
         print("Mouse Battery is already running.", file=sys.stderr)
         Notifier().sendNow(APP_NAME, "Mouse Battery is already running.")
         return 0
+    printLine("Mouse Battery " + VERSION + " started")
     mouseApp = MouseBatteryApp(app)
     mouseApp.start()
     code = app.exec()

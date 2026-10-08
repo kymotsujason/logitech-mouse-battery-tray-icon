@@ -15,6 +15,14 @@ APP_FOLDER = os.path.dirname(os.path.abspath(__file__))
 PYTHON = sys.executable
 
 
+def printLine(text):
+    # the journal's end of stderr can go away under a running tray, and a print that raises here would end the slot partway through
+    try:
+        print(text, file=sys.stderr)
+    except (OSError, ValueError):
+        pass
+
+
 def readVersion(folder):
     try:
         with open(os.path.join(folder, "version.py")) as f:
@@ -116,15 +124,18 @@ class InstallWatcher(QObject):
             self.onChanged()
             return
         if (problem is not None):
-            print("Version " + newVersion + " " + problem + ", so " + VERSION + " keeps running", file=sys.stderr)
+            printLine("Version " + newVersion + " " + problem + ", so " + VERSION + " keeps running")
             if (detail is not None):
-                print("  " + detail, file=sys.stderr)
+                printLine("  " + detail)
             if (self.retries < len(CHECK_RETRY_MS)):
                 self.retryTimer.start(CHECK_RETRY_MS[self.retries])
                 self.retries += 1
+            else:
+                printLine("Not checking version " + newVersion + " again until the app folder changes")
             return
         # the lock file is opened without inheritance (PEP 446), so the exec closes it and the new version takes the lock
+        printLine("Starting version " + newVersion + " in place of " + VERSION)
         try:
             os.execv(sys.executable, [sys.executable, "-B", os.path.join(APP_FOLDER, "tray.py")])
         except OSError as error:
-            print("Version " + newVersion + " couldn't start (" + str(error) + "), so " + VERSION + " keeps running", file=sys.stderr)
+            printLine("Version " + newVersion + " couldn't start (" + str(error) + "), so " + VERSION + " keeps running")
