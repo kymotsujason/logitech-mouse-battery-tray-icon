@@ -3,6 +3,7 @@ import signal
 import socket
 import sys
 import time
+from collections import OrderedDict
 
 from PyQt6.QtCore import QCoreApplication, QObject, QSocketNotifier, QTimer, pyqtClassInfo, pyqtSignal, pyqtSlot
 from PyQt6.QtDBus import QDBusAbstractAdaptor, QDBusConnection, QDBusMessage
@@ -30,7 +31,7 @@ class BatteryService(QDBusAbstractAdaptor):
         self.receiverList = receiverList
         self.bus = bus
         self.sentState = None
-        self.callerBudgets = {}
+        self.callerBudgets = OrderedDict()
         self.setAutoRelaySignals(True)
         self.broadcastTimer = QTimer(self)
         self.broadcastTimer.setSingleShot(True)
@@ -71,10 +72,13 @@ class BatteryService(QDBusAbstractAdaptor):
     def takeRead(self, caller):
         now = time.monotonic()
         # a full budget is what an unseen account starts with, so dropping it changes nothing while the map stays as small as the accounts calling lately
-        for other, (reads, since) in list(self.callerBudgets.items()):
-            if (reads + (now - since) / READ_ALL_REFILL_SECONDS >= READ_ALL_BURST):
-                del self.callerBudgets[other]
-        reads, since = self.callerBudgets.get(caller, (READ_ALL_BURST, now))
+        # every update moves its budget to the end, so the front is the oldest and the prune stops at the first one still refilling instead of walking every account
+        while (self.callerBudgets):
+            other, (reads, since) = next(iter(self.callerBudgets.items()))
+            if (reads + (now - since) / READ_ALL_REFILL_SECONDS < READ_ALL_BURST):
+                break
+            del self.callerBudgets[other]
+        reads, since = self.callerBudgets.pop(caller, (READ_ALL_BURST, now))
         reads = min(READ_ALL_BURST, reads + (now - since) / READ_ALL_REFILL_SECONDS)
         if (reads < 1):
             self.callerBudgets[caller] = (reads, now)

@@ -256,14 +256,52 @@ class ServiceTests(unittest.TestCase):
 
     def testAnAccountWhoseBudgetRefilledIsDropped(self):
         adaptor = self.served[1]
-        with mock.patch.object(service, "READ_ALL_BURST", 2), mock.patch.object(service, "READ_ALL_REFILL_SECONDS", 0.1):
+        clock = [1000.0]
+        with mock.patch.object(service, "READ_ALL_BURST", 2), mock.patch.object(service, "READ_ALL_REFILL_SECONDS", 0.1), mock.patch.object(service.time, "monotonic", lambda: clock[0]):
             for caller in range(50):
                 self.assertTrue(adaptor.takeRead(caller))
+                clock[0] += 0.001
             # a budget that's still refilling is kept, since dropping it would hand its account a full one early
             self.assertEqual(len(adaptor.callerBudgets), 50)
-            time.sleep(0.3)
+            clock[0] += 0.3
             self.assertTrue(adaptor.takeRead(1000))
         self.assertEqual(list(adaptor.callerBudgets), [1000])
+
+    def testAReadAllLooksAtAFewBudgetsInsteadOfEveryAccountsBudget(self):
+        adaptor = self.served[1]
+        looked = []
+
+        class CountedBudget(tuple):
+            def __iter__(self):
+                looked.append(1)
+                return super().__iter__()
+
+            def __getitem__(self, index):
+                looked.append(1)
+                return super().__getitem__(index)
+
+        clock = [1000.0]
+        with mock.patch.object(service.time, "monotonic", lambda: clock[0]):
+            for caller in range(1000):
+                adaptor.callerBudgets[caller] = CountedBudget((0.0, clock[0]))
+                clock[0] += 0.001
+            self.assertTrue(adaptor.takeRead(5000))
+        self.assertLess(len(looked), 5)
+        self.assertEqual(len(adaptor.callerBudgets), 1001)
+
+    def testABudgetStillRefillingBehindAFullOneIsKept(self):
+        adaptor = self.served[1]
+        clock = [1000.0]
+        with mock.patch.object(service, "READ_ALL_BURST", 2), mock.patch.object(service, "READ_ALL_REFILL_SECONDS", 1.0), mock.patch.object(service.time, "monotonic", lambda: clock[0]):
+            self.assertTrue(adaptor.takeRead("full"))
+            clock[0] += 0.5
+            self.assertTrue(adaptor.takeRead("spent"))
+            self.assertTrue(adaptor.takeRead("spent"))
+            clock[0] += 0.6
+            self.assertTrue(adaptor.takeRead("new"))
+            # "spent" has 0.6 of a read back, so it's refused instead of handed a full budget
+            self.assertFalse(adaptor.takeRead("spent"))
+        self.assertEqual(sorted(adaptor.callerBudgets), ["new", "spent"])
 
     def testARefusedReadAllAnswersWithAnError(self):
         self.startWithMouse()
