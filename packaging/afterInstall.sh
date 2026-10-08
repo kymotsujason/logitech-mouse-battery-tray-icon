@@ -35,9 +35,10 @@ step "reloading the system bus" systemctl reload dbus.service
 # a reload or a trigger that fails leaves 1.0.x's rule behind the tag, so clearAccess can't trust it then either
 SETTLED=--settled
 step "reloading the udev rules" udevadm control --reload || SETTLED=
-# --settle waits only on the events this trigger queued, so a stuck event elsewhere can't decide whether the tag is
-# current, and it has no timeout of its own, so a stuck hidraw event holds the transaction only this long
-step "applying the rule to plugged in receivers and cables" timeout 30 udevadm trigger --settle --subsystem-match=hidraw --action=change || SETTLED=
+step "applying the rule to plugged in receivers and cables" udevadm trigger --subsystem-match=hidraw --action=change || SETTLED=
+# not trigger --settle, since pacman runs hooks in a fresh network namespace where udevd's netlink broadcasts never
+# arrive, and settle waits on the whole queue, so a stuck event elsewhere holds the transaction only this long
+step "waiting for udev" udevadm settle --timeout=30 || SETTLED=
 # until the trigger settles a node can still carry the old uaccess tag, which would put its ACL back, and clearAccess
 # trusts the tag only once udev has settled
 step "closing the access 1.0.x gave" python3 -I -B "$APP_DIR/clearAccess.py" $SETTLED

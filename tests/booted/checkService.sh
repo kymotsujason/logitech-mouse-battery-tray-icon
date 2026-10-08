@@ -108,6 +108,7 @@ expected="Mouse Battery: reloading systemd
 Mouse Battery: reloading the system bus
 Mouse Battery: reloading the udev rules
 Mouse Battery: applying the rule to plugged in receivers and cables
+Mouse Battery: waiting for udev
 Mouse Battery: closing the access 1.0.x gave
 Mouse Battery: clearing the service's failed starts
 Mouse Battery: restarting the service if it runs"
@@ -125,6 +126,14 @@ tags=$(udevadm info "$node" | grep '^E: CURRENT_TAGS=')
 check "the change event applied the new rule's systemd tag" "$(echo "$tags" | grep -c ':systemd:')" "1"
 check "the node no longer carries the uaccess tag" "$(echo "$tags" | grep -c ':uaccess:')" "0"
 check "a change event leaves the ACL off" "$(namedAclEntries "$node")" "0"
+
+# pacman 7.1 runs hooks in a fresh network namespace, where a step waiting on udevd's netlink broadcasts hangs
+started=$(date +%s)
+sudo unshare --net "/usr/share/$name/afterInstall.sh" > "$work/netns.log" 2>&1
+elapsed=$(($(date +%s) - started))
+check "afterInstall.sh in a fresh network namespace ran its steps in order" "$(grep -o 'Mouse Battery: .*' "$work/netns.log" | grep -v 'that step failed')" "$expected"
+check "no step failed in a fresh network namespace" "$(grep -c 'that step failed' "$work/netns.log")" "0"
+check "afterInstall.sh in a fresh network namespace finished well under 30 s" "$([ "$elapsed" -lt 10 ] && echo yes || echo "no, it took $elapsed s")" "yes"
 
 # systemd acts on SYSTEMD_WANTS only when a device first becomes active, so a fresh plug tests the start
 sudo systemctl stop "$unit"

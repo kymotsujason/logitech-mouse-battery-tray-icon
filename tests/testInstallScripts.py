@@ -6,14 +6,10 @@ import tempfile
 import unittest
 
 PACKAGING = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "packaging")
-TOOLS = ("systemd-detect-virt", "systemd-notify", "systemctl", "udevadm", "python3", "systemd-sysusers", "timeout")
+TOOLS = ("systemd-detect-virt", "systemd-notify", "systemctl", "udevadm", "python3", "systemd-sysusers")
 STUB = """#!/bin/sh
 name=${0##*/}
 echo "$name $*" >> "$STUB_LOG"
-if [ "$name" = "timeout" ]; then
-    shift
-    exec "$@"
-fi
 if [ "$name" = "systemd-sysusers" ]; then
     while read -r line; do
         echo "stdin $line" >> "$STUB_LOG"
@@ -22,6 +18,13 @@ fi
 if [ "$name" = "systemd-detect-virt" ]; then
     [ "$STUB_CHROOT" = "1" ] && exit 0
     exit 1
+fi
+# inside pacman's fresh network namespace udevd's netlink broadcasts never arrive, so a trigger that waits on them
+# hangs until something kills it
+if [ "$name $1" = "udevadm trigger" ] && [ "$STUB_NETNS" = "1" ]; then
+    case " $* " in
+        *" --settle "*|*" -w "*) exit 124 ;;
+    esac
 fi
 case " $STUB_FAIL " in
     *" $name "*|*" $name:$1 "*) exit 1 ;;
@@ -32,8 +35,8 @@ STEPS = [
     "systemctl daemon-reload",
     "systemctl reload dbus.service",
     "udevadm control --reload",
-    "timeout 30 udevadm trigger --settle --subsystem-match=hidraw --action=change",
-    "udevadm trigger --settle --subsystem-match=hidraw --action=change",
+    "udevadm trigger --subsystem-match=hidraw --action=change",
+    "udevadm settle --timeout=30",
     "python3 -I -B /usr/share/logitech-mouse-battery/clearAccess.py --settled",
     "systemctl reset-failed logitech-mouse-battery.service",
     "systemctl try-restart --no-block logitech-mouse-battery.service",
@@ -63,8 +66,8 @@ class InstallScriptTests(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.folder, ignore_errors=True)
 
-    def runScript(self, name, *args, fail="", chroot="0", notBooted=False):
-        env = {"PATH": self.folder, "STUB_LOG": self.log, "STUB_FAIL": fail + (" systemd-notify" if notBooted else ""), "STUB_CHROOT": chroot}
+    def runScript(self, name, *args, fail="", chroot="0", notBooted=False, netns="0"):
+        env = {"PATH": self.folder, "STUB_LOG": self.log, "STUB_FAIL": fail + (" systemd-notify" if notBooted else ""), "STUB_CHROOT": chroot, "STUB_NETNS": netns}
         script = name if name == "-c" else os.path.join(PACKAGING, name)
         result = subprocess.run(["/bin/sh", script, *args], env=env, capture_output=True, text=True)
         calls = []
@@ -76,12 +79,12 @@ class InstallScriptTests(unittest.TestCase):
     def testAfterInstallRunsEveryStepInOrder(self):
         code, output, calls = self.runScript("afterInstall.sh")
         self.assertEqual((code, calls), (0, CHECKS + STEPS))
-        self.assertEqual([line for line in output.splitlines() if line.startswith("Mouse Battery: ")], ["Mouse Battery: reloading systemd", "Mouse Battery: reloading the system bus", "Mouse Battery: reloading the udev rules", "Mouse Battery: applying the rule to plugged in receivers and cables", "Mouse Battery: closing the access 1.0.x gave", "Mouse Battery: clearing the service's failed starts", "Mouse Battery: restarting the service if it runs"])
+        self.assertEqual([line for line in output.splitlines() if line.startswith("Mouse Battery: ")], ["Mouse Battery: reloading systemd", "Mouse Battery: reloading the system bus", "Mouse Battery: reloading the udev rules", "Mouse Battery: applying the rule to plugged in receivers and cables", "Mouse Battery: waiting for udev", "Mouse Battery: closing the access 1.0.x gave", "Mouse Battery: clearing the service's failed starts", "Mouse Battery: restarting the service if it runs"])
 
     def testAFailingStepIsReportedAndTheRestStillRun(self):
         code, output, calls = self.runScript("afterInstall.sh", fail="udevadm python3")
         self.assertEqual((code, calls), (0, CHECKS + UNSETTLED_STEPS))
-        self.assertEqual(output.count("that step failed. Unplug the receiver or cable and plug it back in, or reboot."), 3)
+        self.assertEqual(output.count("that step failed. Unplug the receiver or cable and plug it back in, or reboot."), 4)
 
     def testClearAccessIsToldUdevSettledOnlyWhenSettleSucceeds(self):
         self.assertEqual(self.runScript("afterInstall.sh", fail="udevadm")[::2], (0, CHECKS + UNSETTLED_STEPS))
@@ -94,8 +97,13 @@ class InstallScriptTests(unittest.TestCase):
                 os.remove(self.log)
             self.assertEqual(self.runScript("afterInstall.sh", fail=fail)[::2], (0, CHECKS + UNSETTLED_STEPS), fail)
 
-    def testAStuckEventElsewhereDoesntStopClearAccessTrustingTheTag(self):
+    def testAStuckEventElsewhereStopsClearAccessTrustingTheTag(self):
         code, output, calls = self.runScript("afterInstall.sh", fail="udevadm:settle")
+        self.assertEqual((code, calls), (0, CHECKS + UNSETTLED_STEPS))
+        self.assertEqual(output.count("that step failed."), 1)
+
+    def testEveryStepWorksInsidePacmansNetworkNamespace(self):
+        code, output, calls = self.runScript("afterInstall.sh", netns="1")
         self.assertEqual((code, calls), (0, CHECKS + STEPS))
         self.assertNotIn("that step failed.", output)
 
