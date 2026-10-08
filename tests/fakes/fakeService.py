@@ -42,16 +42,34 @@ def readState():
 
 
 state = {"text": readState()}
+held = []
 connection = Gio.DBusConnection.new_for_address_sync(address, Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT | Gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION, None, None)
 loop = GLib.MainLoop()
 # an activated copy isn't in PrivateBus's list, so it ends itself when the bus goes away
 connection.connect("closed", lambda *args: loop.quit())
 
 
+def readAllAnswer():
+    # a test writes an error name to this file to have ReadAll refused, or hang to leave every call unanswered
+    try:
+        with open(stateFile + ".answer") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
 def onCall(conn, sender, path, interface, method, params, invocation):
     log(method)
+    answer = readAllAnswer()
+    if (answer == "hang"):
+        # held so the call stays unanswered for as long as the fake runs
+        held.append(invocation)
+        return
     if (method == "GetState"):
         invocation.return_value(GLib.Variant("(s)", (readState(),)))
+        return
+    if (answer):
+        invocation.return_dbus_error(answer, "refused by the fake")
         return
     invocation.return_value(None)
 

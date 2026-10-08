@@ -28,10 +28,15 @@ class ServiceWatcher(QObject):
         self.retryTimer = QTimer(self)
         self.retryTimer.setSingleShot(True)
         self.retryTimer.timeout.connect(self.getState)
+        self.readRetryTimer = QTimer(self)
+        self.readRetryTimer.setSingleShot(True)
+        self.readRetryTimer.timeout.connect(self.readAll)
         self.ownerWatcher = None
         self.readSent = False
         # each kind of trouble is printed once until the service answers again, so a retry loop stays quiet in the journal
         self.problems = set()
+        # a ReadAll can fail while GetState answers, so its trouble is printed once until a ReadAll goes through instead of once per GetState
+        self.readProblems = set()
 
     def start(self):
         # subscribing by the service's name before the first call keeps a forged signal out and a change in between in
@@ -42,6 +47,7 @@ class ServiceWatcher(QObject):
 
     def stop(self):
         self.retryTimer.stop()
+        self.readRetryTimer.stop()
 
     def callService(self, member, replySlot, errorSlot):
         message = QDBusMessage.createMethodCall(serviceState.SERVICE_NAME, serviceState.OBJECT_PATH, serviceState.INTERFACE, member)
@@ -60,7 +66,8 @@ class ServiceWatcher(QObject):
         print(line, file=sys.stderr)
 
     def readAll(self):
-        self.callService("ReadAll", self.onReadAllDone, self.onReadAllFailed)
+        if (not self.callService("ReadAll", self.onReadAllDone, self.onReadAllFailed)):
+            self.getState()
 
     def fail(self):
         self.stateChanged.emit(None)
@@ -92,11 +99,21 @@ class ServiceWatcher(QObject):
 
     @pyqtSlot(QDBusMessage)
     def onReadAllDone(self, message):
-        pass
+        self.readRetryTimer.stop()
+        self.readProblems.clear()
 
     @pyqtSlot(QDBusError, QDBusMessage)
     def onReadAllFailed(self, error, message):
-        pass
+        if (error.name() == serviceState.READ_ALL_LIMITED):
+            # the account has a read again by the refill time, and every refusal before then folds into the one read asked for then
+            if (not self.readRetryTimer.isActive()):
+                self.readRetryTimer.start(int(serviceState.READ_ALL_REFILL_SECONDS * 1000))
+            return
+        if (error.name() not in self.readProblems):
+            self.readProblems.add(error.name())
+            print("Couldn't ask the battery service for a fresh reading: " + error.name() + ": " + error.message(), file=sys.stderr)
+        # a service that holds its name but doesn't answer shows only here, so GetState finds out and fails the same way when it doesn't answer either
+        self.getState()
 
     @pyqtSlot(QDBusMessage)
     def onStateChanged(self, message):

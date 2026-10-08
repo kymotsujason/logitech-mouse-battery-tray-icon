@@ -10,6 +10,8 @@ INTERFACE = "io.github.kymotsujason.LogitechMouseBattery1"
 # the errors a ReadAll gets when its account's budget is spent, and when the bus can't say which account sent it
 READ_ALL_LIMITED = "org.freedesktop.DBus.Error.LimitsExceeded"
 CALLER_UNKNOWN = "io.github.kymotsujason.LogitechMouseBattery1.Error.UnknownCaller"
+# an account whose reads ran out has one again after this long, which the tray waits before asking again
+READ_ALL_REFILL_SECONDS = 30
 STATE_VERSION = 1
 STATE_KEYS = ("version", "busy", "searching", "nodes", "deniedPaths", "mice")
 ENTRY_KEYS = ("key", "pathKey", "name", "source", "percent", "charging", "millivolts", "level", "asleep", "lastRead", "wokeAt")

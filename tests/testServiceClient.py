@@ -72,6 +72,14 @@ class ServiceWatcherTests(unittest.TestCase):
             f.write(text)
         os.replace(self.stateFile + ".new", self.stateFile)
 
+    def setAnswer(self, answer):
+        # the fake reads this on every call, so a test can turn ReadAll down or stop answering at any point
+        if (answer is None):
+            os.remove(self.stateFile + ".answer")
+            return
+        with open(self.stateFile + ".answer", "w") as f:
+            f.write(answer)
+
     def connectTo(self, name):
         self.names.append(name + str(id(self)))
         return QDBusConnection.connectToBus(self.privateBus.address, self.names[-1])
@@ -161,6 +169,56 @@ class ServiceWatcherTests(unittest.TestCase):
         self.assertTrue(waitUntil(lambda: len(self.goodStates()) > count))
         QTest.qWait(300)
         self.assertEqual(self.privateBus.lines(second).count("ReadAll"), 0)
+
+    def testARefusedReadAllIsAskedAgainOnceAfterTheRefill(self):
+        self.privateBus = PrivateBus()
+        self.setAnswer(serviceState.READ_ALL_LIMITED)
+        log = self.startFake()
+        with mock.patch.object(serviceState, "READ_ALL_REFILL_SECONDS", 2):
+            self.startWatcher()
+            self.assertTrue(waitUntil(lambda: self.privateBus.lines(log).count("ReadAll") == 1))
+            self.watcher.readAll()
+            self.watcher.readAll()
+            self.assertTrue(waitUntil(lambda: self.privateBus.lines(log).count("ReadAll") == 3))
+            QTest.qWait(200)
+            self.setAnswer(None)
+            # three refusals inside one refill wait come back as a single read
+            self.assertTrue(waitUntil(lambda: self.privateBus.lines(log).count("ReadAll") == 4, timeout=5.0))
+            QTest.qWait(2500)
+        self.assertEqual(self.privateBus.lines(log).count("ReadAll"), 4)
+        self.assertEqual(self.errorLines(), [])
+
+    def testAReadAllTheServiceDoesntAnswerSendsNone(self):
+        self.privateBus = PrivateBus()
+        self.startFake()
+        with mock.patch.object(serviceClient, "CALL_TIMEOUT_MS", 300):
+            self.startWatcher()
+            self.assertTrue(waitUntil(lambda: self.goodStates()))
+            self.setAnswer("hang")
+            self.watcher.readAll()
+            self.assertTrue(waitUntil(lambda: self.states[-1] is None))
+        self.assertIn("Couldn't ask the battery service for a fresh reading: org.freedesktop.DBus.Error.NoReply", self.errors.getvalue())
+
+    def testAReadAllTurnedDownForAnotherReasonIsPrintedOnceAndTheStateAskedFor(self):
+        self.privateBus = PrivateBus()
+        log = self.startFake()
+        self.startWatcher()
+        self.assertTrue(waitUntil(lambda: self.goodStates()))
+        self.setAnswer(serviceState.CALLER_UNKNOWN)
+        before = self.privateBus.lines(log).count("GetState")
+        self.watcher.readAll()
+        self.watcher.readAll()
+        self.assertTrue(waitUntil(lambda: self.privateBus.lines(log).count("GetState") == before + 2))
+        self.assertEqual(self.errorLines(), ["Couldn't ask the battery service for a fresh reading: " + serviceState.CALLER_UNKNOWN + ": refused by the fake"])
+        self.assertIsNotNone(self.states[-1])
+
+    def testAReadAllThatCantBeSentCountsAsAFailedCall(self):
+        self.names.append("deadBus" + str(id(self)))
+        self.watcher = serviceClient.ServiceWatcher(QDBusConnection.connectToBus("unix:path=/nonexistent/bus", self.names[-1]))
+        self.watcher.stateChanged.connect(self.states.append)
+        self.watcher.readAll()
+        self.assertTrue(waitUntil(lambda: self.states == [None], timeout=1.0))
+        self.assertTrue(self.watcher.retryTimer.isActive())
 
     def testAStateThatDoesntDecodeSendsNone(self):
         self.privateBus = PrivateBus()

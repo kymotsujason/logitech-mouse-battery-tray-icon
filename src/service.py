@@ -16,7 +16,7 @@ from version import VERSION
 BROADCAST_MS = 200
 # any local account may ask for a read, so each account gets a few at once and then one per refill, against the tray's own read every 300 s
 READ_ALL_BURST = 5
-READ_ALL_REFILL_SECONDS = 30
+READ_ALL_REFILL_SECONDS = serviceState.READ_ALL_REFILL_SECONDS
 READ_ALL_LIMITED = serviceState.READ_ALL_LIMITED
 CALLER_UNKNOWN = serviceState.CALLER_UNKNOWN
 
