@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # runs on a booted GitHub hosted runner with passwordless sudo: installs 1.0.1, makes a fake receiver through uhid, gives
-# the runner's user the ACL 1.0.x's uaccess gives a seat user, upgrades to the built 1.1.0, and checks that only the
+# the runner's user the ACL 1.0.x's uaccess gives a seat user, upgrades to the built version, and checks that only the
 # service can open the receiver and that it reads the fake mouse through the real system bus, udev, and systemd
 set -u
 
@@ -103,7 +103,7 @@ check "the fake receiver landed on hid-generic" "$(grep '^DRIVER=' "/sys/class/h
 sudo setfacl -m "u:$(id -un):rw" "$node"
 check "with 1.0.x's ACL the runner's user can open the receiver" "$(canOpen "$node")" "opened"
 
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "$repo/dist/${name}_${version}_all.deb" > "$work/install2.log" 2>&1 || stop "1.1.0 didn't install"
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "$repo/dist/${name}_${version}_all.deb" > "$work/install2.log" 2>&1 || stop "$version didn't install over 1.0.1"
 expected="Mouse Battery: reloading systemd
 Mouse Battery: reloading the system bus
 Mouse Battery: reloading the udev rules
@@ -156,7 +156,7 @@ check "a member the interface doesn't have is denied" "$(busctl --system --timeo
 check "taking the service's name is denied" "$(busctl --system --timeout=2 call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus RequestName su "$service" 0 2>&1 | grep -c 'Access denied')" "1"
 check "check prints the fake mouse" "$(logitech-mouse-battery check 2>&1 | grep -c "PRO X3 SUPERSTRIKE ($node)")" "1"
 
-sudo DEBIAN_FRONTEND=noninteractive apt-get remove -y "$name" > "$work/remove.log" 2>&1 || stop "1.1.0 didn't remove"
+sudo DEBIAN_FRONTEND=noninteractive apt-get remove -y "$name" > "$work/remove.log" 2>&1 || stop "$version didn't remove"
 check "removing the package stopped the service" "$(systemctl is-active "$unit")" "inactive"
 
 if [ "$failures" -gt 0 ]; then
