@@ -6,6 +6,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 from contextlib import redirect_stdout
 from unittest import mock
@@ -20,7 +21,7 @@ SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 
 
 class ClearAccessTests(unittest.TestCase):
     def setUp(self):
-        self.root = tempfile.mkdtemp()
+        self.root = os.path.realpath(tempfile.mkdtemp())
         self.sysRoot = os.path.join(self.root, "sys")
         self.devRoot = os.path.join(self.root, "dev")
         self.udevRoot = os.path.join(self.root, "udev")
@@ -30,7 +31,10 @@ class ClearAccessTests(unittest.TestCase):
         self.removed = []
         self.owners = []
         self.failures = {}
+        self.devices = {}
+        self.realFstat = os.fstat
         self.patches = [
+            mock.patch.object(clearAccess.os, "fstat", self.fakeFstat),
             mock.patch.object(clearAccess.os, "removexattr", self.removeAttribute),
             mock.patch.object(clearAccess.os, "chown", self.changeOwner),
             mock.patch.object(clearAccess.grp, "getgrnam", return_value=mock.Mock(gr_gid=GROUP_ID)),
@@ -43,34 +47,58 @@ class ClearAccessTests(unittest.TestCase):
             patch.stop()
         shutil.rmtree(self.root, ignore_errors=True)
 
+    # an unprivileged test can't make a character device, so a regular file stands in for one by its inode
+    def fakeFstat(self, fd):
+        info = self.realFstat(fd)
+        number = self.devices.get((info.st_dev, info.st_ino))
+        if (number is None):
+            return info
+        major, minor = number.split(":")
+        return types.SimpleNamespace(st_mode=stat.S_IFCHR | stat.S_IMODE(info.st_mode), st_rdev=os.makedev(int(major), int(minor)), st_dev=info.st_dev, st_ino=info.st_ino)
+
+    def makeDevice(self, path, number):
+        with open(path, "w") as f:
+            f.write("")
+        os.chmod(path, 0o666)
+        info = os.stat(path)
+        self.devices[(info.st_dev, info.st_ino)] = number
+
     def removeAttribute(self, path, name):
-        if (path in self.failures):
-            raise self.failures[path]
         if (not os.path.exists(path)):
             raise FileNotFoundError(errno.ENOENT, "No such file or directory", path)
+        path = os.path.realpath(path)
+        if (path in self.failures):
+            raise self.failures[path]
         self.removed.append((path, name))
 
     def changeOwner(self, path, uid, gid):
         if (not os.path.exists(path)):
             raise FileNotFoundError(errno.ENOENT, "No such file or directory", path)
-        self.owners.append((path, uid, gid))
+        self.owners.append((os.path.realpath(path), uid, gid))
 
-    def addNode(self, name, hidId="0003:0000046D:0000C54F", driver="hid-generic", descriptor=C54F_HIDPP, present=True, number=None):
+    def addNode(self, name, hidId="0003:0000046D:0000C54F", driver="hid-generic", descriptor=C54F_HIDPP, present=True, number=None, devFile=True, nodeNumber=None, character=True):
+        number = number or "243:" + name[len("hidraw"):]
         device = os.path.join(self.sysRoot, name, "device")
         os.makedirs(device)
-        if (number is not None):
+        if (devFile):
             with open(os.path.join(self.sysRoot, name, "dev"), "w") as f:
                 f.write(number + "\n")
-        with open(os.path.join(device, "uevent"), "w") as f:
-            f.write("DRIVER=" + driver + "\nHID_ID=" + hidId + "\n")
-        with open(os.path.join(device, "report_descriptor"), "wb") as f:
-            f.write(descriptor)
+        self.describe(name, hidId, driver, descriptor)
         path = os.path.join(self.devRoot, name)
-        if (present):
+        if (present and character):
+            self.makeDevice(path, nodeNumber or number)
+        elif (present):
             with open(path, "w") as f:
                 f.write("")
             os.chmod(path, 0o666)
         return path
+
+    def describe(self, name, hidId, driver, descriptor):
+        device = os.path.join(self.sysRoot, name, "device")
+        with open(os.path.join(device, "uevent"), "w") as f:
+            f.write("DRIVER=" + driver + "\nHID_ID=" + hidId + "\n")
+        with open(os.path.join(device, "report_descriptor"), "wb") as f:
+            f.write(descriptor)
 
     def addUdevEntry(self, number, lines):
         with open(os.path.join(self.udevRoot, "c" + number), "w") as f:
@@ -156,11 +184,59 @@ class ClearAccessTests(unittest.TestCase):
         self.assertEqual(self.runClear(), (0, "Closed access to " + path + "\n"))
         self.assertEqual(self.removed, [(path, "system.posix_acl_access")])
 
-    def testANodeWithNoDevFileIsClosed(self):
+    def testANodeWithNoDevFileIsLeftAlone(self):
+        path = self.addNode("hidraw4", devFile=False)
+        self.assertEqual(self.runClear(), (0, ""))
+        self.assertEqual((self.removed, self.owners, self.mode(path)), ([], [], 0o666))
+
+    def testANodeThatIsntACharacterDeviceIsLeftAlone(self):
+        path = self.addNode("hidraw4", character=False)
+        self.assertEqual(self.runClear(), (0, ""))
+        self.assertEqual((self.removed, self.owners, self.mode(path)), ([], [], 0o666))
+
+    def testANodeWhoseNumberIsntTheCheckedDevicesIsLeftAlone(self):
+        path = self.addNode("hidraw4", nodeNumber="243:5")
+        self.assertEqual(self.runClear(), (0, ""))
+        self.assertEqual((self.removed, self.owners, self.mode(path)), ([], [], 0o666))
+
+    def testALinkInPlaceOfTheNodeIsntFollowed(self):
+        path = self.addNode("hidraw4", present=False)
+        target = os.path.join(self.root, "target")
+        self.makeDevice(target, "243:4")
+        os.symlink(target, path)
+        self.assertEqual(self.runClear(), (0, ""))
+        self.assertEqual((self.removed, self.owners, self.mode(target)), ([], [], 0o666))
+
+    def swapAfterCheck(self, checks):
         path = self.addNode("hidraw4")
-        self.addUdevEntry("243:4", ["Q:uaccess", "V:1"])
-        self.assertEqual(self.runClear(), (0, "Closed access to " + path + "\n"))
-        self.assertEqual(self.removed, [(path, "system.posix_acl_access")])
+        old = os.open(path, os.O_RDONLY)
+        self.addCleanup(os.close, old)
+        realIsHidppNode = clearAccess.hidpp.isHidppNode
+        count = []
+
+        def checkThenSwap(uevent, descriptor):
+            result = realIsHidppNode(uevent, descriptor)
+            count.append(1)
+            if (len(count) == checks):
+                # the receiver goes away and a security key takes its name and number
+                os.remove(path)
+                self.makeDevice(path, "243:4")
+                self.describe("hidraw4", "0003:00001050:00000407", "hid-generic", GENERIC_DESKTOP)
+            return result
+
+        with mock.patch.object(clearAccess.hidpp, "isHidppNode", checkThenSwap):
+            result = self.runClear()
+        return (path, old, result)
+
+    def testADeviceThatTakesTheNameRightAfterTheCheckIsLeftAlone(self):
+        path, old, result = self.swapAfterCheck(1)
+        self.assertEqual(result, (0, ""))
+        self.assertEqual((self.removed, self.owners, self.mode(path)), ([], [], 0o666))
+
+    def testADeviceThatTakesTheNameLaterIsLeftAloneWhileTheCheckedNodeIsClosed(self):
+        path, old, result = self.swapAfterCheck(2)
+        self.assertEqual(result, (0, "Closed access to " + path + "\n"))
+        self.assertEqual((len(self.owners), self.mode(path), stat.S_IMODE(self.realFstat(old).st_mode)), (1, 0o666, 0o660))
 
     def testItImportsInIsolatedModeWithoutRunning(self):
         # -I leaves the script's folder off sys.path, so the module has to put it back for its hidpp import
