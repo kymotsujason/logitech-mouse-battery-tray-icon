@@ -40,6 +40,14 @@ STEPS = [
 ]
 UNSETTLED_STEPS = [step.replace(" --settled", "") for step in STEPS]
 CHECKS = ["systemd-detect-virt --quiet --chroot", "systemd-notify --booted"]
+REMOVAL_STEPS = [
+    "systemctl daemon-reload",
+    "systemctl reload dbus.service",
+    "systemctl stop logitech-mouse-battery.service",
+    "systemctl reset-failed logitech-mouse-battery.service",
+    "udevadm control --reload",
+    "udevadm trigger --subsystem-match=hidraw --action=change",
+]
 
 
 class InstallScriptTests(unittest.TestCase):
@@ -113,20 +121,30 @@ class InstallScriptTests(unittest.TestCase):
             self.assertEqual(self.runScript("preremove.sh", *args)[::2], (0, expected), args)
 
     def testPostremoveReloadsAndStopsTheServiceOnlyOnARealRemoval(self):
-        reloads = ["systemctl daemon-reload", "systemctl reload dbus.service", "systemctl stop logitech-mouse-battery.service", "udevadm control --reload", "udevadm trigger --subsystem-match=hidraw --action=change"]
-        for args, expected in ((("remove",), CHECKS + reloads), (("purge",), CHECKS + reloads), (("0",), CHECKS + reloads), (("upgrade", "1.1.1"), []), (("1",), [])):
+        for args, expected in ((("remove",), CHECKS + REMOVAL_STEPS), (("purge",), CHECKS + REMOVAL_STEPS), (("0",), CHECKS + REMOVAL_STEPS), (("upgrade", "1.1.1"), []), (("1",), [])):
             if (os.path.exists(self.log)):
                 os.remove(self.log)
             self.assertEqual(self.runScript("postremove.sh", *args)[::2], (0, expected), args)
 
-    def runArchFunctions(self, *names):
+    def runArchFunctions(self, *names, **options):
         script = ". " + os.path.join(PACKAGING, "aur", "logitech-mouse-battery.install") + "\n"
         for name in names:
             script += "if command -v " + name + " >/dev/null; then " + name + " 1.1.1-1 1.1.0-1; fi\n"
-        return self.runScript("-c", script)
+        return self.runScript("-c", script, **options)
 
-    def testTheArchInstallFileStopsTheServiceBeforeAndAfterARemoval(self):
-        self.assertEqual(self.runArchFunctions("pre_remove", "post_remove")[::2], (0, ["systemctl stop logitech-mouse-battery.service"] * 2))
+    def testTheArchInstallFileStopsTheServiceBeforeARemoval(self):
+        self.assertEqual(self.runArchFunctions("pre_remove")[::2], (0, ["systemctl stop logitech-mouse-battery.service"]))
+
+    def testTheArchInstallFileReloadsAndStopsTheServiceAfterARemoval(self):
+        self.assertEqual(self.runArchFunctions("post_remove")[::2], (0, CHECKS + REMOVAL_STEPS))
+
+    def testTheArchPostRemoveSkipsAChrootOrARootThatIsntBooted(self):
+        self.assertEqual(self.runArchFunctions("post_remove", chroot="1")[::2], (0, CHECKS[:1]))
+        os.remove(self.log)
+        self.assertEqual(self.runArchFunctions("post_remove", notBooted=True)[::2], (0, CHECKS))
+
+    def testTheArchPostRemoveNeverFails(self):
+        self.assertEqual(self.runArchFunctions("post_remove", fail="systemctl udevadm")[::2], (0, CHECKS + REMOVAL_STEPS))
 
     def testTheArchInstallFileLeavesTheServiceRunningOnAnUpgrade(self):
         self.assertEqual(self.runArchFunctions("pre_upgrade", "post_upgrade", "pre_install", "post_install")[::2], (0, []))

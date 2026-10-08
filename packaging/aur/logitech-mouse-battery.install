@@ -2,8 +2,16 @@ pre_remove() {
     systemctl stop logitech-mouse-battery.service 2>/dev/null || true
 }
 
-# a bus call or a udev event can start the service again after pre_remove stops it, and pacman runs this once the files
-# are gone, when a new start can't run
+# pacman runs this only on a removal, once the files are gone. A bus call or a udev event can start the service again
+# after pre_remove stops it, and pacman's own reload hooks run later, so this does what postremove.sh does on deb and rpm
 post_remove() {
+    if systemd-detect-virt --quiet --chroot || ! systemd-notify --booted; then
+        return 0
+    fi
+    systemctl daemon-reload || true
+    systemctl reload dbus.service || true
     systemctl stop logitech-mouse-battery.service 2>/dev/null || true
+    systemctl reset-failed logitech-mouse-battery.service 2>/dev/null || true
+    udevadm control --reload || true
+    udevadm trigger --subsystem-match=hidraw --action=change || true
 }
