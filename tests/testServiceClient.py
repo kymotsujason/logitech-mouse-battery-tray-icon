@@ -430,9 +430,24 @@ class ServiceWatcherTests(unittest.TestCase):
         self.assertTrue(waitUntil(lambda: self.watcher.readProblems, timeout=15.0))
         QTest.qWait(500)
         mouseList.readTimer.stop()
-        # each 300 s read of every tray would start a new round of failed starts past the unit's start limit
+        # each 300 s read of every tray would start a new round of failed starts past the unit's start limit, so only one an hour may start it
         self.assertEqual(len(self.starts()), 1)
         self.assertEqual(self.watcher.readProblems, {"org.freedesktop.DBus.Error.NameHasNoOwner"})
+
+    def testATimedReadStartsAFailedServiceOnceTheSlowWaitPasses(self):
+        self.startActivatableBus()
+        self.startWatcher()
+        with mock.patch.object(mice, "TIMED_START_INTERVAL_S", 0.5):
+            mouseList = mice.MouseList()
+            self.addCleanup(mouseList.stop)
+            mouseList.readRequested.connect(self.watcher.readAll)
+            self.assertTrue(waitUntil(lambda: None in self.states, timeout=15.0))
+            mouseList.readTimer.start(50)
+            # a service that hit its start limit for a cause that passed comes back with no one opening the menu
+            self.assertTrue(waitUntil(lambda: self.goodStates(), timeout=15.0))
+            mouseList.readTimer.stop()
+        self.assertEqual(len(self.starts()), 3)
+        self.assertEqual(self.goodStates()[0], serviceState.decodeState(STATE))
 
     def testTheTraysOwnReadsDontStartTheService(self):
         self.privateBus = PrivateBus()
@@ -471,7 +486,7 @@ class ServiceWatcherTests(unittest.TestCase):
         # systemd stops the service with SIGTERM, and Restart=on-failure leaves a clean stop down
         os.kill(int(self.starts()[-1]), signal.SIGTERM)
         self.assertTrue(waitUntil(lambda: self.states[-1] is None))
-        # the tray doesn't start a stopped service on its own, so an admin's stop holds until someone asks for a reading
+        # the tray starts a stopped service on its own only once an hour, so an admin's stop holds until then or until someone asks for a reading
         QTest.qWait(500)
         self.assertEqual(len(self.starts()), 3)
         count = len(self.goodStates())

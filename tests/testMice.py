@@ -1,6 +1,7 @@
 import os
 import time
 import unittest
+from unittest import mock
 
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
@@ -279,9 +280,24 @@ class MouseListTests(unittest.TestCase):
         self.mice.readTimer.start(10)
         QTest.qWait(50)
         self.mice.readTimer.stop()
-        # the flag says a person asked, which only readAll's callers do
+        # the flag lets the read start the service, which readAll's callers always get and a timed read gets only once an hour
         self.assertGreaterEqual(len(requests), 2)
         self.assertEqual(requests, [(True,)] + [(False,)] * (len(requests) - 1))
+
+    def testATimedReadMayStartTheServiceOnceAnHour(self):
+        clock = [5000.0]
+        starting = []
+        with mock.patch.object(time, "monotonic", lambda: clock[0]):
+            mouseList = mice.MouseList()
+            self.addCleanup(sip.delete, mouseList)
+            mouseList.readRequested.connect(lambda activate: activate and starting.append(round((clock[0] - 5000.0) / 60)))
+            for minute in range(5, 185, 5):
+                clock[0] = 5000.0 + minute * 60
+                if (minute == 100):
+                    mouseList.readAll()
+                mouseList.readOnTimer()
+        # an hour is long past the unit's 60 s start limit, and a person's read starts the hour over since it already tried
+        self.assertEqual(starting, [60, 100, 160])
 
     def warningsAcrossTheNodeGoing(self, key, pathKey):
         warnings = self.sentWarnings()

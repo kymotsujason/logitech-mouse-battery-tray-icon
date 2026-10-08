@@ -46,7 +46,7 @@ The icon is a mouse that fills up with the battery level and shows the percentag
 - `PRO X3 SUPERSTRIKE, charging, 82%`
 - `PRO X3 SUPERSTRIKE, asleep, 69% at 21:40`
 
-Opening the menu takes a fresh reading from each mouse it reads over HID++, while UPower keeps the others current on its own. A mouse that has gone to sleep shows its last reading and the time it was taken. If the battery service can't be reached, the menu says so under the mice, and the ones it reads keep their last reading and its time until it's back.
+Opening the menu takes a fresh reading from each mouse it reads over HID++, while UPower keeps the others current on its own. A mouse that has gone to sleep shows its last reading and the time it was taken. If the battery service can't be reached, the menu says so under the mice, and the ones it reads keep their last reading and its time until it's back. Opening the menu tries to start the service again if it has stopped, and the tray tries on its own once an hour.
 
 ## GNOME
 

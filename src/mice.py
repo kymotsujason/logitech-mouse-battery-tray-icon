@@ -5,6 +5,8 @@ from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 from lowBattery import LowBatteryWarner
 
 READ_INTERVAL_MS = 300 * 1000
+# a timed read may start the service this often, long past the unit's 60 s start limit, so a service that hit the limit for a cause that passed comes back without anyone opening the menu
+TIMED_START_INTERVAL_S = 60 * 60
 DEFAULT_NAME = "Logitech mouse"
 STATUS_MICE = "mice"
 STATUS_SEARCHING = "searching"
@@ -66,7 +68,7 @@ class Mouse:
 class MouseList(QObject):
     changed = pyqtSignal()
     lowBattery = pyqtSignal(str, str, int)
-    # the flag says a person asked, and only then may the read start the service
+    # the flag says the read may start the service, which a person's read always may and a timed read only once an hour
     readRequested = pyqtSignal(bool)
 
     def __init__(self):
@@ -79,6 +81,8 @@ class MouseList(QObject):
         self.readTimer = QTimer(self)
         self.readTimer.setInterval(READ_INTERVAL_MS)
         self.readTimer.timeout.connect(self.readOnTimer)
+        # the tray's first GetState may start the service as it starts, so the hour counts from here
+        self.lastStartingRead = time.monotonic()
 
     def start(self):
         self.readTimer.start()
@@ -87,10 +91,16 @@ class MouseList(QObject):
         self.readTimer.stop()
 
     def readAll(self):
+        self.lastStartingRead = time.monotonic()
         self.readRequested.emit(True)
 
     def readOnTimer(self):
-        self.readRequested.emit(False)
+        now = time.monotonic()
+        if (now - self.lastStartingRead < TIMED_START_INTERVAL_S):
+            self.readRequested.emit(False)
+            return
+        self.lastStartingRead = now
+        self.readRequested.emit(True)
 
     def applyService(self, state):
         self.answered = True

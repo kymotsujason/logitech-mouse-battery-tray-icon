@@ -69,7 +69,7 @@ class ServiceWatcher(QObject):
         printLine(line)
 
     def readAll(self, activate=True):
-        # a read the tray sends on its own doesn't start the service, or each tray's 300 s read would start a service that fails at start again past the unit's start limit, while a person's read still tries once more each time they ask
+        # a read the tray sends on its own doesn't start the service, or each tray's 300 s read would start a service that fails at start again past the unit's start limit, while a person's read still tries once more each time they ask and the timed read tries once an hour
         if (not self.callService("ReadAll", self.onReadAllDone, self.onReadAllFailed, activate)):
             self.getState()
 
