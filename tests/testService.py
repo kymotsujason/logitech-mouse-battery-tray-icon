@@ -348,6 +348,33 @@ class ServiceTests(unittest.TestCase):
             self.assertTrue(waitUntil(lambda: not adaptor.broadcastTimer.isActive()))
         self.assertEqual(emitted, ["A"])
 
+    def testAGetStateThatSawABusyFlagNoBroadcastSentIsFollowedByOne(self):
+        device = self.startWithMouse()
+        adaptor = self.served[1]
+        self.subscribe()
+        device.handler = silent
+        mouse = self.receiverList.mice[0]
+        mouse.asleep = True
+        self.receiverList.changed.emit()
+        self.assertTrue(waitUntil(lambda: self.caller.signals and serviceState.decodeState(self.caller.signals[-1]).mice[0].asleep))
+        self.assertTrue(waitUntil(lambda: not adaptor.broadcastTimer.isActive()))
+        # a read of a mouse already asleep marks it busy without a change signal, and its timeout leaves the state where it was
+        self.receiverList.readMouse(mouse)
+        self.assertFalse(adaptor.broadcastTimer.isActive())
+        count = len(self.caller.signals)
+        self.assertTrue(self.caller.state().busy)
+        self.assertTrue(waitUntil(lambda: not self.receiverList.isBusy()))
+        # the broadcast this GetState sets off can still show the pending read, so the wait is for the one after it
+        self.assertTrue(waitUntil(lambda: len(self.caller.signals) > count and not serviceState.decodeState(self.caller.signals[-1]).busy))
+        self.assertTrue(waitUntil(lambda: not adaptor.broadcastTimer.isActive()))
+        QTest.qWait(100)
+        # a state the caller already holds from the last broadcast sets off no more of them
+        count = len(self.caller.signals)
+        for i in range(5):
+            self.assertFalse(self.caller.state().busy)
+        QTest.qWait(400)
+        self.assertEqual(len(self.caller.signals), count)
+
     def testTheCallerIsTheAccountBehindTheConnection(self):
         self.startWithMouse()
         adaptor = self.served[1]

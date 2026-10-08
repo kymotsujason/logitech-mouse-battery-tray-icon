@@ -42,9 +42,10 @@ class BatteryService(QDBusAbstractAdaptor):
     @pyqtSlot(result=str)
     def GetState(self):
         state = serviceState.encodeState(self.receiverList)
-        # the state can go back to the last one sent before the wait ends, which would leave this caller holding one no broadcast corrects
-        if (self.broadcastTimer.isActive() and state != self.sentState):
+        # a pending read or search marks the state busy without a change signal, and the state can go back to the last one sent before any broadcast, which would leave this caller holding one nothing corrects
+        if (state != self.sentState):
             self.sentState = None
+            self.onChanged()
         return state
 
     # QtDBus hands a slot the call itself when its last argument is a QDBusMessage, and leaves it out of the method's D-Bus signature
