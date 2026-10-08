@@ -183,10 +183,14 @@ class ServiceTests(unittest.TestCase):
         self.subscribe()
         self.ageReading()
         count = len(self.caller.signals)
+        changes = []
+        self.receiverList.changed.connect(lambda: changes.append(1))
         # each report changes the level, so every one of them is a real change of state
         for i in range(100):
             device.send(bytes([0x11, 1, 5, 0x00, 80 - (i % 2), 0x04, 0, 0]).ljust(20, b"\x00"))
-        QTest.qWait(service.BROADCAST_MS * 3)
+        # the waits end on what arrived instead of on a fixed time, so a slow runner gets longer and still sees every broadcast the flood caused
+        self.assertTrue(waitUntil(lambda: len(changes) >= 100, timeout=10.0))
+        self.assertTrue(waitUntil(lambda: not self.served[1].broadcastTimer.isActive() and self.caller.signals[-1] == serviceState.encodeState(self.receiverList), timeout=10.0))
         self.assertEqual(self.receiverList.mice[0].reading.percent, 79)
         sent = self.caller.signals[count:]
         self.assertLessEqual(len(sent), 5)
