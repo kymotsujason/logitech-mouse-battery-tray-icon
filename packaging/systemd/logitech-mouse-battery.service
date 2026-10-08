@@ -4,7 +4,7 @@ Documentation=https://github.com/kymotsujason/logitech-mouse-battery-tray-icon
 # DeviceAllow=char-hidraw takes hidraw's major from /proc/devices at start, and a kernel with HID as a module has none until hid loads
 Wants=modprobe@hid.service
 After=modprobe@hid.service
-# a start that takes seconds to fail still fills the burst inside the interval, while twenty starts 2 s apart outlast it once each one takes over a second to fail
+# a start that takes up to 5 s to fail still fills the burst of 5 inside the 60 s interval with the 5 s restart wait, so the restarts stop instead of going on forever
 StartLimitIntervalSec=60
 StartLimitBurst=5
 

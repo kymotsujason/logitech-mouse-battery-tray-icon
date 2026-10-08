@@ -28,22 +28,26 @@ class IsHidppTests(unittest.TestCase):
 
     def runScript(self, *args):
         # -I and a working folder away from the script match how udev runs it, which the sibling import has to survive
-        return subprocess.run([sys.executable, "-I", "-B", SCRIPT, *args], cwd=self.temp.name, capture_output=True).returncode
+        return subprocess.run([sys.executable, "-I", "-B", SCRIPT, *args], cwd=self.temp.name, capture_output=True)
+
+    def assertExit(self, result, code):
+        # a crash exits 1 as well, so a reject has to leave nothing on stderr
+        self.assertEqual((result.returncode, result.stderr), (code, b""))
 
     def testTheHidppNodePasses(self):
-        self.assertEqual(self.runScript(self.fakeNode(C54F_HIDPP)), 0)
+        self.assertExit(self.runScript(self.fakeNode(C54F_HIDPP)), 0)
 
     def testAGenericDesktopNodeFails(self):
-        self.assertEqual(self.runScript(self.fakeNode(GENERIC_DESKTOP)), 1)
+        self.assertExit(self.runScript(self.fakeNode(GENERIC_DESKTOP)), 1)
 
     def testAKeyboardCollectionAfterTheHidppReportsFails(self):
-        self.assertEqual(self.runScript(self.fakeNode(C54F_HIDPP + bytes.fromhex("05 07 09 06 a1 01 c0"))), 1)
+        self.assertExit(self.runScript(self.fakeNode(C54F_HIDPP + bytes.fromhex("05 07 09 06 a1 01 c0"))), 1)
 
     def testAMissingDescriptorFails(self):
-        self.assertEqual(self.runScript(self.fakeNode(None)), 1)
+        self.assertExit(self.runScript(self.fakeNode(None)), 1)
 
     def testNoArgumentFails(self):
-        self.assertEqual(self.runScript(), 1)
+        self.assertExit(self.runScript(), 1)
 
 
 if (__name__ == "__main__"):
