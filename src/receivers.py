@@ -338,7 +338,7 @@ class ReceiverList(QObject):
         self.nodes[path] = NodeState(path, worker, retryTimer, identifyTimer)
         self.denied.discard(path)
         self.deniedSignatures.pop(path, None)
-        if (self.lastPrinted.get(path) != "Opened"):
+        if (self.lastPrinted.get(path) not in ("Opened", "Failing")):
             self.lastPrinted[path] = "Opened"
             printLine("Opened " + path)
         self.requestSearch(path)
@@ -361,6 +361,10 @@ class ReceiverList(QObject):
         detail = errno.errorcode.get(error.errno) if (isinstance(error, OSError) and error.errno) else None
         detail = detail or str(error) or type(error).__name__
         if ((path, what, detail) in self.reportedErrors):
+            # the open after the first loss was printed, so without a line here the journal would end on that open while every cycle fails
+            if (what == "Lost" and self.lastPrinted.get(path) == "Opened"):
+                self.lastPrinted[path] = "Failing"
+                printLine(path + " keeps failing (" + detail + "), retrying quietly")
             return
         self.reportedErrors.add((path, what, detail))
         self.lastPrinted[path] = what

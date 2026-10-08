@@ -1291,8 +1291,8 @@ class ReceiverListTests(unittest.TestCase):
         for i in range(3):
             self.mice.onLost(self.mice.nodes[RECEIVER], OSError(errno.EIO, "Input/output error"))
             self.mice.retryDenied()
-        # the node opens again after each loss, and only a change in what was last printed for it gets a line
-        self.assertEqual(self.errors.getvalue(), "Opened " + RECEIVER + "\nLost " + RECEIVER + ": EIO\nOpened " + RECEIVER + "\n")
+        # the node opens again after each loss, and its second loss says it keeps failing, so the journal doesn't end on an open
+        self.assertEqual(self.errors.getvalue(), "Opened " + RECEIVER + "\nLost " + RECEIVER + ": EIO\nOpened " + RECEIVER + "\n" + RECEIVER + " keeps failing (EIO), retrying quietly\n")
 
     def testANodeThatServedAWhileStartsItsBackoffAndItsPrintingOver(self):
         with mock.patch.object(receivers, "DENIED_RETRY_MAX_MS", 10000):
@@ -1304,7 +1304,11 @@ class ReceiverListTests(unittest.TestCase):
             state = self.mice.nodes[RECEIVER]
             state.openedAt -= receivers.STABLE_MS / 1000
             self.mice.onLost(state, OSError(errno.EIO, "Input/output error"))
-        self.assertEqual((self.mice.deniedTimer.interval(), self.errors.getvalue()), (100, ("Opened " + RECEIVER + "\nLost " + RECEIVER + ": EIO\n") * 2))
+            interval = self.mice.deniedTimer.interval()
+            self.mice.retryDenied()
+        opened = "Opened " + RECEIVER + "\n"
+        lost = "Lost " + RECEIVER + ": EIO\n"
+        self.assertEqual((interval, self.errors.getvalue()), (100, opened + lost + opened + RECEIVER + " keeps failing (EIO), retrying quietly\n" + lost + opened))
 
     def testAnErrorIsPrintedAgainForAPathThatWentAwayAndCameBack(self):
         self.nodes.deny(RECEIVER)
