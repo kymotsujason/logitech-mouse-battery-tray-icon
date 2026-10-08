@@ -182,17 +182,20 @@ class ServiceWatcherTests(unittest.TestCase):
         self.privateBus = PrivateBus()
         self.setAnswer(serviceState.READ_ALL_LIMITED)
         log = self.startFake()
-        with mock.patch.object(serviceState, "READ_ALL_REFILL_SECONDS", 2):
+        # long enough that three refusals and the switch to a good answer all land inside one refill wait on a loaded machine
+        refillSeconds = 4
+        with mock.patch.object(serviceState, "READ_ALL_REFILL_SECONDS", refillSeconds):
             self.startWatcher()
             self.assertTrue(waitUntil(lambda: self.privateBus.lines(log).count("ReadAll") == 1))
             self.watcher.readAll()
             self.watcher.readAll()
             self.assertTrue(waitUntil(lambda: self.privateBus.lines(log).count("ReadAll") == 3))
             QTest.qWait(200)
+            self.assertTrue(self.watcher.readRetryTimer.isActive())
             self.setAnswer(None)
             # three refusals inside one refill wait come back as a single read
-            self.assertTrue(waitUntil(lambda: self.privateBus.lines(log).count("ReadAll") == 4, timeout=5.0))
-            QTest.qWait(2500)
+            self.assertTrue(waitUntil(lambda: self.privateBus.lines(log).count("ReadAll") == 4, timeout=refillSeconds + 3.0))
+            QTest.qWait(int(refillSeconds * 1000) + 500)
         self.assertEqual(self.privateBus.lines(log).count("ReadAll"), 4)
         self.assertEqual(self.errorLines(), [])
 
@@ -219,6 +222,14 @@ class ServiceWatcherTests(unittest.TestCase):
         self.assertTrue(waitUntil(lambda: self.privateBus.lines(log).count("GetState") == before + 2))
         self.assertEqual(self.errorLines(), ["Couldn't ask the battery service for a fresh reading: " + serviceState.CALLER_UNKNOWN + ": refused by the fake"])
         self.assertIsNotNone(self.states[-1])
+        # a ReadAll that goes through ends the trouble, so the next refusal is printed again
+        self.setAnswer(None)
+        self.watcher.readAll()
+        self.assertTrue(waitUntil(lambda: not self.watcher.readProblems))
+        self.setAnswer(serviceState.CALLER_UNKNOWN)
+        self.watcher.readAll()
+        self.assertTrue(waitUntil(lambda: self.privateBus.lines(log).count("GetState") == before + 3))
+        self.assertEqual(self.errorLines(), ["Couldn't ask the battery service for a fresh reading: " + serviceState.CALLER_UNKNOWN + ": refused by the fake"] * 2)
 
     def testAReadAllThatCantBeSentCountsAsAFailedCall(self):
         self.names.append("deadBus" + str(id(self)))
