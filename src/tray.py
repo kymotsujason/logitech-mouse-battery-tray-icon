@@ -19,7 +19,7 @@ import panelColor
 from exceptionHooks import installExceptionHooks, printLine
 from icon import IconState, makeIcon
 from installWatch import InstallWatcher
-from notify import NO_REPLY, Notifier
+from notify import CALL_TIMEOUT_MS as NOTICE_TIMEOUT_MS, NO_REPLY, Notifier
 from serviceClient import ServiceWatcher
 from trayHost import TrayHost
 from upower import UPowerWatcher
@@ -232,15 +232,21 @@ class MouseBatteryApp(QObject):
         self.notifier.send("Mouse battery low", name + " has " + str(percent) + "% left.", onSent=lambda notificationId, error: self.onLowBatterySent(key, name, percent, notificationId, error))
 
     def onLowBatterySent(self, key, name, percent, notificationId, error):
-        # NoReply means the bus already handed the message to the server (or is starting the server for it), and asking again after a timeout would send it twice
-        if (notificationId is None and error != NO_REPLY):
-            # the warning is given back, so it goes out again with the next reading, and each failure is printed once
-            if ((key, error) not in self.noticeErrors):
-                self.noticeErrors.add((key, error))
-                printLine("Couldn't send the low battery notice for " + name + ": " + str(error))
-            self.mouseList.markWarningFailed(key, percent)
+        if (notificationId is not None):
+            self.mouseList.markWarningSent(key, percent)
             return
-        self.mouseList.markWarningSent(key, percent)
+        # NoReply means the bus already handed the message to the server (or is starting the server for it), and asking again after a timeout would send it twice
+        if (error == NO_REPLY):
+            self.mouseList.markWarningSent(key, percent)
+            line = "The low battery notice for " + name + " got no answer in " + str(NOTICE_TIMEOUT_MS // 1000) + " s, so it may not have shown"
+        else:
+            # the warning is given back, so it goes out again with the next reading
+            self.mouseList.markWarningFailed(key, percent)
+            line = "Couldn't send the low battery notice for " + name + ": " + str(error)
+        # each kind of failure is printed once per mouse
+        if ((key, error) not in self.noticeErrors):
+            self.noticeErrors.add((key, error))
+            printLine(line)
 
     def showAbout(self):
         # a second click brings the open box forward instead of stacking another one

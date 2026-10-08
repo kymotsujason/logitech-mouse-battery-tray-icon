@@ -604,6 +604,22 @@ class AppTests(unittest.TestCase):
         # the recording bus has no service, so the service watcher prints its own line beside this one
         self.assertEqual([line for line in errors.getvalue().splitlines() if "low battery" in line], ["Couldn't send the low battery notice for MX Master 3: org.freedesktop.DBus.Error.ServiceUnknown"])
 
+    def testALowBatteryNoticeThatTimedOutIsLoggedOnce(self):
+        mouseApp = self.makeApp(True)
+        sent = []
+
+        def send(summary, body, actions=(), onAction=None, onSent=None):
+            sent.append(body)
+            onSent(None, notify.NO_REPLY)
+
+        errors = io.StringIO()
+        with mock.patch.object(mouseApp.notifier, "send", send), contextlib.redirect_stderr(errors):
+            # the critical warning is a second notice for the same mouse
+            for percent in (9, 8, lowBattery.CRITICAL_PERCENT):
+                mouseApp.mouseList.applyUPower(upower.UPowerMouse(PATH, "12ab34cd", "MX Master 3", hidpp.BatteryReading(percent, 0)))
+        self.assertEqual(sent, ["MX Master 3 has 9% left.", "MX Master 3 has 5% left."])
+        self.assertEqual([line for line in errors.getvalue().splitlines() if "low battery" in line], ["The low battery notice for MX Master 3 got no answer in 5 s, so it may not have shown"])
+
     def testTheMenuALeftClickAndTheTimerEachAskTheServiceToRead(self):
         with mock.patch.object(serviceClient.ServiceWatcher, "readAll") as readAll:
             mouseApp = self.makeApp(True)
