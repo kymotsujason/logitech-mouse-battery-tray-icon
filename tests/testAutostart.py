@@ -214,7 +214,117 @@ class AutostartTests(unittest.TestCase):
 
             with mock.patch.object(autostart.os, "lstat", otherOwnerFor), self.assertRaises(PermissionError):
                 autostart.setEnabled(configHome, False)
-            self.assertEqual(os.listdir(os.path.join(linked, "autostart")), [])
+            self.assertEqual(os.listdir(linked), [])
+
+    def testAConfigFolderLinkFromAnotherAccountKeepsItsOverride(self):
+        with tempfile.TemporaryDirectory() as outer, tempfile.TemporaryDirectory() as linked:
+            configHome = os.path.join(outer, "config")
+            os.symlink(linked, configHome)
+            target = os.path.join(linked, "autostart", autostart.FILE_NAME)
+            os.makedirs(os.path.dirname(target))
+            with open(target, "w") as f:
+                f.write("[Desktop Entry]\nType=Application\nName=Mouse Battery\nHidden=true\n")
+            realLstat = os.lstat
+
+            def otherOwnerFor(path, *args, **kwargs):
+                info = realLstat(path, *args, **kwargs)
+                # the config folder is a link another account made, and the override at its end is that account's
+                if (os.path.abspath(path) == configHome):
+                    fields = list(info[:10])
+                    fields[4] = os.getuid() + 1
+                    return os.stat_result(fields)
+                return info
+
+            with mock.patch.object(autostart.os, "lstat", otherOwnerFor), self.assertRaises(PermissionError):
+                autostart.setEnabled(configHome, True)
+            self.assertTrue(os.path.exists(target))
+
+    def testAConfigFolderLinkRootMadeIsFollowed(self):
+        with tempfile.TemporaryDirectory() as outer, tempfile.TemporaryDirectory() as linked:
+            configHome = os.path.join(outer, "config")
+            os.symlink(linked, configHome)
+            realLstat = os.lstat
+
+            def rootOwnerFor(path, *args, **kwargs):
+                info = realLstat(path, *args, **kwargs)
+                # root made the config folder link, as a system setup script would
+                if (os.path.abspath(path) == configHome):
+                    fields = list(info[:10])
+                    fields[4] = 0
+                    return os.stat_result(fields)
+                return info
+
+            with mock.patch.object(autostart.os, "lstat", rootOwnerFor):
+                autostart.setEnabled(configHome, False)
+            with open(os.path.join(linked, "autostart", autostart.FILE_NAME)) as f:
+                self.assertIn("Hidden=true", f.read())
+
+    def testAConfigFolderLinkThisAccountMadeIsFollowed(self):
+        with tempfile.TemporaryDirectory() as outer, tempfile.TemporaryDirectory() as linked:
+            configHome = os.path.join(outer, "config")
+            # a dotfile manager links ~/.config into a folder the same account owns
+            os.symlink(linked, configHome)
+            autostart.setEnabled(configHome, False)
+            target = os.path.join(linked, "autostart", autostart.FILE_NAME)
+            with open(target) as f:
+                self.assertIn("Hidden=true", f.read())
+            autostart.setEnabled(configHome, True)
+            self.assertFalse(os.path.exists(target))
+
+    def testAConfigFolderAnotherAccountOwnsGetsNoAutostartFolder(self):
+        realStat = os.stat
+
+        def otherOwnerFor(path, *args, **kwargs):
+            info = realStat(path, *args, **kwargs)
+            # the config folder is another account's, as a user's ~/.config is for a run as root
+            if (os.path.abspath(path) == self.configHome):
+                fields = list(info[:10])
+                fields[4] = os.getuid() + 1
+                return os.stat_result(fields)
+            return info
+
+        with mock.patch.object(autostart.os, "stat", otherOwnerFor), self.assertRaises(PermissionError):
+            autostart.setEnabled(self.configHome, False)
+        self.assertEqual(os.listdir(self.configHome), [])
+
+    def testAnOverrideFileAnotherAccountOwnsIsLeftUnchanged(self):
+        os.makedirs(os.path.dirname(self.path))
+        original = "[Desktop Entry]\nType=Application\nName=Mouse Battery\nExec=logitech-mouse-battery\n"
+        with open(self.path, "w") as f:
+            f.write(original)
+        realStat = os.stat
+
+        def otherOwnerFor(path, *args, **kwargs):
+            info = realStat(path, *args, **kwargs)
+            # only the override file is another account's, while its folder is this one's
+            if (os.path.abspath(path) == self.path):
+                fields = list(info[:10])
+                fields[4] = os.getuid() + 1
+                return os.stat_result(fields)
+            return info
+
+        with mock.patch.object(autostart.os, "stat", otherOwnerFor), self.assertRaises(PermissionError):
+            autostart.setEnabled(self.configHome, False)
+        self.assertEqual(self.read(), original)
+
+    def testAnOverrideFileAnotherAccountOwnsIsntDeleted(self):
+        os.makedirs(os.path.dirname(self.path))
+        with open(self.path, "w") as f:
+            f.write("[Desktop Entry]\nType=Application\nName=Mouse Battery\nHidden=true\n")
+        realStat = os.stat
+
+        def otherOwnerFor(path, *args, **kwargs):
+            info = realStat(path, *args, **kwargs)
+            # only the override file is another account's, while its folder is this one's
+            if (os.path.abspath(path) == self.path):
+                fields = list(info[:10])
+                fields[4] = os.getuid() + 1
+                return os.stat_result(fields)
+            return info
+
+        with mock.patch.object(autostart.os, "stat", otherOwnerFor), self.assertRaises(PermissionError):
+            autostart.setEnabled(self.configHome, True)
+        self.assertTrue(os.path.exists(self.path))
 
     def testALinkAtTheTemporaryNameIsntWrittenThrough(self):
         os.makedirs(os.path.dirname(self.path))
