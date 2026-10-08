@@ -170,6 +170,7 @@ class ServiceFileTests(unittest.TestCase):
     def testTheArchInstallFileStopsTheServiceOnRemoval(self):
         text = readText("packaging", "aur", "logitech-mouse-battery.install")
         self.assertIn("pre_remove() {\n    systemctl stop logitech-mouse-battery.service 2>/dev/null || true\n}\n", text)
+        self.assertIn("post_remove() {\n    systemctl stop logitech-mouse-battery.service 2>/dev/null || true\n}\n", text)
 
     def testThePostinstallRunsAfterInstall(self):
         self.assertEqual(readText("packaging", "postinstall.sh"), "#!/bin/sh\n/usr/share/logitech-mouse-battery/afterInstall.sh\nexit 0\n")

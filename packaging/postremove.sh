@@ -9,6 +9,9 @@ if systemd-detect-virt --quiet --chroot || ! systemd-notify --booted; then
 fi
 systemctl daemon-reload || true
 systemctl reload dbus.service || true
+# a bus call or a udev event can start the service again after preremove stops it, and with its files gone a new start
+# can't run, so it stops here again
+systemctl stop logitech-mouse-battery.service 2>/dev/null || true
 udevadm control --reload || true
 udevadm trigger --subsystem-match=hidraw --action=change || true
 exit 0

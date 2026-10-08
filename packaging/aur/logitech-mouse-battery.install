@@ -1,3 +1,9 @@
 pre_remove() {
     systemctl stop logitech-mouse-battery.service 2>/dev/null || true
 }
+
+# a bus call or a udev event can start the service again after pre_remove stops it, and pacman runs this once the files
+# are gone, when a new start can't run
+post_remove() {
+    systemctl stop logitech-mouse-battery.service 2>/dev/null || true
+}
