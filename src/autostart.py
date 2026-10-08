@@ -78,6 +78,9 @@ def openFolder(path, create):
                     folder = top
                     shown = os.sep
                 pending.extend(part for part in reversed(target.split(os.sep)) if part)
+                # a last name leading to "/" leaves nothing to open, and it names a folder as "." does
+                if (not pending):
+                    raise IsADirectoryError(errno.EISDIR, "Is a directory", shown)
                 continue
             if (not pending):
                 os.close(fd)

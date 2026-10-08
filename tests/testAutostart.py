@@ -391,6 +391,36 @@ class AutostartTests(unittest.TestCase):
         self.assertEqual(self.read(), original)
         self.assertEqual(os.listdir(os.path.dirname(self.path)), [autostart.FILE_NAME])
 
+    def outcome(self, enabled, configHome=None):
+        # only an OSError may come out, since the tray catches nothing else and would end
+        try:
+            autostart.setEnabled(self.configHome if configHome is None else configHome, enabled)
+        except OSError as error:
+            return str(error)
+        return None
+
+    def testAnOverrideLinkToTheTopFolderReadsAsEnabledAndIsRefused(self):
+        os.makedirs(os.path.dirname(self.path))
+        for target in ("/", "//"):
+            with self.subTest(target=target):
+                os.symlink(target, self.path)
+                try:
+                    self.assertIs(autostart.isEnabled(self.configHome), True)
+                    self.assertEqual(self.outcome(False), "[Errno 21] Is a directory: '/'")
+                    self.assertEqual(self.outcome(True), "[Errno 21] Is a directory: '/'")
+                    self.assertTrue(os.path.islink(self.path))
+                finally:
+                    os.unlink(self.path)
+
+    def testAnAutostartFolderLinkToTheTopFolderIsRefused(self):
+        os.symlink("/", os.path.dirname(self.path))
+        # the top folder is root's, and the test's owner faking would hand it to this account when the suite runs as root
+        self.owners["/"] = 0
+        self.assertIs(autostart.isEnabled(self.configHome), True)
+        self.assertEqual(self.outcome(False), "[Errno 13] Permission denied, the folder belongs to uid 0, not this account: '/'")
+        self.assertIsNone(self.outcome(True))
+        self.assertFalse(os.path.exists(os.path.join("/", autostart.FILE_NAME)))
+
     def testA0600OverrideKeepsItsMode(self):
         os.makedirs(os.path.dirname(self.path))
         with open(self.path, "w") as f:
