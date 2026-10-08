@@ -497,6 +497,15 @@ class AppTests(unittest.TestCase):
         mouseApp.aboutBox.close()
         first.close()
 
+    def testAboutAsksForQtsOwnDialog(self):
+        if (not hasattr(QMessageBox, "Option")):
+            self.skipTest("Qt before 6.6 has no message box options and never hands a box to the platform")
+        mouseApp = self.makeApp(True)
+        mouseApp.showAbout()
+        # KDE's own dialog left the box open off screen after a close from its title bar
+        self.assertTrue(mouseApp.aboutBox.testOption(QMessageBox.Option.DontUseNativeDialog))
+        mouseApp.aboutBox.close()
+
     def runAboutCycles(self, *ways):
         env = {key: value for key, value in os.environ.items() if key not in ("DISPLAY", "WAYLAND_DISPLAY")}
         env.update(QT_QPA_PLATFORM="offscreen", QT_QPA_PLATFORMTHEME="kde")
