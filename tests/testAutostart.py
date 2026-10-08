@@ -114,6 +114,22 @@ class AutostartTests(unittest.TestCase):
         os.makedirs(self.path)
         self.assertTrue(autostart.isEnabled(self.configHome))
 
+    def testAFolderAtTheOverrideLeavesNoDescriptorOpen(self):
+        os.makedirs(self.path)
+        before = len(os.listdir("/proc/self/fd"))
+        # the menu reads the override at every open, so a descriptor left each time would add up
+        results = [(autostart.isEnabled(self.configHome), self.outcome(False)) for i in range(5)]
+        self.assertEqual(len(os.listdir("/proc/self/fd")), before)
+        self.assertEqual(results, [(True, "[Errno 22] Not a regular file: '" + os.path.realpath(self.path) + "'")] * 5)
+
+    def testAFailedFdopenInAWriteLeavesNoDescriptorOpen(self):
+        os.makedirs(os.path.dirname(self.path))
+        before = len(os.listdir("/proc/self/fd"))
+        with mock.patch.object(autostart.os, "fdopen", side_effect=OSError(errno.ENOMEM, "Cannot allocate memory")):
+            self.assertEqual(self.outcome(False), "[Errno 12] Cannot allocate memory")
+        self.assertEqual(len(os.listdir("/proc/self/fd")), before)
+        self.assertEqual(os.listdir(os.path.dirname(self.path)), [])
+
     def testInvalidUtf8SurvivesTurningItOff(self):
         os.makedirs(os.path.dirname(self.path))
         with open(self.path, "wb") as f:

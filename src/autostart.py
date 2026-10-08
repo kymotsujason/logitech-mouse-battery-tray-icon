@@ -111,11 +111,15 @@ def readFile(folder, name, shown):
         fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_NOCTTY | os.O_CLOEXEC, dir_fd=folder)
     except FileNotFoundError:
         return (None, None)
-    with os.fdopen(fd, encoding="utf-8", errors="surrogateescape") as f:
+    # fdopen leaves open a descriptor it fails on, so the descriptor is closed here on every way out
+    try:
         info = os.fstat(fd)
         if (not stat.S_ISREG(info.st_mode)):
             raise OSError(errno.EINVAL, "Not a regular file", os.path.join(shown, name))
-        return (f.read(), info)
+        with os.fdopen(fd, encoding="utf-8", errors="surrogateescape", closefd=False) as f:
+            return (f.read(), info)
+    finally:
+        os.close(fd)
 
 
 def writeText(folder, name, shown, info, text):
@@ -132,12 +136,15 @@ def writeText(folder, name, shown, info, text):
         os.unlink(temp, dir_fd=folder)
     try:
         fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o666, dir_fd=folder)
-        with os.fdopen(fd, "w", encoding="utf-8", errors="surrogateescape") as f:
-            f.write(text)
-            f.flush()
-            if (info is not None):
-                os.fchmod(fd, stat.S_IMODE(info.st_mode))
-            os.fsync(fd)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", errors="surrogateescape", closefd=False) as f:
+                f.write(text)
+                f.flush()
+                if (info is not None):
+                    os.fchmod(fd, stat.S_IMODE(info.st_mode))
+                os.fsync(fd)
+        finally:
+            os.close(fd)
         os.replace(temp, name, src_dir_fd=folder, dst_dir_fd=folder)
     except OSError:
         with contextlib.suppress(OSError):
