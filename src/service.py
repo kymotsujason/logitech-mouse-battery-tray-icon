@@ -54,6 +54,9 @@ class BatteryService(QDBusAbstractAdaptor):
         if (caller is None):
             self.refuse(message, CALLER_UNKNOWN, "Couldn't tell which account asked for the read.")
             return
+        # a call that joins the batch already queued adds no device work, so it gets the same empty reply without spending a read
+        if (self.receiverList.isReadAllQueued()):
+            return
         if (not self.takeRead(caller)):
             self.refuse(message, READ_ALL_LIMITED, "Each account gets " + str(READ_ALL_BURST) + " reads at once and then one every " + str(READ_ALL_REFILL_SECONDS) + " seconds.")
             return

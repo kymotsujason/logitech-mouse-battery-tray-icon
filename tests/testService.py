@@ -310,6 +310,23 @@ class ServiceTests(unittest.TestCase):
             answers = [caller.call("ReadAll"), caller.call("ReadAll")]
         self.assertEqual(answers, [[], "org.freedesktop.DBus.Error.LimitsExceeded"])
 
+    def testAReadAllThatJoinsAQueuedBatchCostsNoRead(self):
+        device = self.startWithMouse()
+        before = batteryReads(device)
+        caller = Caller(self.connectTo("other"))
+        with mock.patch.object(service, "READ_ALL_BURST", 2):
+            # the first runs a batch and the second queues one behind the gap, which spends the burst
+            self.assertEqual([caller.call("ReadAll"), caller.call("ReadAll")], [[], []])
+            self.assertTrue(self.receiverList.readAllTimer.isActive())
+            answers = [caller.call("ReadAll") for i in range(5)]
+            self.assertTrue(self.receiverList.readAllTimer.isActive())
+            self.assertEqual(answers, [[]] * 5)
+            self.assertTrue(waitUntil(lambda: not self.receiverList.readAllTimer.isActive() and not self.receiverList.isBusy()))
+            # once the queued batch has run, a call that would start device work is still held to the spent burst
+            self.assertEqual(caller.call("ReadAll"), service.READ_ALL_LIMITED)
+        QTest.qWait(200)
+        self.assertEqual(batteryReads(device) - before, 2)
+
     def testAReadAllFromACallerItCantPlaceAnswersWithAnError(self):
         self.startWithMouse()
         adaptor = self.served[1]

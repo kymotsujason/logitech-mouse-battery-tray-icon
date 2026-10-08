@@ -249,9 +249,12 @@ class ReceiverList(QObject):
     def isSearching(self):
         return any(not state.searched for state in self.nodes.values())
 
+    def isReadAllQueued(self):
+        return self.readAllTimer.isActive()
+
     def requestReadAll(self):
         # any local user may ask, so a batch that waits for its turn takes in every call until it runs
-        if (self.readAllTimer.isActive()):
+        if (self.isReadAllQueued()):
             return
         gap = READ_ALL_GAP_MS / 1000
         now = time.monotonic()
