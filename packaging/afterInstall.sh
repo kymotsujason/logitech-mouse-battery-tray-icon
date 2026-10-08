@@ -20,6 +20,7 @@ step() {
     shift
     if ! "$@"; then
         echo "Mouse Battery: that step failed. $REPLUG"
+        return 1
     fi
 }
 
@@ -34,9 +35,11 @@ step "reloading the system bus" systemctl reload dbus.service
 step "reloading the udev rules" udevadm control --reload
 step "applying the rule to plugged in receivers and cables" udevadm trigger --subsystem-match=hidraw --action=change
 # settle waits on the whole queue, so a stuck event elsewhere holds the transaction only this long
-step "waiting for udev" udevadm settle --timeout=30
-# until the trigger settles a node can still carry the old uaccess tag, which would put its ACL back
-step "closing the access 1.0.x gave" python3 -I -B "$APP_DIR/clearAccess.py"
+SETTLED=--settled
+step "waiting for udev" udevadm settle --timeout=30 || SETTLED=
+# until the trigger settles a node can still carry the old uaccess tag, which would put its ACL back, and clearAccess
+# trusts the tag only once udev has settled
+step "closing the access 1.0.x gave" python3 -I -B "$APP_DIR/clearAccess.py" $SETTLED
 step "clearing the service's failed starts" clearFailedStarts
 # nothing after this depends on it, and a service that fails to start would fail a call that waits
 step "restarting the service if it runs" systemctl try-restart --no-block "$UNIT"

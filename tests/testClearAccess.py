@@ -76,10 +76,10 @@ class ClearAccessTests(unittest.TestCase):
         with open(os.path.join(self.udevRoot, "c" + number), "w") as f:
             f.write("\n".join(lines) + "\n")
 
-    def runClear(self):
+    def runClear(self, settled=True):
         output = io.StringIO()
         with redirect_stdout(output):
-            code = clearAccess.main(self.sysRoot, self.devRoot, self.udevRoot)
+            code = clearAccess.main(self.sysRoot, self.devRoot, self.udevRoot, settled=settled)
         return (code, output.getvalue())
 
     def mode(self, path):
@@ -138,6 +138,12 @@ class ClearAccessTests(unittest.TestCase):
         self.addUdevEntry("243:4", ["E:DRIVER=hid-generic", "G:seat", "G:systemd", "G:uaccess", "Q:seat", "Q:systemd", "Q:uaccess", "V:1"])
         self.assertEqual(self.runClear(), (0, "Kept the seat's access to " + path + ", since another package's udev rule gives it\n"))
         self.assertEqual((self.removed, self.owners, self.mode(path)), ([], [(path, 0, GROUP_ID)], 0o660))
+
+    def testAUaccessTagIsntTrustedWhenUdevDidntSettle(self):
+        path = self.addNode("hidraw4", number="243:4")
+        self.addUdevEntry("243:4", ["G:uaccess", "Q:uaccess", "V:1"])
+        self.assertEqual(self.runClear(settled=False), (0, "Closed access to " + path + "\n"))
+        self.assertEqual((self.removed, self.owners), ([(path, "system.posix_acl_access")], [(path, 0, GROUP_ID)]))
 
     def testATagTheNodeOnlyOnceHadDoesntKeepItsAcl(self):
         path = self.addNode("hidraw4", number="243:4")

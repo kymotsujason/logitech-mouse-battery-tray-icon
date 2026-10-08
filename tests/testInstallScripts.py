@@ -30,10 +30,11 @@ STEPS = [
     "udevadm control --reload",
     "udevadm trigger --subsystem-match=hidraw --action=change",
     "udevadm settle --timeout=30",
-    "python3 -I -B /usr/share/logitech-mouse-battery/clearAccess.py",
+    "python3 -I -B /usr/share/logitech-mouse-battery/clearAccess.py --settled",
     "systemctl reset-failed logitech-mouse-battery.service",
     "systemctl try-restart --no-block logitech-mouse-battery.service",
 ]
+UNSETTLED_STEPS = [step.replace(" --settled", "") for step in STEPS]
 CHECKS = ["systemd-detect-virt --quiet --chroot", "systemd-notify --booted"]
 
 
@@ -66,8 +67,13 @@ class InstallScriptTests(unittest.TestCase):
 
     def testAFailingStepIsReportedAndTheRestStillRun(self):
         code, output, calls = self.runScript("afterInstall.sh", fail="udevadm python3")
-        self.assertEqual((code, calls), (0, CHECKS + STEPS))
+        self.assertEqual((code, calls), (0, CHECKS + UNSETTLED_STEPS))
         self.assertEqual(output.count("that step failed. Unplug the receiver or cable and plug it back in, or reboot."), 4)
+
+    def testClearAccessIsToldUdevSettledOnlyWhenSettleSucceeds(self):
+        self.assertEqual(self.runScript("afterInstall.sh", fail="udevadm")[::2], (0, CHECKS + UNSETTLED_STEPS))
+        os.remove(self.log)
+        self.assertEqual(self.runScript("afterInstall.sh", fail="systemctl")[::2], (0, CHECKS + STEPS))
 
     def testAResetFailedThatFailsIsntReported(self):
         code, output, calls = self.runScript("afterInstall.sh", fail="systemctl")

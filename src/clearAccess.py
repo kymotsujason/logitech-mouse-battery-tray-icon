@@ -46,7 +46,7 @@ def closeNode(path, gid, keepAcl=False):
             raise
 
 
-def main(sysRoot="/sys/class/hidraw", devRoot="/dev", udevRoot="/run/udev/data"):
+def main(sysRoot="/sys/class/hidraw", devRoot="/dev", udevRoot="/run/udev/data", settled=False):
     try:
         gid = grp.getgrnam(GROUP).gr_gid
     except KeyError:
@@ -54,7 +54,8 @@ def main(sysRoot="/sys/class/hidraw", devRoot="/dev", udevRoot="/run/udev/data")
         return 1
     failed = False
     for path in hidpp.findHidppNodes(sysRoot, devRoot):
-        kept = seatKeepsAccess(path, sysRoot, udevRoot)
+        # a change event udev hasn't run yet leaves 1.0.x's tag in its database, while running it puts back any ACL another rule gives
+        kept = settled and seatKeepsAccess(path, sysRoot, udevRoot)
         try:
             closeNode(path, gid, keepAcl=kept)
         except FileNotFoundError:
@@ -72,4 +73,4 @@ def main(sysRoot="/sys/class/hidraw", devRoot="/dev", udevRoot="/run/udev/data")
 
 
 if (__name__ == "__main__"):
-    sys.exit(main())
+    sys.exit(main(settled="--settled" in sys.argv[1:]))
