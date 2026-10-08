@@ -46,6 +46,11 @@ class BumpVersionTests(unittest.TestCase):
             self.assertIn(name, readme)
         self.assertNotIn(version.VERSION, readme)
 
+    def testALineThatOnlyEndsInVersionIsNotTheCurrentVersion(self):
+        self.write("src/version.py", 'OLD_VERSION = "0.0.1"\n' + self.read("src/version.py"))
+        self.assertEqual(self.bump("9.8.7"), 0)
+        self.assertEqual(self.read("src/version.py"), 'OLD_VERSION = "0.0.1"\nVERSION = "9.8.7"\n')
+
     def testTheNewReleaseComesFirstAndTheOldOneStays(self):
         self.bump("9.8.7")
         metainfo = self.read(METAINFO)

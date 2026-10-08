@@ -63,6 +63,12 @@ class InstallWatchTests(unittest.TestCase):
                 f.write("VERSION = \"1.2.3\"\n")
             self.assertEqual(installWatch.readVersion(folder), "1.2.3")
 
+    def testReadVersionSkipsALineThatOnlyEndsInVersion(self):
+        with tempfile.TemporaryDirectory() as folder:
+            with open(os.path.join(folder, "version.py"), "w") as f:
+                f.write("OLD_VERSION = \"0.0.1\"\nVERSION = \"1.2.3\"\n")
+            self.assertEqual(installWatch.readVersion(folder), "1.2.3")
+
     def testAMissingTrayPyMeansTheAppWasRemoved(self):
         with tempfile.TemporaryDirectory() as folder, mock.patch.object(installWatch, "APP_FOLDER", folder):
             self.watcher.onChanged()

@@ -17,7 +17,7 @@ def readFile(name):
 
 
 def readVersion():
-    match = re.search(r'VERSION = "([^"]*)"', readFile(VERSION_FILE))
+    match = re.search(r'^VERSION = "([^"]*)"$', readFile(VERSION_FILE), re.M)
     return match.group(1) if match else None
 
 

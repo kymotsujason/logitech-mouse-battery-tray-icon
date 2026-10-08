@@ -22,12 +22,12 @@ def readVersion(folder):
             text = f.read()
     except OSError:
         return None
-    match = re.search(r'VERSION = "([^"]*)"', text)
+    match = re.search(r'^VERSION = "([^"]*)"$', text, re.M)
     return match.group(1) if match else None
 
 
 class InstallWatcher(QObject):
-    # every later version takes over from the one installed before it through this watch, so the app folder keeps tray.py and version.py's VERSION line at its top
+    # every later version takes over from the one installed before it through this watch, so the app folder keeps tray.py and a version.py with a VERSION line
     removed = pyqtSignal()
 
     def __init__(self):
