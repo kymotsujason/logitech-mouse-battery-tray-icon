@@ -187,6 +187,7 @@ class NodeState:
         self.worker = worker
         self.retryTimer = retryTimer
         self.identifyTimer = identifyTimer
+        self.stableTimer = None
         self.openedAt = time.monotonic()
         self.identifiedAt = {}
         self.skipped = set()
@@ -344,7 +345,19 @@ class ReceiverList(QObject):
         if (self.lastPrinted.get(path) not in ("Opened", "Failing")):
             self.lastPrinted[path] = "Opened"
             printLine("Opened " + path)
+        elif (self.lastPrinted.get(path) == "Failing"):
+            # the journal's last word on this node is that it keeps failing, so a node that serves as long as a stable one says it works again, while one that dies after each search stays quiet
+            self.nodes[path].stableTimer = singleShotTimer(self, STABLE_MS, lambda: self.printWorkingAgain(path))
+            self.nodes[path].stableTimer.start()
         self.requestSearch(path)
+
+    def printWorkingAgain(self, path):
+        if (path not in self.nodes or self.lastPrinted.get(path) != "Failing"):
+            return
+        # Qt can fire a timer a little early, so the errors are forgotten here instead of left to the loss's own check, and the next loss is printed as news
+        self.forgetErrors(path)
+        self.lastPrinted[path] = "Opened"
+        printLine(path + " working again")
 
     def deny(self, path, signature):
         # a path denied with a different device node than last time is a new device or new access, so the retry starts over at its shortest wait
@@ -392,7 +405,7 @@ class ReceiverList(QObject):
         state = self.nodes.pop(path, None)
         if (state is None):
             return
-        for timer in (state.retryTimer, state.identifyTimer):
+        for timer in (state.retryTimer, state.identifyTimer, state.stableTimer):
             if (timer is not None):
                 timer.stop()
                 timer.deleteLater()

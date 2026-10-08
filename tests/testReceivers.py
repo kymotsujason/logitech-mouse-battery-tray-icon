@@ -1319,6 +1319,21 @@ class ReceiverListTests(unittest.TestCase):
         # the node opens again after each loss, and its second loss says it keeps failing, so the journal doesn't end on an open
         self.assertEqual(self.errors.getvalue(), "Opened " + RECEIVER + "\nLost " + RECEIVER + ": EIO\nOpened " + RECEIVER + "\n" + RECEIVER + " keeps failing (EIO), retrying quietly\n")
 
+    def testANodeThatWorksAgainAfterFailingSaysSo(self):
+        with mock.patch.object(receivers, "STABLE_MS", 300):
+            self.nodes.add(RECEIVER, mouseHandler())
+            self.mice.start()
+            for i in range(2):
+                self.mice.onLost(self.mice.nodes[RECEIVER], OSError(errno.EIO, "Input/output error"))
+                self.mice.retryDenied()
+            # the journal said the node keeps failing, so once it has served as long as a stable node does it says it works again
+            self.assertTrue(waitUntil(lambda: "working again" in self.errors.getvalue()))
+            self.mice.onLost(self.mice.nodes[RECEIVER], OSError(errno.EIO, "Input/output error"))
+            self.mice.retryDenied()
+        opened = "Opened " + RECEIVER + "\n"
+        lost = "Lost " + RECEIVER + ": EIO\n"
+        self.assertEqual(self.errors.getvalue(), opened + lost + opened + RECEIVER + " keeps failing (EIO), retrying quietly\n" + RECEIVER + " working again\n" + lost + opened)
+
     def testANodeThatServedAWhileStartsItsBackoffAndItsPrintingOver(self):
         with mock.patch.object(receivers, "DENIED_RETRY_MAX_MS", 10000):
             self.nodes.add(RECEIVER, mouseHandler())
