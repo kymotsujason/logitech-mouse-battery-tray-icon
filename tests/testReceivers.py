@@ -1306,9 +1306,29 @@ class ReceiverListTests(unittest.TestCase):
         opened = []
         with mock.patch.object(hidpp, "findHidppNodes", side_effect=OSError(errno.EMFILE, "Too many open files")), mock.patch.object(hidpp.HidppNode, "open", lambda path, onEvent=None: opened.append(path)):
             self.mice.retryDenied()
+            self.mice.retryDenied()
         self.assertEqual((opened, self.mice.denied), ([], {RECEIVER}))
         self.assertTrue(self.mice.deniedTimer.isActive())
-        self.assertEqual(self.mice.deniedTimer.interval(), 200)
+        self.assertEqual(self.mice.deniedTimer.interval(), 400)
+        self.assertEqual(self.errors.getvalue(), "Couldn't open " + RECEIVER + ": EACCES\nCouldn't list HID++ nodes: EMFILE\n")
+
+    def testAScanWhoseListingFailsChangesNothingAndComesBack(self):
+        self.nodes.add(RECEIVER, mouseHandler())
+        with mock.patch.object(hidpp, "findHidppNodes", side_effect=OSError(errno.EMFILE, "Too many open files")):
+            # the start's scan and a scan the settle timer runs both list the nodes, and neither may end the service or strand a receiver plugged in then
+            self.mice.start()
+            self.assertEqual((self.mice.nodes, self.mice.denied), ({}, set()))
+            self.assertTrue(self.mice.settleTimer.isActive())
+            self.mice.settleTimer.stop()
+            self.mice.scanNodes()
+            self.assertTrue(self.mice.settleTimer.isActive())
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"]))
+        # a run of failed listings prints once, and a listing that works lets the next failure print again
+        with mock.patch.object(hidpp, "findHidppNodes", side_effect=OSError(errno.ENOENT, "No such file or directory")):
+            self.mice.scanNodes()
+        self.mice.settleTimer.stop()
+        self.assertEqual(self.errors.getvalue(), "Couldn't list HID++ nodes: EMFILE\nOpened " + RECEIVER + "\nCouldn't list HID++ nodes: ENOENT\n")
+        self.assertEqual(list(self.mice.nodes), [RECEIVER])
 
     def testANodeThatKeepsDyingAfterItOpensPrintsItsLossOnce(self):
         self.nodes.add(RECEIVER, mouseHandler())

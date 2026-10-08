@@ -221,6 +221,7 @@ class ReceiverList(QObject):
         self.reportedErrors = set()
         # what was last printed for each path, so a node that keeps opening and dying prints its open once instead of each cycle
         self.lastPrinted = {}
+        self.listingFailed = False
         # workers emit this from their own threads, so Qt queues it onto this object's thread
         self.message.connect(self.onMessage)
         self.deniedRetryMs = DENIED_RETRY_MS
@@ -291,10 +292,26 @@ class ReceiverList(QObject):
         waited = (now - self.settleSince) * 1000
         self.settleTimer.start(max(1, int(min(SETTLE_MS, SETTLE_CEILING_MS - waited))))
 
+    def listNodes(self):
+        try:
+            paths = hidpp.findHidppNodes()
+        except OSError as error:
+            # a retry loop over a listing that keeps failing, such as one out of fds, prints once until a listing works
+            if (not self.listingFailed):
+                self.listingFailed = True
+                printLine("Couldn't list HID++ nodes: " + (errno.errorcode.get(error.errno) or str(error)))
+            return None
+        self.listingFailed = False
+        return paths
+
     def scanNodes(self):
         self.settleSince = None
         before = (set(self.nodes), set(self.denied))
-        paths = hidpp.findHidppNodes()
+        paths = self.listNodes()
+        if (paths is None):
+            # a listing that failed can't say what was plugged in or taken out, so nothing changes, and the single shot timer has to come back since only a /dev change arms it otherwise
+            self.settleTimer.start(SETTLE_MS)
+            return
         removed = [path for path in self.nodes if path not in paths]
         for path in removed:
             self.printRemoved(path)
@@ -416,12 +433,8 @@ class ReceiverList(QObject):
 
     def retryDenied(self):
         before = (set(self.nodes), set(self.denied))
-        try:
-            paths = hidpp.findHidppNodes()
-        except OSError as error:
-            # a denied path discovery can't vouch for may be a different device that took its number, so nothing opens, while the single shot timer still has to come back
-            printLine("Couldn't list HID++ nodes: " + (errno.errorcode.get(error.errno) or str(error)))
-            paths = None
+        # a denied path discovery can't vouch for may be a different device that took its number, so nothing opens when the listing fails, while the single shot timer still has to come back
+        paths = self.listNodes()
         # doubled before the opens, so a new device node one of them meets starts its wait over at the shortest
         self.deniedRetryMs = min(self.deniedRetryMs * 2, DENIED_RETRY_MAX_MS)
         if (paths is not None):
