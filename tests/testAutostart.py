@@ -2,20 +2,35 @@ import errno
 import os
 import stat
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
 import autostart
 
+# the suite runs as root in the containers, so the tests act as a non root account and root's exemptions can't pass a test on their own
+ACCOUNT = os.getuid() or 1000
+
 
 class AutostartTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
         self.configHome = self.temp.name
         self.path = autostart.overridePath(self.configHome)
+        self.owners = {}
+        realUid = os.getuid()
+        realFstat = os.fstat
 
-    def tearDown(self):
-        self.temp.cleanup()
+        def ownerFor(fd, *args, **kwargs):
+            info = realFstat(fd, *args, **kwargs)
+            fields = list(info[:10])
+            fields[4] = self.owners.get(os.readlink("/proc/self/fd/" + str(fd)), ACCOUNT if info.st_uid == realUid else info.st_uid)
+            return os.stat_result(fields)
+
+        for patch in (mock.patch.object(autostart.os, "getuid", return_value=ACCOUNT), mock.patch.object(autostart.os, "fstat", ownerFor)):
+            patch.start()
+            self.addCleanup(patch.stop)
 
     def read(self):
         with open(self.path) as f:
@@ -74,9 +89,9 @@ class AutostartTests(unittest.TestCase):
         original = "[Desktop Entry]\nType=Application\nName=Mouse Battery\nExec=logitech-mouse-battery\n"
         with open(self.path, "w") as f:
             f.write(original)
-        with mock.patch.object(autostart.os, "getuid", return_value=os.getuid() + 1):
-            with self.assertRaises(PermissionError):
-                autostart.setEnabled(self.configHome, False)
+        with mock.patch.object(autostart.os, "getuid", return_value=ACCOUNT + 1):
+            message = self.refusal(False)
+        self.assertEqual(message, "[Errno 13] Permission denied, the folder belongs to uid " + str(ACCOUNT) + ", not this account: '" + os.path.realpath(os.path.dirname(self.path)) + "'")
         self.assertEqual(self.read(), original)
 
     def testTurningItOnDeletesAnOverrideWithoutExec(self):
@@ -154,6 +169,11 @@ class AutostartTests(unittest.TestCase):
             with open(target) as f:
                 self.assertIn("Hidden=true", f.read())
 
+    def refusal(self, enabled, configHome=None):
+        with self.assertRaises(PermissionError) as caught:
+            autostart.setEnabled(self.configHome if configHome is None else configHome, enabled)
+        return str(caught.exception)
+
     def testALinkIntoAnotherAccountsFolderIsRefusedAndLeftUnchanged(self):
         os.makedirs(os.path.dirname(self.path))
         original = "[Desktop Entry]\nType=Application\nName=Mouse Battery\nExec=logitech-mouse-battery\n"
@@ -162,19 +182,10 @@ class AutostartTests(unittest.TestCase):
             with open(target, "w") as f:
                 f.write(original)
             os.symlink(target, self.path)
-            realStat = os.stat
-
-            def otherOwnerFor(path, *args, **kwargs):
-                info = realStat(path, *args, **kwargs)
-                # the folder the link leads into belongs to another account, as /etc does to root
-                if (os.path.abspath(path) == other):
-                    fields = list(info[:10])
-                    fields[4] = os.getuid() + 1
-                    return os.stat_result(fields)
-                return info
-
-            with mock.patch.object(autostart.os, "stat", otherOwnerFor), self.assertRaises(PermissionError):
-                autostart.setEnabled(self.configHome, False)
+            # the folder the link leads into belongs to another account, as /etc does to root
+            self.owners[os.path.realpath(other)] = ACCOUNT + 1
+            message = self.refusal(False)
+            self.assertEqual(message, "[Errno 13] Permission denied, the folder belongs to uid " + str(ACCOUNT + 1) + ", not this account: '" + os.path.realpath(other) + "'")
             with open(target) as f:
                 self.assertEqual(f.read(), original)
 
@@ -182,38 +193,30 @@ class AutostartTests(unittest.TestCase):
         folder = os.path.dirname(self.path)
         with tempfile.TemporaryDirectory() as linked:
             os.symlink(linked, folder)
-            realLstat = os.lstat
-
-            def otherOwnerFor(path, *args, **kwargs):
-                info = realLstat(path, *args, **kwargs)
-                # the autostart folder is a link another account made, as a link to /etc/xdg/autostart would be
-                if (os.path.abspath(path) == folder):
-                    fields = list(info[:10])
-                    fields[4] = os.getuid() + 1
-                    return os.stat_result(fields)
-                return info
-
-            with mock.patch.object(autostart.os, "lstat", otherOwnerFor), self.assertRaises(PermissionError):
-                autostart.setEnabled(self.configHome, False)
+            # the autostart folder is a link another account made, as a link to /etc/xdg/autostart would be
+            self.owners[folder] = ACCOUNT + 1
+            message = self.refusal(False)
+            self.assertEqual(message, "[Errno 13] Permission denied, a link uid " + str(ACCOUNT + 1) + " made: '" + os.path.realpath(self.configHome) + "/autostart'")
             self.assertEqual(os.listdir(linked), [])
+
+    def testAnAutostartFolderLinkRootMadeIsFollowed(self):
+        folder = os.path.dirname(self.path)
+        with tempfile.TemporaryDirectory() as linked:
+            os.symlink(linked, folder)
+            # root made the autostart folder link into a folder this account owns, as it may make the config folder link
+            self.owners[folder] = 0
+            autostart.setEnabled(self.configHome, False)
+            with open(os.path.join(linked, autostart.FILE_NAME)) as f:
+                self.assertIn("Hidden=true", f.read())
 
     def testAConfigFolderLinkFromAnotherAccountIsRefused(self):
         with tempfile.TemporaryDirectory() as outer, tempfile.TemporaryDirectory() as linked:
             configHome = os.path.join(outer, "config")
             os.symlink(linked, configHome)
-            realLstat = os.lstat
-
-            def otherOwnerFor(path, *args, **kwargs):
-                info = realLstat(path, *args, **kwargs)
-                # the config folder itself is a link another account made, as a link from ~/.config to /etc/xdg would be
-                if (os.path.abspath(path) == configHome):
-                    fields = list(info[:10])
-                    fields[4] = os.getuid() + 1
-                    return os.stat_result(fields)
-                return info
-
-            with mock.patch.object(autostart.os, "lstat", otherOwnerFor), self.assertRaises(PermissionError):
-                autostart.setEnabled(configHome, False)
+            # the config folder itself is a link another account made, as a link from ~/.config to /etc/xdg would be
+            self.owners[configHome] = ACCOUNT + 1
+            message = self.refusal(False, configHome)
+            self.assertEqual(message, "[Errno 13] Permission denied, a link uid " + str(ACCOUNT + 1) + " made: '" + os.path.join(os.path.realpath(outer), "config") + "'")
             self.assertEqual(os.listdir(linked), [])
 
     def testAConfigFolderLinkFromAnotherAccountKeepsItsOverride(self):
@@ -224,38 +227,18 @@ class AutostartTests(unittest.TestCase):
             os.makedirs(os.path.dirname(target))
             with open(target, "w") as f:
                 f.write("[Desktop Entry]\nType=Application\nName=Mouse Battery\nHidden=true\n")
-            realLstat = os.lstat
-
-            def otherOwnerFor(path, *args, **kwargs):
-                info = realLstat(path, *args, **kwargs)
-                # the config folder is a link another account made, and the override at its end is that account's
-                if (os.path.abspath(path) == configHome):
-                    fields = list(info[:10])
-                    fields[4] = os.getuid() + 1
-                    return os.stat_result(fields)
-                return info
-
-            with mock.patch.object(autostart.os, "lstat", otherOwnerFor), self.assertRaises(PermissionError):
-                autostart.setEnabled(configHome, True)
+            # the config folder is a link another account made, and the override at its end is that account's
+            self.owners[configHome] = ACCOUNT + 1
+            self.refusal(True, configHome)
             self.assertTrue(os.path.exists(target))
 
     def testAConfigFolderLinkRootMadeIsFollowed(self):
         with tempfile.TemporaryDirectory() as outer, tempfile.TemporaryDirectory() as linked:
             configHome = os.path.join(outer, "config")
             os.symlink(linked, configHome)
-            realLstat = os.lstat
-
-            def rootOwnerFor(path, *args, **kwargs):
-                info = realLstat(path, *args, **kwargs)
-                # root made the config folder link, as a system setup script would
-                if (os.path.abspath(path) == configHome):
-                    fields = list(info[:10])
-                    fields[4] = 0
-                    return os.stat_result(fields)
-                return info
-
-            with mock.patch.object(autostart.os, "lstat", rootOwnerFor):
-                autostart.setEnabled(configHome, False)
+            # root made the config folder link, as a system setup script would
+            self.owners[configHome] = 0
+            autostart.setEnabled(configHome, False)
             with open(os.path.join(linked, "autostart", autostart.FILE_NAME)) as f:
                 self.assertIn("Hidden=true", f.read())
 
@@ -272,19 +255,10 @@ class AutostartTests(unittest.TestCase):
             self.assertFalse(os.path.exists(target))
 
     def testAConfigFolderAnotherAccountOwnsGetsNoAutostartFolder(self):
-        realStat = os.stat
-
-        def otherOwnerFor(path, *args, **kwargs):
-            info = realStat(path, *args, **kwargs)
-            # the config folder is another account's, as a user's ~/.config is for a run as root
-            if (os.path.abspath(path) == self.configHome):
-                fields = list(info[:10])
-                fields[4] = os.getuid() + 1
-                return os.stat_result(fields)
-            return info
-
-        with mock.patch.object(autostart.os, "stat", otherOwnerFor), self.assertRaises(PermissionError):
-            autostart.setEnabled(self.configHome, False)
+        # the config folder is another account's, as a user's ~/.config is for a run as root
+        self.owners[os.path.realpath(self.configHome)] = ACCOUNT + 1
+        message = self.refusal(False)
+        self.assertEqual(message, "[Errno 13] Permission denied, the folder belongs to uid " + str(ACCOUNT + 1) + ", not this account: '" + os.path.realpath(self.configHome) + "'")
         self.assertEqual(os.listdir(self.configHome), [])
 
     def testAnOverrideFileAnotherAccountOwnsIsLeftUnchanged(self):
@@ -292,39 +266,106 @@ class AutostartTests(unittest.TestCase):
         original = "[Desktop Entry]\nType=Application\nName=Mouse Battery\nExec=logitech-mouse-battery\n"
         with open(self.path, "w") as f:
             f.write(original)
-        realStat = os.stat
-
-        def otherOwnerFor(path, *args, **kwargs):
-            info = realStat(path, *args, **kwargs)
-            # only the override file is another account's, while its folder is this one's
-            if (os.path.abspath(path) == self.path):
-                fields = list(info[:10])
-                fields[4] = os.getuid() + 1
-                return os.stat_result(fields)
-            return info
-
-        with mock.patch.object(autostart.os, "stat", otherOwnerFor), self.assertRaises(PermissionError):
-            autostart.setEnabled(self.configHome, False)
+        # only the override file is another account's, while its folder is this one's
+        self.owners[os.path.realpath(self.path)] = ACCOUNT + 1
+        message = self.refusal(False)
+        self.assertEqual(message, "[Errno 13] Permission denied, the file belongs to uid " + str(ACCOUNT + 1) + ", not this account: '" + os.path.realpath(self.path) + "'")
         self.assertEqual(self.read(), original)
 
     def testAnOverrideFileAnotherAccountOwnsIsntDeleted(self):
         os.makedirs(os.path.dirname(self.path))
         with open(self.path, "w") as f:
             f.write("[Desktop Entry]\nType=Application\nName=Mouse Battery\nHidden=true\n")
-        realStat = os.stat
-
-        def otherOwnerFor(path, *args, **kwargs):
-            info = realStat(path, *args, **kwargs)
-            # only the override file is another account's, while its folder is this one's
-            if (os.path.abspath(path) == self.path):
-                fields = list(info[:10])
-                fields[4] = os.getuid() + 1
-                return os.stat_result(fields)
-            return info
-
-        with mock.patch.object(autostart.os, "stat", otherOwnerFor), self.assertRaises(PermissionError):
-            autostart.setEnabled(self.configHome, True)
+        # only the override file is another account's, while its folder is this one's
+        self.owners[os.path.realpath(self.path)] = ACCOUNT + 1
+        message = self.refusal(True)
+        self.assertEqual(message, "[Errno 13] Permission denied, the file belongs to uid " + str(ACCOUNT + 1) + ", not this account: '" + os.path.realpath(self.path) + "'")
         self.assertTrue(os.path.exists(self.path))
+
+    def swapFolder(self, victim):
+        # another account renames the autostart folder and puts a link in its place once the checks are done, as a link to /etc/xdg/autostart would be
+        folder = os.path.dirname(self.path)
+        moved = os.path.join(self.configHome, "moved")
+        if (not os.path.islink(folder)):
+            os.rename(folder, moved)
+            os.symlink(victim, folder)
+        return moved
+
+    def testAFolderSwappedAfterTheChecksDoesntTakeTheWrite(self):
+        os.makedirs(os.path.dirname(self.path))
+        with open(self.path, "w") as f:
+            f.write("[Desktop Entry]\nType=Application\nName=Mouse Battery\nExec=logitech-mouse-battery\n")
+        realOpen = os.open
+        with tempfile.TemporaryDirectory() as victim:
+
+            def swapThenOpen(path, *args, **kwargs):
+                if (str(path).endswith(".new")):
+                    self.swapFolder(victim)
+                return realOpen(path, *args, **kwargs)
+
+            with mock.patch.object(autostart.os, "open", swapThenOpen):
+                autostart.setEnabled(self.configHome, False)
+            self.assertEqual(os.listdir(victim), [])
+        with open(os.path.join(self.configHome, "moved", autostart.FILE_NAME)) as f:
+            self.assertIn("Hidden=true", f.read())
+
+    def testAFolderSwappedAfterTheChecksDoesntTakeTheRemoval(self):
+        os.makedirs(os.path.dirname(self.path))
+        with open(self.path, "w") as f:
+            f.write("[Desktop Entry]\nType=Application\nName=Mouse Battery\nHidden=true\n")
+        with tempfile.TemporaryDirectory() as victim:
+            # the system's own entry sits in the folder the link leads to
+            kept = os.path.join(victim, autostart.FILE_NAME)
+            with open(kept, "w") as f:
+                f.write("[Desktop Entry]\nType=Application\nName=Mouse Battery\nExec=logitech-mouse-battery\n")
+            realRemove = os.remove
+            realUnlink = os.unlink
+
+            def swapThenRemove(path, *args, **kwargs):
+                self.swapFolder(victim)
+                return realRemove(path, *args, **kwargs)
+
+            def swapThenUnlink(path, *args, **kwargs):
+                self.swapFolder(victim)
+                return realUnlink(path, *args, **kwargs)
+
+            with mock.patch.object(autostart.os, "remove", swapThenRemove), mock.patch.object(autostart.os, "unlink", swapThenUnlink):
+                autostart.setEnabled(self.configHome, True)
+            self.assertTrue(os.path.exists(kept))
+        self.assertEqual(os.listdir(os.path.join(self.configHome, "moved")), [])
+
+    def stuckAfter(self, call):
+        thread = threading.Thread(target=call, daemon=True)
+        thread.start()
+        thread.join(2)
+        stuck = thread.is_alive()
+        if (stuck):
+            # a writer coming and going lets a read stuck on the FIFO finish, so the test fails instead of hanging the suite
+            os.close(os.open(self.path, os.O_WRONLY | os.O_NONBLOCK))
+            thread.join(2)
+        return stuck
+
+    def testAFifoAtTheOverrideDoesntHangTheMenu(self):
+        os.makedirs(os.path.dirname(self.path))
+        os.mkfifo(self.path)
+        result = []
+        self.assertFalse(self.stuckAfter(lambda: result.append(autostart.isEnabled(self.configHome))))
+        self.assertEqual(result, [True])
+
+    def testAFifoAtTheOverrideIsRefusedAndLeftInPlace(self):
+        os.makedirs(os.path.dirname(self.path))
+        os.mkfifo(self.path)
+        errors = []
+
+        def turnOff():
+            try:
+                autostart.setEnabled(self.configHome, False)
+            except OSError as error:
+                errors.append(str(error))
+
+        self.assertFalse(self.stuckAfter(turnOff))
+        self.assertEqual(errors, ["[Errno 22] Not a regular file: '" + os.path.realpath(self.path) + "'"])
+        self.assertTrue(stat.S_ISFIFO(os.lstat(self.path).st_mode))
 
     def testALinkAtTheTemporaryNameIsntWrittenThrough(self):
         os.makedirs(os.path.dirname(self.path))
@@ -345,8 +386,8 @@ class AutostartTests(unittest.TestCase):
         with open(self.path, "w") as f:
             f.write(original)
         os.chmod(self.path, 0o400)
-        with self.assertRaises(PermissionError):
-            autostart.setEnabled(self.configHome, False)
+        message = self.refusal(False)
+        self.assertEqual(message, "[Errno 13] Permission denied, the file is read only: '" + os.path.realpath(self.path) + "'")
         self.assertEqual(self.read(), original)
         self.assertEqual(os.listdir(os.path.dirname(self.path)), [autostart.FILE_NAME])
 
