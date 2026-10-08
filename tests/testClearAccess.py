@@ -1,6 +1,7 @@
 import errno
 import io
 import os
+import runpy
 import shutil
 import stat
 import subprocess
@@ -237,6 +238,29 @@ class ClearAccessTests(unittest.TestCase):
         path, old, result = self.swapAfterCheck(2)
         self.assertEqual(result, (0, "Closed access to " + path + "\n"))
         self.assertEqual((len(self.owners), self.mode(path), stat.S_IMODE(self.realFstat(old).st_mode)), (1, 0o666, 0o660))
+
+    def runMainBlock(self, *args):
+        script = os.path.join(SRC, "clearAccess.py")
+        seen = []
+
+        # the script's main block calls a main of its own, so the profile hook reads the flag off that call
+        def watch(frame, event, arg):
+            if (event == "call" and frame.f_code.co_name == "main" and frame.f_code.co_filename == script):
+                seen.append(frame.f_locals["settled"])
+
+        # no node is found, so the run never reaches the host's real devices
+        with mock.patch.object(sys, "argv", [script, *args]), mock.patch.object(clearAccess.hidpp, "findHidppNodes", return_value=[]):
+            sys.setprofile(watch)
+            try:
+                with self.assertRaises(SystemExit) as caught:
+                    runpy.run_path(script, run_name="__main__")
+            finally:
+                sys.setprofile(None)
+        return (caught.exception.code, seen)
+
+    def testTheSettledArgumentReachesMain(self):
+        self.assertEqual(self.runMainBlock("--settled"), (0, [True]))
+        self.assertEqual(self.runMainBlock(), (0, [False]))
 
     def testItImportsInIsolatedModeWithoutRunning(self):
         # -I leaves the script's folder off sys.path, so the module has to put it back for its hidpp import
