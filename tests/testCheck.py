@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import signal
 import time
 import unittest
 from contextlib import redirect_stdout
@@ -117,6 +118,13 @@ class CheckTests(unittest.TestCase):
     def testOneMouseOnBothPathsShowsWhereEachLineCameFrom(self):
         with self.withUPower(80, "02bc524c", NAME):
             self.assertEqual(self.runCheck(FakeServiceBus(stateText([MOUSE]))), (0, NAME + " (" + NODE + ")\n  81%, discharging\n" + NAME + " (UPower)\n  80%, discharging\n"))
+
+    def testCtrlCEndsTheCheckInsteadOfWaitingOnTheBlockingCall(self):
+        previous = signal.getsignal(signal.SIGINT)
+        self.addCleanup(signal.signal, signal.SIGINT, previous)
+        signal.signal(signal.SIGINT, signal.default_int_handler)
+        self.runCheck(FakeServiceBus(stateText(nodes=())))
+        self.assertEqual(signal.getsignal(signal.SIGINT), signal.SIG_DFL)
 
     def testNoUPowerOnTheBusPrintsNothingAboutIt(self):
         with mock.patch.object(upower, "listMice", return_value=([], ["org.freedesktop.DBus.Error.ServiceUnknown"])):

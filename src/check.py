@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import signal
 import sys
 import time
 
@@ -103,6 +104,7 @@ def checkUPower(bus):
 
 
 def main(bus=None):
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
     # QtDBus wants an application object before it talks to the system bus
     app = QCoreApplication.instance() or QCoreApplication(sys.argv[:1])
     if (bus is None):
