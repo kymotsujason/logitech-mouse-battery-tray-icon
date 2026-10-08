@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# runs inside archlinux:latest with the repo at /repo: installs the 1.0.1 package in $1, starts its tray against a fake
-# tray host on a private bus, upgrades to the package in $2 with pacman, and checks the same process restarts into
-# 1.1.0. The tooltip tells the versions apart, since only 1.1.0 reads through the service, which the private bus lacks
+# runs inside archlinux:latest with the repo at /repo: installs the older package in $1, starts its tray against a fake
+# tray host on a private bus, upgrades to the package in $2, version $3, with pacman, and checks the same process restarts
+# into $3. Only 1.1.1 and later print their version when the tray starts, so that line in the tray's output tells the
+# versions apart, and the tooltip shows the new tray reads through the service, which the private bus lacks
 set -u
 
+newVersion=$3
 failures=0
 
 check() {
@@ -21,11 +23,12 @@ if ! pacman -Syu --noconfirm --needed python python-pyqt6 python-gobject dbus xo
     exit 1
 fi
 if ! pacman -U --noconfirm "$1" > /tmp/install1.log 2>&1; then
-    echo "FAIL 1.0.1 installs"
+    echo "FAIL the older package installs"
     cat /tmp/install1.log
     exit 1
 fi
-echo "installed $(logitech-mouse-battery --version)"
+oldVersion=$(logitech-mouse-battery --version)
+echo "installed $oldVersion"
 
 Xvfb :99 -nolisten tcp > /tmp/xvfb.log 2>&1 &
 sleep 1
@@ -65,6 +68,10 @@ state() {
     fi
 }
 
+newStarts() {
+    grep -cxF "Mouse Battery $newVersion started" /tmp/tray.log
+}
+
 tooltip() {
     local item
     item=$(grep " registered " /tmp/watcher.log | tail -1 | awk '{print $4}')
@@ -78,14 +85,15 @@ done
 sleep 2
 before=$(tooltip)
 echo "before upgrade: $(registered) registered, pid $trayPid $(state), tooltip: $before"
-check "1.0.1 doesn't show the text only 1.1.0 has" "$( [ "$before" != "Can't reach the battery service." ] && echo yes)" "yes"
+check "the $oldVersion tray registered" "$(registered)" "1"
+check "the $oldVersion tray didn't print $newVersion's start" "$(newStarts)" "0"
 
 if ! pacman -U --noconfirm "$2" > /tmp/install2.log 2>&1; then
-    echo "FAIL the built package installs over 1.0.1"
+    echo "FAIL the built package installs over $oldVersion"
     cat /tmp/install2.log
     exit 1
 fi
-echo "installed $(logitech-mouse-battery --version)"
+check "pacman installed $newVersion" "$(logitech-mouse-battery --version)" "$newVersion"
 
 for i in $(seq 1 30); do
     [ "$(registered)" -ge 2 ] && break
@@ -94,8 +102,9 @@ done
 sleep 2
 check "the tray registered again after the upgrade" "$( [ "$(registered)" -ge 2 ] && echo yes)" "yes"
 check "the same tray process kept running" "$(state)" "running"
-check "the tray now shows a text only 1.1.0 has" "$(tooltip)" "Can't reach the battery service."
-check "the upgrade made the service's user" "$(getent passwd logitech-mouse-battery > /dev/null && echo yes)" "yes"
+check "the same process printed $newVersion's start once" "$(newStarts)" "1"
+check "the tray now reads through the service" "$(tooltip)" "Can't reach the battery service."
+check "the service's user exists after the upgrade" "$(getent passwd logitech-mouse-battery > /dev/null && echo yes)" "yes"
 check "afterInstall.sh skipped in the container and said so" "$(grep -c "Mouse Battery: skipped setting up the service, since this system isn't booted with systemd" /tmp/install2.log)" "1"
 
 if [ "$failures" -gt 0 ]; then

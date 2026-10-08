@@ -378,10 +378,17 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("run: tests/booted/checkService.sh\n", release)
         self.assertLess(release.index("tests/booted/checkService.sh"), release.index("gh release create"))
 
+    def testTheReleaseChecksTheServiceUpgradeBeforePublishing(self):
+        release = self.releaseJob()
+        self.assertIn("run: tests/booted/checkServiceUpgrade.sh\n", release)
+        self.assertLess(release.index("tests/booted/checkService.sh"), release.index("tests/booted/checkServiceUpgrade.sh"))
+        self.assertLess(release.index("tests/booted/checkServiceUpgrade.sh"), release.index("gh release create"))
+
     def testCiRunsTheLateTrayCheckAndEveryBuild(self):
         ci = self.read("ci.yml")
-        for script in ("tests/live/checkLateTray.sh", "packaging/tarball.sh", "packaging/build.sh", "packaging/buildArch.sh", "tests/containers/testPackages.sh", "tests/containers/testUpgrade.sh", "tests/booted/checkService.sh"):
+        for script in ("tests/live/checkLateTray.sh", "packaging/tarball.sh", "packaging/build.sh", "packaging/buildArch.sh", "tests/containers/testPackages.sh", "tests/containers/testUpgrade.sh", "tests/booted/checkService.sh", "tests/booted/checkServiceUpgrade.sh"):
             self.assertIn("run: " + script + "\n", ci)
+        self.assertLess(ci.index("tests/booted/checkService.sh"), ci.index("tests/booted/checkServiceUpgrade.sh"))
 
     def testTheBuildImagesArePinnedByDigest(self):
         for script in ("build.sh", "buildArch.sh"):

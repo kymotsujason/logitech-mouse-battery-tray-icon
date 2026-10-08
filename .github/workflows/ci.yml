@@ -31,7 +31,9 @@ jobs:
         run: packaging/buildArch.sh
       - name: Test each package in a clean container
         run: tests/containers/testPackages.sh
-      - name: Upgrade a running 1.0.1 tray in a container
+      - name: Upgrade a running 1.0.1 and 1.1.0 tray in a container
         run: tests/containers/testUpgrade.sh
       - name: Check the packaged service on this booted runner
         run: tests/booted/checkService.sh
+      - name: Upgrade a running 1.1.0 service on this booted runner
+        run: tests/booted/checkServiceUpgrade.sh
