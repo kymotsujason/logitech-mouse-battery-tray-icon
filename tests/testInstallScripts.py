@@ -20,7 +20,7 @@ if [ "$name" = "systemd-detect-virt" ]; then
     exit 1
 fi
 case " $STUB_FAIL " in
-    *" $name "*) exit 1 ;;
+    *" $name "*|*" $name:$1 "*) exit 1 ;;
 esac
 exit 0
 """
@@ -75,6 +75,12 @@ class InstallScriptTests(unittest.TestCase):
         self.assertEqual(self.runScript("afterInstall.sh", fail="udevadm")[::2], (0, CHECKS + UNSETTLED_STEPS))
         os.remove(self.log)
         self.assertEqual(self.runScript("afterInstall.sh", fail="systemctl")[::2], (0, CHECKS + STEPS))
+
+    def testClearAccessIsntToldUdevSettledWhenTheReloadOrTheTriggerFailed(self):
+        for fail in ("udevadm:control", "udevadm:trigger"):
+            if (os.path.exists(self.log)):
+                os.remove(self.log)
+            self.assertEqual(self.runScript("afterInstall.sh", fail=fail)[::2], (0, CHECKS + UNSETTLED_STEPS), fail)
 
     def testAResetFailedThatFailsIsntReported(self):
         code, output, calls = self.runScript("afterInstall.sh", fail="systemctl")

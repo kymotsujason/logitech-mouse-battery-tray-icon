@@ -32,10 +32,11 @@ clearFailedStarts() {
 step "reloading systemd" systemctl daemon-reload
 # the trigger below can start the service, so this waits until the bus holds the new policy
 step "reloading the system bus" systemctl reload dbus.service
-step "reloading the udev rules" udevadm control --reload
-step "applying the rule to plugged in receivers and cables" udevadm trigger --subsystem-match=hidraw --action=change
-# settle waits on the whole queue, so a stuck event elsewhere holds the transaction only this long
+# a reload or a trigger that fails leaves 1.0.x's rule behind the tag, so clearAccess can't trust it then either
 SETTLED=--settled
+step "reloading the udev rules" udevadm control --reload || SETTLED=
+step "applying the rule to plugged in receivers and cables" udevadm trigger --subsystem-match=hidraw --action=change || SETTLED=
+# settle waits on the whole queue, so a stuck event elsewhere holds the transaction only this long
 step "waiting for udev" udevadm settle --timeout=30 || SETTLED=
 # until the trigger settles a node can still carry the old uaccess tag, which would put its ACL back, and clearAccess
 # trusts the tag only once udev has settled
