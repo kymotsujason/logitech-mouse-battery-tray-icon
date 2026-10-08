@@ -90,6 +90,7 @@ class StateTests(unittest.TestCase):
 
     def testABadStampOrListDecodesToNone(self):
         self.assertIsNone(serviceState.decodeState(exampleWith(lambda fields: fields["mice"][0].update(lastRead="soon"))))
+        self.assertIsNone(serviceState.decodeState(exampleWith(lambda fields: fields["mice"][0].update(wokeAt="soon"))))
         self.assertIsNone(serviceState.decodeState(EXAMPLE.replace("1790000000.0", "NaN")))
         self.assertIsNone(serviceState.decodeState(exampleWith(lambda fields: fields.update(nodes="/dev/hidraw4"))))
 
@@ -99,10 +100,10 @@ class StateTests(unittest.TestCase):
             self.assertIsNone(serviceState.decodeState(exampleWith(lambda fields: fields["mice"][0].update({key: value}))), (key, value))
 
     def testAFlagOrPathOfTheWrongTypeDecodesToNone(self):
-        stateCases = [("busy", "false"), ("busy", 0), ("searching", None), ("searching", 1), ("nodes", [4]), ("nodes", [None]), ("deniedPaths", [["/dev/hidraw9"]])]
+        stateCases = [("busy", "false"), ("busy", 0), ("searching", None), ("searching", 1), ("nodes", [4]), ("nodes", [None]), ("deniedPaths", [["/dev/hidraw9"]]), ("mice", {}), ("mice", [5])]
         for key, value in stateCases:
             self.assertIsNone(serviceState.decodeState(exampleWith(lambda fields: fields.update({key: value}))), (key, value))
-        entryCases = [("pathKey", "false"), ("pathKey", 0), ("pathKey", None), ("asleep", "false"), ("asleep", 1), ("name", 5), ("name", ["PRO X3"])]
+        entryCases = [("pathKey", "false"), ("pathKey", 0), ("pathKey", None), ("asleep", "false"), ("asleep", 1), ("name", 5), ("name", ["PRO X3"]), ("key", 5), ("source", None)]
         for key, value in entryCases:
             self.assertIsNone(serviceState.decodeState(exampleWith(lambda fields: fields["mice"][0].update({key: value}))), (key, value))
 
