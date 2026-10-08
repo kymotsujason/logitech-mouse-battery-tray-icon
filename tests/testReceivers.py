@@ -494,15 +494,22 @@ class ReceiverListTests(unittest.TestCase):
     def testAWakeSignReadsNowAndOnceMore(self):
         receiver = self.nodes.add(RECEIVER, mouseHandler())
         self.mice.start()
-        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"]))
-        receiver.handler = silent
-        self.mice.readAll()
-        self.assertTrue(waitUntil(lambda: self.mouse().asleep))
-        receiver.send(OTHER_REPORT)
-        QTest.qWait(150)
-        self.assertTrue(self.mouse().asleep)
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"] and not self.mice.isBusy()))
+        self.putToSleep(receiver)
+        self.wakeOnceAndRetry(receiver, self.mouse())
+        self.assertFalse(self.mouse().asleep)
+
+    def wakeOnceAndRetry(self, receiver, mouse):
+        before = batteryReads(receiver)
+        # a retry that can't fire on its own, so a loaded runner can't spend it on the silent handler, and the test fires it once the handler answers
+        with mock.patch.object(receivers, "WAKE_RETRY_MS", 60000):
+            receiver.send(OTHER_REPORT)
+            self.assertTrue(waitUntil(lambda: batteryReads(receiver) > before and not self.mice.nodes[RECEIVER].pendingReads))
+        self.assertTrue(mouse.asleep)
+        self.assertTrue(mouse.wakeTimer is not None and mouse.wakeTimer.isActive())
         receiver.handler = mouseHandler()
-        self.assertTrue(waitUntil(lambda: not self.mouse().asleep, timeout=1.0))
+        mouse.wakeTimer.start(0)
+        waitUntil(lambda: not mouse.asleep)
 
     def testADevChangeFindsANewNodeAndDropsAGoneOne(self):
         self.mice.start()
@@ -576,10 +583,12 @@ class ReceiverListTests(unittest.TestCase):
         self.mice.readAll()
         self.assertTrue(waitUntil(lambda: self.mouse().asleep and not self.mice.nodes[RECEIVER].pendingReads))
         before = batteryReads(receiver)
-        for i in range(10):
-            receiver.send(OTHER_REPORT)
-        # less than the patched WAKE_RETRY_MS of 300, so the retry hasn't run yet
-        QTest.qWait(150)
+        # a retry that can't fire during the test, so a slow runner can't count it as a read the signs caused
+        with mock.patch.object(receivers, "WAKE_RETRY_MS", 60000):
+            for i in range(10):
+                receiver.send(OTHER_REPORT)
+            self.assertTrue(waitUntil(lambda: batteryReads(receiver) > before and not self.mice.nodes[RECEIVER].pendingReads))
+            QTest.qWait(300)
         self.assertEqual(batteryReads(receiver) - before, 1)
 
     def testABatteryEventUpdatesTheReading(self):
@@ -657,16 +666,9 @@ class ReceiverListTests(unittest.TestCase):
             self.assertTrue(waitUntil(lambda: self.mice.nodes.get(RECEIVER) not in (None, lostState) and self.keys() == ["02bc524c"], timeout=2.0))
             QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
             found = self.mouse()
-            receiver.handler = silent
-            self.mice.readAll()
-            self.assertTrue(waitUntil(lambda: found.asleep))
-            receiver.send(OTHER_REPORT)
-            QTest.qWait(150)
-            self.assertTrue(found.asleep)
-            receiver.handler = mouseHandler()
-            woke = waitUntil(lambda: not found.asleep, timeout=1.0)
-        self.assertEqual(hooked, [])
-        self.assertTrue(woke)
+            self.putToSleep(receiver)
+            self.wakeOnceAndRetry(receiver, found)
+        self.assertEqual((hooked, found.asleep), ([], False))
 
     def testANodeThatFailsToOpenIsTriedAgain(self):
         self.nodes.add(RECEIVER, mouseHandler())
@@ -990,25 +992,29 @@ class ReceiverListTests(unittest.TestCase):
         self.mice.start()
         self.assertTrue(waitUntil(lambda: not self.mice.nodes[RECEIVER].searching))
         state = self.mice.nodes[RECEIVER]
-        self.mice.requestSearch(RECEIVER)
-        # a search that outlasts the retry wait would otherwise get another one queued behind it every time
-        state.retryTimer.start(0)
-        QTest.qWait(30)
+        # a ping wait far past the check below, so the search is still running when it looks
+        with mock.patch.object(hidpp, "PING_TIMEOUT", 3.0):
+            self.mice.requestSearch(RECEIVER)
+            # a search that outlasts the retry wait would otherwise get another one queued behind it every time
+            state.retryTimer.start(0)
+            QTest.qWait(30)
         self.assertEqual((state.searching, state.searchAgain), (True, False))
 
     def testAReportDuringARetrySearchLongerThanTheWaitStillRidesOnTheRetry(self):
-        with mock.patch.object(receivers, "WAKE_RETRY_MS", 100), mock.patch.object(hidpp, "PING_TIMEOUT", 0.5):
+        with mock.patch.object(receivers, "WAKE_RETRY_MS", 100):
             self.nodes.add(RECEIVER, silent)
             self.mice.start()
             self.assertTrue(waitUntil(lambda: not self.mice.nodes[RECEIVER].searching))
             state = self.mice.nodes[RECEIVER]
             state.retryTimer.stop()
-            state.retryTimer.start(0)
-            self.assertTrue(waitUntil(lambda: state.searching))
-            # past the retry wait, while the retry's own search still runs
-            QTest.qWait(200)
-            self.assertTrue(state.searching)
-            self.mice.onReport(state, OTHER_REPORT)
+            # the retry's ping wait runs far past the check below, so a loaded runner still finds it searching
+            with mock.patch.object(hidpp, "PING_TIMEOUT", 3.0):
+                state.retryTimer.start(0)
+                self.assertTrue(waitUntil(lambda: state.searching))
+                # past the retry wait, while the retry's own search still runs
+                QTest.qWait(200)
+                self.assertTrue(state.searching)
+                self.mice.onReport(state, OTHER_REPORT)
         self.assertFalse(state.searchAgain)
 
     def testASearchThatRaisesWithASlotWaitingArmsTheRetry(self):
