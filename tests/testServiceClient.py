@@ -379,18 +379,49 @@ class ServiceWatcherTests(unittest.TestCase):
         with open(self.startsFile) as f:
             return f.read().splitlines()
 
-    def testTheRetryBackoffReachesAServiceThatStartsOnTheThirdTry(self):
+    def testARetryDoesntStartAServiceThatFailedToStart(self):
         self.startActivatableBus()
         self.startWatcher()
+        self.assertTrue(waitUntil(lambda: self.states.count(None) >= 4, timeout=15.0))
+        # systemd restarts a failed start on its own up to the unit's limit, and a retry that started it again would go on past that limit for as long as a tray runs
+        self.assertEqual(len(self.starts()), 1)
+        lines = self.errorLines()
+        self.assertEqual(len(lines), 2, lines)
+        self.assertTrue(lines[0].startswith("Couldn't reach the battery service: org.freedesktop.DBus.Error.Spawn."), lines[0])
+        self.assertTrue(lines[1].startswith("Couldn't reach the battery service: org.freedesktop.DBus.Error.NameHasNoOwner"), lines[1])
+
+    def readUntilTheThirdStart(self):
+        self.startWatcher()
+        self.assertTrue(waitUntil(lambda: None in self.states, timeout=15.0))
+        self.watcher.readAll()
+        # the second start writes its pid before it fails, and a read sent before the bus sees it fail joins that start instead of making a third
+        self.assertTrue(waitUntil(lambda: self.watcher.readProblems, timeout=15.0))
+        self.assertEqual(len(self.starts()), 2)
+        self.watcher.readAll()
         self.assertTrue(waitUntil(lambda: self.goodStates(), timeout=15.0))
+
+    def testAReadStartsAServiceThatFailedToStartAndTheTrayFollowsIt(self):
+        self.startActivatableBus()
+        self.readUntilTheThirdStart()
         self.assertEqual(len(self.starts()), 3)
-        self.assertEqual(self.states[:2], [None, None])
         self.assertEqual(self.goodStates()[0], serviceState.decodeState(STATE))
+
+    def testARefusedReadAllWaitingWhenTheServiceGoesAwayIsDropped(self):
+        self.privateBus = PrivateBus()
+        self.startFake()
+        self.startWatcher()
+        self.assertTrue(waitUntil(lambda: self.goodStates()))
+        self.setAnswer(serviceState.READ_ALL_LIMITED)
+        self.watcher.readAll()
+        self.assertTrue(waitUntil(self.watcher.readRetryTimer.isActive))
+        self.stopFake()
+        self.assertTrue(waitUntil(lambda: self.states[-1] is None))
+        # the read it waited for would start the stopped service again through activation
+        self.assertFalse(self.watcher.readRetryTimer.isActive())
 
     def testTheNextReadStartsAServiceThatStoppedCleanly(self):
         self.startActivatableBus()
-        self.startWatcher()
-        self.assertTrue(waitUntil(lambda: self.goodStates(), timeout=15.0))
+        self.readUntilTheThirdStart()
         # systemd stops the service with SIGTERM, and Restart=on-failure leaves a clean stop down
         os.kill(int(self.starts()[-1]), signal.SIGTERM)
         self.assertTrue(waitUntil(lambda: self.states[-1] is None))

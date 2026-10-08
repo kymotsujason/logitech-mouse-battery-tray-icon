@@ -8,6 +8,8 @@ from exceptionHooks import printLine
 CALL_TIMEOUT_MS = 25 * 1000
 RETRY_MS = 5 * 1000
 RETRY_MAX_MS = 60 * 1000
+# a retry doesn't start the service, so its NameHasNoOwner says the same as the first call's ServiceUnknown
+ABSENT_ERRORS = ("org.freedesktop.DBus.Error.ServiceUnknown", "org.freedesktop.DBus.Error.NameHasNoOwner")
 
 
 def stateFrom(message):
@@ -42,19 +44,21 @@ class ServiceWatcher(QObject):
         self.bus.connect(serviceState.SERVICE_NAME, serviceState.OBJECT_PATH, serviceState.INTERFACE, "StateChanged", self.onStateChanged)
         self.ownerWatcher = QDBusServiceWatcher(serviceState.SERVICE_NAME, self.bus, QDBusServiceWatcher.WatchModeFlag.WatchForOwnerChange, self)
         self.ownerWatcher.serviceOwnerChanged.connect(self.onOwnerChanged)
-        self.getState()
+        self.getState(True)
 
     def stop(self):
         self.retryTimer.stop()
         self.readRetryTimer.stop()
 
-    def callService(self, member, replySlot, errorSlot):
+    def callService(self, member, replySlot, errorSlot, activate=True):
         message = QDBusMessage.createMethodCall(serviceState.SERVICE_NAME, serviceState.OBJECT_PATH, serviceState.INTERFACE, member)
+        message.setAutoStartService(activate)
         return self.bus.callWithCallback(message, replySlot, errorSlot, CALL_TIMEOUT_MS)
 
-    def getState(self):
+    def getState(self, activate=False):
+        # only the first GetState starts the service, since systemd already restarts a failed start up to the unit's limit, and the owner watch asks again once it's up
         # Qt returns False without calling either slot when the connection is down
-        if (not self.callService("GetState", self.onReply, self.onError)):
+        if (not self.callService("GetState", self.onReply, self.onError, activate)):
             self.reportProblem("noConnection", "Couldn't reach the battery service: the system bus connection is down")
             self.fail()
 
@@ -93,7 +97,7 @@ class ServiceWatcher(QObject):
 
     @pyqtSlot(QDBusError, QDBusMessage)
     def onError(self, error, message):
-        self.reportProblem(error.name(), "Couldn't reach the battery service: " + error.name() + ": " + error.message())
+        self.reportProblem("absent" if error.name() in ABSENT_ERRORS else error.name(), "Couldn't reach the battery service: " + error.name() + ": " + error.message())
         self.fail()
 
     @pyqtSlot(QDBusMessage)
@@ -125,6 +129,8 @@ class ServiceWatcher(QObject):
 
     def onOwnerChanged(self, name, oldOwner, newOwner):
         if (not newOwner):
+            # a read waiting out the refill would start the stopped service again through activation
+            self.readRetryTimer.stop()
             self.reportProblem("gone", "The battery service went away")
             self.stateChanged.emit(None)
             return
