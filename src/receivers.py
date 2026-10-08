@@ -460,7 +460,13 @@ class ReceiverList(QObject):
         try:
             followUp = state.followUp
             state.followUp = False
-            state.skipped |= set(result.skipped) - state.noticedSlots
+            skipped = set(result.skipped) - state.noticedSlots
+            # a keyboard paired into a known mouse's slot would otherwise be read with the mouse's battery feature, as an identify that skips the slot already handles
+            for slot in skipped:
+                mouse = self.findByNode(state.path, slot)
+                if (mouse is not None):
+                    self.removeMouse(mouse)
+            state.skipped |= skipped
             for found in result.mice:
                 self.registerFound(state, found, queuedAt=queuedAt)
             retry = False

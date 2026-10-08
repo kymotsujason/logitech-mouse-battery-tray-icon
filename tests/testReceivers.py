@@ -384,6 +384,16 @@ class ReceiverListTests(unittest.TestCase):
         self.mice.onSearched(state, hidpp.SearchResult((), frozenset({1}), frozenset()), 0.0)
         self.assertFalse(state.retryTimer.isActive())
 
+    def testASearchThatSkipsAKnownMousesSlotDropsTheMouse(self):
+        receiver = self.nodes.add(RECEIVER, mouseHandler())
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"] and not self.mice.isBusy()))
+        # a keyboard paired into the mouse's slot, and a search sees it before any identify does
+        receiver.handler = mouseHandler(kind=0)
+        self.mice.requestSearch(RECEIVER)
+        self.assertTrue(waitUntil(lambda: not self.mice.isBusy()))
+        self.assertEqual((self.keys(), self.mice.nodes[RECEIVER].skipped), ([], {1}))
+
     def testReadingAnAsleepMouseWakesIt(self):
         receiver = self.nodes.add(RECEIVER, mouseHandler())
         self.mice.start()
