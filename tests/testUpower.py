@@ -317,6 +317,33 @@ class RetryTests(unittest.TestCase):
                 intervals.append(watcher.retryTimer.interval())
         self.assertEqual(intervals, [1000, 2000, 4000, 4000])
 
+    def backOffThenList(self, retryPaths):
+        failing = [True]
+
+        def answer(message):
+            if (failing[0]):
+                return message.createErrorReply("org.freedesktop.DBus.Error.NoReply", "failed on purpose")
+            return message.createReply([[]])
+
+        with mock.patch.object(upower, "RETRY_MS", 1000), mock.patch.object(upower, "RETRY_MAX_MS", 8000):
+            bus, watcher = self.makeWatcher(answer)
+            for i in range(2):
+                watcher.retryTimer.stop()
+                watcher.listDevices()
+                self.assertTrue(waitFor(lambda: watcher.retryTimer.isActive()))
+            watcher.retryTimer.stop()
+            watcher.retryPaths |= retryPaths
+            failing[0] = False
+            watcher.listDevices()
+            self.assertTrue(waitFor(lambda: not watcher.enumerateDue))
+        return watcher.retryMs
+
+    def testAListingThatGoesThroughStartsTheBackoffOver(self):
+        self.assertEqual(self.backOffThenList(set()), 1000)
+
+    def testAListingThatGoesThroughKeepsTheBackoffOfADeviceStillFailing(self):
+        self.assertEqual(self.backOffThenList({PATH}), 4000)
+
     def testAnOwnerChangeCancelsEveryRetry(self):
         bus, watcher = self.makeWatcher(failWith("org.freedesktop.DBus.Error.NoReply"))
         watcher.refresh(PATH)

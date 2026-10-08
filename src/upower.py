@@ -190,6 +190,9 @@ class UPowerWatcher(QObject):
                 self.enumerateDue = False
             return
         self.enumerateDue = False
+        # a device still failing keeps its backoff, which its own answer starts over once it goes through
+        if (not self.retryPaths):
+            self.retryMs = RETRY_MS
         for path in paths:
             self.refresh(path)
 
