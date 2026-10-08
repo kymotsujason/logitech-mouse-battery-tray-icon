@@ -1295,9 +1295,13 @@ class ReceiverListTests(unittest.TestCase):
         worker = self.mice.nodes[RECEIVER].worker
         with mock.patch.object(hidpp, "findHidppNodes", side_effect=OSError(errno.EMFILE, "Too many open files")):
             self.mice.onLost(self.mice.nodes[RECEIVER], OSError(errno.EIO, "Input/output error"))
-        self.assertTrue(waitUntil(lambda: not worker.is_alive()))
-        self.assertEqual((RECEIVER in self.mice.nodes, self.mice.denied, self.keys()), (False, {RECEIVER}, []))
-        self.assertTrue(self.mice.deniedTimer.isActive())
+            self.assertTrue(waitUntil(lambda: not worker.is_alive()))
+            self.assertEqual((RECEIVER in self.mice.nodes, self.mice.denied, self.keys()), (False, {RECEIVER}, []))
+            self.assertTrue(self.mice.deniedTimer.isActive())
+            self.mice.deniedTimer.stop()
+            self.mice.retryDenied()
+        # the loss lists the nodes the way the scan and the denied retry do, so the run of failures prints once from whichever came first
+        self.assertEqual(self.errors.getvalue(), "Opened " + RECEIVER + "\nCouldn't list HID++ nodes: EMFILE\nLost " + RECEIVER + ": EIO\n")
 
     def testADeniedRetryWhoseListingFailsOpensNothingAndComesBack(self):
         self.nodes.deny(RECEIVER)

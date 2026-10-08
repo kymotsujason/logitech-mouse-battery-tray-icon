@@ -579,11 +579,9 @@ class ReceiverList(QObject):
             self.forgetErrors(path)
             self.deniedRetryMs = DENIED_RETRY_MS
         # a node discovery no longer lists was unplugged, which reads as an I/O error just like a failing one
-        try:
-            listed = path in hidpp.findHidppNodes()
-        except OSError:
-            # a listing that fails, such as one out of fds, can't say the node was unplugged, so it's closed and retried like a failing one
-            listed = True
+        paths = self.listNodes()
+        # a listing that fails, such as one out of fds, can't say the node was unplugged, so it's closed and retried like a failing one
+        listed = paths is None or path in paths
         if (listed):
             self.reportError(path, "Lost", error)
         else:
