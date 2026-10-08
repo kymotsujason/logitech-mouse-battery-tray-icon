@@ -396,11 +396,18 @@ class ReceiverList(QObject):
 
     def retryDenied(self):
         before = (set(self.nodes), set(self.denied))
-        self.keepDenied(hidpp.findHidppNodes())
+        try:
+            paths = hidpp.findHidppNodes()
+        except OSError as error:
+            # a denied path discovery can't vouch for may be a different device that took its number, so nothing opens, while the single shot timer still has to come back
+            printLine("Couldn't list HID++ nodes: " + (errno.errorcode.get(error.errno) or str(error)))
+            paths = None
         # doubled before the opens, so a new device node one of them meets starts its wait over at the shortest
         self.deniedRetryMs = min(self.deniedRetryMs * 2, DENIED_RETRY_MAX_MS)
-        for path in list(self.denied):
-            self.openNode(path)
+        if (paths is not None):
+            self.keepDenied(paths)
+            for path in list(self.denied):
+                self.openNode(path)
         self.deniedTimer.stop()
         self.updateDeniedTimer()
         if ((set(self.nodes), set(self.denied)) != before):
@@ -532,7 +539,11 @@ class ReceiverList(QObject):
             self.forgetErrors(path)
             self.deniedRetryMs = DENIED_RETRY_MS
         # a node discovery no longer lists was unplugged, which reads as an I/O error just like a failing one
-        listed = path in hidpp.findHidppNodes()
+        try:
+            listed = path in hidpp.findHidppNodes()
+        except OSError:
+            # a listing that fails, such as one out of fds, can't say the node was unplugged, so it's closed and retried like a failing one
+            listed = True
         if (listed):
             self.reportError(path, "Lost", error)
         else:

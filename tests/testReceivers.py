@@ -1263,6 +1263,28 @@ class ReceiverListTests(unittest.TestCase):
                 self.mice.retryDenied()
         self.assertEqual(intervals, [100, 200, 400])
 
+    def testALossWhoseListingFailsStillClosesTheNodeAndRetriesIt(self):
+        self.nodes.add(RECEIVER, mouseHandler())
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"]))
+        worker = self.mice.nodes[RECEIVER].worker
+        with mock.patch.object(hidpp, "findHidppNodes", side_effect=OSError(errno.EMFILE, "Too many open files")):
+            self.mice.onLost(self.mice.nodes[RECEIVER], OSError(errno.EIO, "Input/output error"))
+        self.assertTrue(waitUntil(lambda: not worker.is_alive()))
+        self.assertEqual((RECEIVER in self.mice.nodes, self.mice.denied, self.keys()), (False, {RECEIVER}, []))
+        self.assertTrue(self.mice.deniedTimer.isActive())
+
+    def testADeniedRetryWhoseListingFailsOpensNothingAndComesBack(self):
+        self.nodes.deny(RECEIVER)
+        self.mice.start()
+        self.mice.deniedTimer.stop()
+        opened = []
+        with mock.patch.object(hidpp, "findHidppNodes", side_effect=OSError(errno.EMFILE, "Too many open files")), mock.patch.object(hidpp.HidppNode, "open", lambda path, onEvent=None: opened.append(path)):
+            self.mice.retryDenied()
+        self.assertEqual((opened, self.mice.denied), ([], {RECEIVER}))
+        self.assertTrue(self.mice.deniedTimer.isActive())
+        self.assertEqual(self.mice.deniedTimer.interval(), 200)
+
     def testANodeThatKeepsDyingAfterItOpensPrintsItsLossOnce(self):
         self.nodes.add(RECEIVER, mouseHandler())
         self.mice.start()
