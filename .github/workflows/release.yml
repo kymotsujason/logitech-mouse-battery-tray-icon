@@ -116,8 +116,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           # the check job's read token and the tag lookup both skip drafts, so a draft a failed run left behind is cleared here, where the token can list it
-          drafts=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.draft and .tag_name == \"v$VERSION\") | .id")
-          for id in $drafts; do
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.draft and .tag_name == \"v$VERSION\") | \"\(.id) \(.author.login)\"" > /tmp/drafts.log
+          # a release this workflow's token made names github-actions[bot] as its author, and any other draft for the tag is the owner's own,
+          # which may hold notes meant for this version, so the publish stops before it deletes or publishes anything
+          others=$(awk '$2 != "github-actions[bot]" { print $1 }' /tmp/drafts.log)
+          if [ -n "$others" ]; then
+            echo "::error::v$VERSION has draft releases this workflow didn't make ($(echo $others)), so publish or delete them by hand and run the release again"
+            exit 1
+          fi
+          for id in $(awk '$2 == "github-actions[bot]" { print $1 }' /tmp/drafts.log); do
             echo "found a draft release for v$VERSION from an earlier run, so it's replaced"
             gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
           done

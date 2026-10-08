@@ -1,5 +1,7 @@
+import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -464,38 +466,52 @@ class WorkflowTests(unittest.TestCase):
             body.append(line[10:])
         return "\n".join(body)
 
-    def runPublish(self, listing):
+    def runPublish(self, releases):
+        # the fake hands the step's own --jq filter to jq, so the filter is what picks the drafts
+        if (shutil.which("jq") is None):
+            self.skipTest("jq isn't installed")
         with tempfile.TemporaryDirectory() as folder:
             gh = os.path.join(folder, "gh")
             with open(gh, "w") as f:
-                f.write('#!/bin/sh\necho "$@" >> "$FAKE_FOLDER/calls"\nif [ "$1" = api ] && [ "$2" = --paginate ]; then printf "%s" "$FAKE_LISTING"; fi\n')
+                f.write('#!/bin/sh\necho "$@" >> "$FAKE_FOLDER/calls"\nif [ "$1" = api ] && [ "$2" = --paginate ] && [ "$4" = --jq ]; then printf "%s" "$FAKE_LISTING" | jq -r "$5"; fi\n')
             os.chmod(gh, 0o755)
-            env = {"PATH": folder + ":" + os.environ["PATH"], "FAKE_FOLDER": folder, "FAKE_LISTING": listing, "VERSION": "1.1.1", "GITHUB_SHA": "a" * 40, "GITHUB_REPOSITORY": "owner/repo"}
+            env = {"PATH": folder + ":" + os.environ["PATH"], "FAKE_FOLDER": folder, "FAKE_LISTING": json.dumps(releases), "VERSION": "1.1.1", "GITHUB_SHA": "a" * 40, "GITHUB_REPOSITORY": "owner/repo"}
             result = subprocess.run(["bash", "-e", "-c", self.publishStep()], env=env, capture_output=True, text=True)
             with open(os.path.join(folder, "calls")) as f:
                 calls = f.read().splitlines()
         return (result.returncode, result.stdout + result.stderr, calls)
 
+    def release(self, releaseId, tag="v1.1.1", draft=True, author="github-actions[bot]"):
+        return {"id": releaseId, "tag_name": tag, "draft": draft, "author": None if author is None else {"login": author}}
+
     def testAStrandedDraftIsDeletedBeforeThePublish(self):
-        code, output, calls = self.runPublish("77\n")
-        self.assertEqual(code, 0)
+        code, output, calls = self.runPublish([self.release(77), self.release(78, tag="v1.1.0"), self.release(79, draft=False)])
+        self.assertEqual(code, 0, output)
         self.assertIn("found a draft release for v1.1.1", output)
         deletes = [call for call in calls if call.startswith("api -X DELETE")]
         self.assertEqual(deletes, ["api -X DELETE repos/owner/repo/releases/77"])
         self.assertTrue(calls[-1].startswith("release create v1.1.1 "), calls)
         self.assertLess(calls.index(deletes[0]), len(calls) - 1)
 
+    def testAHandMadeDraftStopsThePublishBeforeAnyChange(self):
+        # the owner's draft for the version may hold the notes meant for it, and a deleted draft can't be brought back
+        for other in ("kymotsujason", None):
+            with self.subTest(author=other):
+                code, output, calls = self.runPublish([self.release(77), self.release(80, author=other), self.release(81, author=other)])
+                self.assertEqual(code, 1)
+                self.assertIn("::error::v1.1.1 has draft releases this workflow didn't make (80 81), so publish or delete them by hand and run the release again", output)
+                self.assertEqual(len(calls), 1, calls)
+                self.assertTrue(calls[0].startswith("api --paginate "), calls)
+
     def testThePublishDeletesNothingWithoutADraft(self):
-        code, output, calls = self.runPublish("")
-        self.assertEqual(code, 0)
+        code, output, calls = self.runPublish([self.release(79, draft=False), self.release(78, tag="v1.1.0")])
+        self.assertEqual(code, 0, output)
         self.assertEqual([call for call in calls if "DELETE" in call], [])
         self.assertNotIn("draft", output)
         self.assertEqual(len(calls), 2)
 
     def testTheDraftListingOnlyKeepsDraftsOfThisTag(self):
-        listing = [call for call in self.runPublish("")[2] if call.startswith("api --paginate")][0]
-        self.assertIn(".draft and .tag_name == \"v1.1.1\"", listing)
-
+        self.assertIn(".draft and .tag_name == \\\"v$VERSION\\\"", self.publishStep())
 
 if (__name__ == "__main__"):
     unittest.main()
