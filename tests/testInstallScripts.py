@@ -6,10 +6,14 @@ import tempfile
 import unittest
 
 PACKAGING = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "packaging")
-TOOLS = ("systemd-detect-virt", "systemd-notify", "systemctl", "udevadm", "python3", "systemd-sysusers")
+TOOLS = ("systemd-detect-virt", "systemd-notify", "systemctl", "udevadm", "python3", "systemd-sysusers", "timeout")
 STUB = """#!/bin/sh
 name=${0##*/}
 echo "$name $*" >> "$STUB_LOG"
+if [ "$name" = "timeout" ]; then
+    shift
+    exec "$@"
+fi
 if [ "$name" = "systemd-sysusers" ]; then
     while read -r line; do
         echo "stdin $line" >> "$STUB_LOG"
@@ -28,8 +32,8 @@ STEPS = [
     "systemctl daemon-reload",
     "systemctl reload dbus.service",
     "udevadm control --reload",
-    "udevadm trigger --subsystem-match=hidraw --action=change",
-    "udevadm settle --timeout=30",
+    "timeout 30 udevadm trigger --settle --subsystem-match=hidraw --action=change",
+    "udevadm trigger --settle --subsystem-match=hidraw --action=change",
     "python3 -I -B /usr/share/logitech-mouse-battery/clearAccess.py --settled",
     "systemctl reset-failed logitech-mouse-battery.service",
     "systemctl try-restart --no-block logitech-mouse-battery.service",
@@ -64,12 +68,12 @@ class InstallScriptTests(unittest.TestCase):
     def testAfterInstallRunsEveryStepInOrder(self):
         code, output, calls = self.runScript("afterInstall.sh")
         self.assertEqual((code, calls), (0, CHECKS + STEPS))
-        self.assertEqual([line for line in output.splitlines() if line.startswith("Mouse Battery: ")], ["Mouse Battery: reloading systemd", "Mouse Battery: reloading the system bus", "Mouse Battery: reloading the udev rules", "Mouse Battery: applying the rule to plugged in receivers and cables", "Mouse Battery: waiting for udev", "Mouse Battery: closing the access 1.0.x gave", "Mouse Battery: clearing the service's failed starts", "Mouse Battery: restarting the service if it runs"])
+        self.assertEqual([line for line in output.splitlines() if line.startswith("Mouse Battery: ")], ["Mouse Battery: reloading systemd", "Mouse Battery: reloading the system bus", "Mouse Battery: reloading the udev rules", "Mouse Battery: applying the rule to plugged in receivers and cables", "Mouse Battery: closing the access 1.0.x gave", "Mouse Battery: clearing the service's failed starts", "Mouse Battery: restarting the service if it runs"])
 
     def testAFailingStepIsReportedAndTheRestStillRun(self):
         code, output, calls = self.runScript("afterInstall.sh", fail="udevadm python3")
         self.assertEqual((code, calls), (0, CHECKS + UNSETTLED_STEPS))
-        self.assertEqual(output.count("that step failed. Unplug the receiver or cable and plug it back in, or reboot."), 4)
+        self.assertEqual(output.count("that step failed. Unplug the receiver or cable and plug it back in, or reboot."), 3)
 
     def testClearAccessIsToldUdevSettledOnlyWhenSettleSucceeds(self):
         self.assertEqual(self.runScript("afterInstall.sh", fail="udevadm")[::2], (0, CHECKS + UNSETTLED_STEPS))
@@ -81,6 +85,11 @@ class InstallScriptTests(unittest.TestCase):
             if (os.path.exists(self.log)):
                 os.remove(self.log)
             self.assertEqual(self.runScript("afterInstall.sh", fail=fail)[::2], (0, CHECKS + UNSETTLED_STEPS), fail)
+
+    def testAStuckEventElsewhereDoesntStopClearAccessTrustingTheTag(self):
+        code, output, calls = self.runScript("afterInstall.sh", fail="udevadm:settle")
+        self.assertEqual((code, calls), (0, CHECKS + STEPS))
+        self.assertNotIn("that step failed.", output)
 
     def testAResetFailedThatFailsIsntReported(self):
         code, output, calls = self.runScript("afterInstall.sh", fail="systemctl")

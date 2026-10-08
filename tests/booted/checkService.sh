@@ -108,7 +108,6 @@ expected="Mouse Battery: reloading systemd
 Mouse Battery: reloading the system bus
 Mouse Battery: reloading the udev rules
 Mouse Battery: applying the rule to plugged in receivers and cables
-Mouse Battery: waiting for udev
 Mouse Battery: closing the access 1.0.x gave
 Mouse Battery: clearing the service's failed starts
 Mouse Battery: restarting the service if it runs"
