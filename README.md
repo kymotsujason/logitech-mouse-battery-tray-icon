@@ -115,14 +115,14 @@ The app is the flat set of modules in `src/`, which the packages install side by
 - `upower.py` reads the mice the kernel drives through UPower.
 - `lowBattery.py` decides when a mouse gets a low battery warning.
 - `notify.py` sends desktop notifications.
-- `dbusCalls.py` makes the tray's D-Bus calls to the desktop with a timeout, answering through a callback so a slow peer never holds it still, and blocking only for the terminal check. The calls to the battery service go through `serviceClient.py` instead, which has its own callbacks and timeout.
+- `dbusCalls.py` makes the tray's D-Bus calls to the desktop with a timeout, answering through a callback so a slow peer never holds it still, and also a blocking call for the terminal check (to the battery service and UPower) and for the notice a second tray sends before it quits. `serviceClient.py` makes the tray's own calls to the battery service, with its own callbacks and timeout.
 - `panelColor.py` works out the color the icon is drawn in, from the desktop's theme.
 - `icon.py` draws the tray icon.
 - `autostart.py` turns Open at Login on and off.
 - `check.py` is the terminal check.
 - `version.py` holds the version.
 
-`packaging/` holds the launcher, the desktop entries, the udev rule, the service's systemd, D-Bus, and sysusers files, the install scripts, the package configs, and the build scripts. `tests/` holds the unit tests, with the fake devices and D-Bus services in `tests/fakes/`, the checks that run the real tray on private buses in `tests/live/`, the container checks in `tests/containers/`, and the check that runs the packaged service on a booted runner in `tests/booted/`.
+`packaging/` holds the launcher, the desktop entries, the udev rule, the service's systemd, D-Bus, and sysusers files, the install scripts, the package configs, and the build scripts. `tests/` holds the unit tests, with the fake devices and D-Bus services in `tests/fakes/`, the checks that run the real tray on private buses in `tests/live/`, the container checks in `tests/containers/`, and the checks that run the packaged service on a booted runner in `tests/booted/`.
 
 ## Build from source
 

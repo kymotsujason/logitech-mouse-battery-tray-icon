@@ -2,7 +2,8 @@
 # runs inside archlinux:latest with the repo at /repo: installs the older package in $1, starts its tray against a fake
 # tray host on a private bus, upgrades to the package in $2, version $3, with pacman, and checks the same process restarts
 # into $3. Only 1.1.1 and later print their version when the tray starts, so that line in the tray's output tells the
-# versions apart, and the tooltip shows the new tray reads through the service, which the private bus lacks
+# versions apart. Upgrading from 1.0.x the tooltip also shows the new tray reads through the service, which the private
+# bus lacks, but a 1.1.0 tray already shows that tooltip, so on that pass only the start line proves the swap
 set -u
 
 newVersion=$3
@@ -103,7 +104,9 @@ sleep 2
 check "the tray registered again after the upgrade" "$( [ "$(registered)" -ge 2 ] && echo yes)" "yes"
 check "the same tray process kept running" "$(state)" "running"
 check "the same process printed $newVersion's start once" "$(newStarts)" "1"
-check "the tray now reads through the service" "$(tooltip)" "Can't reach the battery service."
+case "$oldVersion" in
+    1.0.*) check "the tray now reads through the service" "$(tooltip)" "Can't reach the battery service." ;;
+esac
 check "the service's user exists after the upgrade" "$(getent passwd logitech-mouse-battery > /dev/null && echo yes)" "yes"
 check "afterInstall.sh skipped in the container and said so" "$(grep -c "Mouse Battery: skipped setting up the service, since this system isn't booted with systemd" /tmp/install2.log)" "1"
 
