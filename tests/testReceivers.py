@@ -1209,6 +1209,31 @@ class ReceiverListTests(unittest.TestCase):
         self.assertTrue(waitUntil(lambda: self.keys() == ["bbbbbbbb"], timeout=3.0))
         self.assertNotIn(2, self.mice.nodes[RECEIVER].skipped)
 
+    def testANoticeDuringASearchKeepsAKnownMouseInItsSlot(self):
+        keyboardFirst = [False]
+        keyboard = mouseHandler(kind=0)
+        mouse = mouseHandler()
+
+        def handler(request):
+            if (keyboardFirst[0] and request[1] == 1 and request[2] == 2 and (request[3] >> 4) == 2):
+                # the search sees a keyboard in the mouse's slot, while a notice for the slot comes in ahead of that reply and its identify finds the mouse again
+                keyboardFirst[0] = False
+                return [LINK_UP] + keyboard(request)
+            return mouse(request)
+
+        self.nodes.add(RECEIVER, handler)
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"] and not self.mice.isBusy()))
+        known = self.mouse()
+        searched = []
+        self.mice.message.connect(lambda message: searched.append(message[2]) if message[0] == "searched" else None)
+        keyboardFirst[0] = True
+        self.mice.requestSearch(RECEIVER)
+        self.assertTrue(waitUntil(lambda: searched and not self.mice.isBusy()))
+        self.assertEqual(searched[0].skipped, frozenset({1}))
+        self.assertIs(self.mouse(), known)
+        self.assertEqual((self.keys(), self.mice.nodes[RECEIVER].skipped), (["02bc524c"], set()))
+
     def testASlotLeftUnknownGetsOneFollowUpSearch(self):
         receiver = self.nodes.add(RECEIVER, pingOnly)
         self.mice.start()
