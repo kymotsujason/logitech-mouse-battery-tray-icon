@@ -486,7 +486,8 @@ class ReceiverList(QObject):
                 state.retryTimer.stop()
         finally:
             self.finishSearch(state)
-        self.changed.emit()
+            # a first search that fails partway still has to tell the tray it's done looking
+            self.changed.emit()
 
     def onFailed(self, state, item, error=None):
         if (error is not None):

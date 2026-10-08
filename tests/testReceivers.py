@@ -1226,10 +1226,13 @@ class ReceiverListTests(unittest.TestCase):
         state = self.mice.nodes[RECEIVER]
         state.searching = True
         result = hidpp.SearchResult((hidpp.FoundMouse(1, "02bc524c", None, FEATURE, hidpp.BatteryReading(50, 0)),), frozenset(), frozenset())
+        changes = []
+        self.mice.changed.connect(lambda: changes.append(1))
         with mock.patch.object(self.mice, "registerFound", side_effect=RuntimeError("boom")):
             with self.assertRaises(RuntimeError):
                 self.mice.onSearched(state, result, 0.0)
-        self.assertFalse(state.searching)
+        # the end of a first search has to reach the tray even when applying it failed
+        self.assertEqual((state.searching, changes), (False, [1]))
 
     def testAReplugWithAReadPendingReadsNormallyAfterwards(self):
         receiver = self.nodes.add(RECEIVER, mouseHandler())
