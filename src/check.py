@@ -117,6 +117,8 @@ def main(bus=None):
     if (state is None):
         for line in problem:
             print(line)
+    elif (found == 0 and not state.nodes and state.searching):
+        print(mice.STATUS_TEXT[mice.STATUS_SEARCHING])
     elif (found == 0 and not state.nodes and not state.deniedPaths):
         print(mice.STATUS_TEXT[mice.STATUS_NONE])
     elif (found == 0 and state.nodes):

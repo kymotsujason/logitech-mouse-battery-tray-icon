@@ -1330,6 +1330,25 @@ class ReceiverListTests(unittest.TestCase):
         self.assertEqual(self.errors.getvalue(), "Couldn't list HID++ nodes: EMFILE\nOpened " + RECEIVER + "\nCouldn't list HID++ nodes: ENOENT\n")
         self.assertEqual(list(self.mice.nodes), [RECEIVER])
 
+    def testAServiceThatHasntListedNodesYetSaysItsLooking(self):
+        searching = []
+        self.mice.changed.connect(lambda: searching.append(self.mice.isSearching()))
+        with mock.patch.object(hidpp, "findHidppNodes", side_effect=OSError(errno.EMFILE, "Too many open files")):
+            self.mice.start()
+            self.mice.settleTimer.stop()
+            self.mice.scanNodes()
+            self.mice.settleTimer.stop()
+        # with no listing yet the service can't say there's no receiver, so the menu says it's looking instead of finding no mouse
+        self.assertEqual(searching, [True])
+        self.mice.scanNodes()
+        self.assertEqual(searching, [True, False])
+        # a listing that worked already said what's plugged in, so a later failure leaves that standing
+        with mock.patch.object(hidpp, "findHidppNodes", side_effect=OSError(errno.EMFILE, "Too many open files")):
+            self.mice.scanNodes()
+            self.mice.settleTimer.stop()
+        self.assertEqual(searching, [True, False])
+        self.assertFalse(self.mice.isSearching())
+
     def testANodeThatKeepsDyingAfterItOpensPrintsItsLossOnce(self):
         self.nodes.add(RECEIVER, mouseHandler())
         self.mice.start()

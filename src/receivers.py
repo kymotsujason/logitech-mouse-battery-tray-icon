@@ -222,6 +222,7 @@ class ReceiverList(QObject):
         # what was last printed for each path, so a node that keeps opening and dying prints its open once instead of each cycle
         self.lastPrinted = {}
         self.listingFailed = False
+        self.listedOnce = False
         # workers emit this from their own threads, so Qt queues it onto this object's thread
         self.message.connect(self.onMessage)
         self.deniedRetryMs = DENIED_RETRY_MS
@@ -249,6 +250,9 @@ class ReceiverList(QObject):
         return any(state.searching or state.pendingReads or state.pendingIdentifies for state in self.nodes.values())
 
     def isSearching(self):
+        # with no listing yet the service can't say there's no receiver, so it's still looking instead of finding none
+        if (self.listingFailed and not self.listedOnce):
+            return True
         return any(not state.searched for state in self.nodes.values())
 
     def isReadAllQueued(self):
@@ -302,15 +306,18 @@ class ReceiverList(QObject):
                 printLine("Couldn't list HID++ nodes: " + (errno.errorcode.get(error.errno) or str(error)))
             return None
         self.listingFailed = False
+        self.listedOnce = True
         return paths
 
     def scanNodes(self):
         self.settleSince = None
-        before = (set(self.nodes), set(self.denied))
+        before = (set(self.nodes), set(self.denied), self.isSearching())
         paths = self.listNodes()
         if (paths is None):
             # a listing that failed can't say what was plugged in or taken out, so nothing changes, and the single shot timer has to come back since only a /dev change arms it otherwise
             self.settleTimer.start(SETTLE_MS)
+            if (self.isSearching() != before[2]):
+                self.changed.emit()
             return
         removed = [path for path in self.nodes if path not in paths]
         for path in removed:
@@ -330,7 +337,7 @@ class ReceiverList(QObject):
             self.searchAll()
         self.updateDeniedTimer()
         # a scan that found nothing new has no state for the tray to redraw, and every /dev change runs one
-        if ((set(self.nodes), set(self.denied)) != before):
+        if ((set(self.nodes), set(self.denied), self.isSearching()) != before):
             self.changed.emit()
 
     def openNode(self, path):

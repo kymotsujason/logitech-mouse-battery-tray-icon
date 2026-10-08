@@ -29,8 +29,8 @@ def unreachable(error):
     return "Can't reach the battery service.\n  " + error + ": failed\n" + SEE_WHY
 
 
-def stateText(entries=(), nodes=(NODE,), denied=(), busy=False):
-    return json.dumps({"version": 1, "busy": busy, "searching": False, "nodes": list(nodes), "deniedPaths": list(denied), "mice": list(entries)})
+def stateText(entries=(), nodes=(NODE,), denied=(), busy=False, searching=False):
+    return json.dumps({"version": 1, "busy": busy, "searching": searching, "nodes": list(nodes), "deniedPaths": list(denied), "mice": list(entries)})
 
 
 def mouseWith(**changes):
@@ -136,6 +136,10 @@ class CheckTests(unittest.TestCase):
 
     def testNothingAtAll(self):
         self.assertEqual(self.runCheck(FakeServiceBus(stateText(nodes=()))), (1, "No Logitech mouse found.\n"))
+
+    def testAServiceStillLookingDoesntSayThereIsNoMouse(self):
+        # a service whose listing hasn't worked yet isn't busy, while it can't say what's plugged in either
+        self.assertEqual(self.runCheck(FakeServiceBus(stateText(nodes=(), searching=True))), (1, "Looking for mice...\n"))
 
     def testADeniedNodeSaysToReplugTheReceiverOrCable(self):
         self.assertEqual(self.runCheck(FakeServiceBus(stateText(nodes=(), denied=(NODE,)))), (1, "No access to " + NODE + ". Unplug the receiver or cable and plug it back in.\n"))
