@@ -437,6 +437,60 @@ class AutostartTests(unittest.TestCase):
         self.assertIsNone(self.outcome(True))
         self.assertFalse(os.path.exists(os.path.join("/", autostart.FILE_NAME)))
 
+    def testARelativeAutostartFolderLinkIsFollowed(self):
+        configHome = os.path.join(self.configHome, "config")
+        stowed = os.path.join(self.configHome, "dotfiles", "autostart")
+        os.makedirs(configHome)
+        os.makedirs(stowed)
+        # GNU stow links each folder with a relative target
+        os.symlink("../dotfiles/autostart", os.path.join(configHome, "autostart"))
+        self.assertIsNone(self.outcome(False, configHome))
+        with open(os.path.join(stowed, autostart.FILE_NAME)) as f:
+            self.assertEqual(f.read(), "[Desktop Entry]\nType=Application\nName=Mouse Battery\nHidden=true\n")
+        self.assertIs(autostart.isEnabled(configHome), False)
+        self.assertIsNone(self.outcome(True, configHome))
+        self.assertEqual(os.listdir(stowed), [])
+        self.assertTrue(os.path.islink(os.path.join(configHome, "autostart")))
+
+    def testADotDotInALinkClimbsFromWhereTheLinkLeads(self):
+        with tempfile.TemporaryDirectory() as other:
+            deep = os.path.join(other, "deep")
+            os.makedirs(deep)
+            os.symlink(deep, os.path.dirname(self.path))
+            real = os.path.join(other, "real.desktop")
+            with open(real, "w") as f:
+                f.write("[Desktop Entry]\nType=Application\nName=Mouse Battery\nExec=logitech-mouse-battery\n")
+            # ".." climbs out of the folder the autostart link leads to, as the kernel does, and not back up the path as written
+            os.symlink("../real.desktop", os.path.join(deep, autostart.FILE_NAME))
+            self.assertIsNone(self.outcome(False))
+            with open(real) as f:
+                self.assertIn("Hidden=true", f.read())
+            self.assertIs(autostart.isEnabled(self.configHome), False)
+            self.assertEqual(sorted(os.listdir(self.configHome)), ["autostart"])
+
+    def testALinkLoopIsRefused(self):
+        os.makedirs(os.path.dirname(self.path))
+        other = os.path.join(os.path.dirname(self.path), "other.desktop")
+        os.symlink("other.desktop", self.path)
+        os.symlink(autostart.FILE_NAME, other)
+        # the walk follows 40 links, the kernel's limit, and refuses at the 41st, which is the override's own name
+        message = "[Errno 40] Too many levels of symbolic links: '" + os.path.realpath(self.path) + "'"
+        self.assertIs(autostart.isEnabled(self.configHome), True)
+        self.assertEqual(self.outcome(False), message)
+        self.assertEqual(self.outcome(True), message)
+        self.assertTrue(os.path.islink(self.path))
+        self.assertTrue(os.path.islink(other))
+
+    def testAConfigFolderThatDoesntExistYetIsMade(self):
+        configHome = os.path.join(self.configHome, "missing", "config")
+        self.assertIs(autostart.isEnabled(configHome), True)
+        self.assertIsNone(self.outcome(True, configHome))
+        self.assertEqual(os.listdir(self.configHome), [])
+        self.assertIsNone(self.outcome(False, configHome))
+        with open(autostart.overridePath(configHome)) as f:
+            self.assertEqual(f.read(), "[Desktop Entry]\nType=Application\nName=Mouse Battery\nHidden=true\n")
+        self.assertIs(autostart.isEnabled(configHome), False)
+
     def testA0600OverrideKeepsItsMode(self):
         os.makedirs(os.path.dirname(self.path))
         with open(self.path, "w") as f:
