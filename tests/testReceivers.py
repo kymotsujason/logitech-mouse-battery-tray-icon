@@ -25,6 +25,12 @@ FEATURE = hidpp.BatteryFeature(1, hidpp.FEATURE_UNIFIED_BATTERY, 5, True)
 PATH = "/dev/hidraw18"
 
 
+class BrokenStream(io.StringIO):
+    # stderr once the journal's end of it has gone away
+    def write(self, text):
+        raise BrokenPipeError(errno.EPIPE, "Broken pipe")
+
+
 def nextMessage(messages, kind, timeout=2.0):
     deadline = time.monotonic() + timeout
     while (time.monotonic() < deadline):
@@ -159,6 +165,13 @@ class WorkerTests(unittest.TestCase):
             message = nextMessage(self.messages, "lost")
         self.assertEqual((message[1], type(message[2])), (self.worker, ValueError))
         self.assertTrue(printed.called)
+
+    def testALoopErrorWithABrokenStderrStillPostsLost(self):
+        self.startWorker(mouseHandler())
+        with mock.patch.object(sys, "stderr", BrokenStream()), mock.patch.object(self.worker.node, "readReport", side_effect=ValueError("bad")):
+            self.device.send(OTHER_REPORT)
+            message = nextMessage(self.messages, "lost")
+        self.assertIsNotNone(message)
 
     def testAStopThatGivesUpWaitingStillClosesThePipeLater(self):
         with mock.patch.object(hidpp, "REQUEST_TIMEOUT", 0.5):
@@ -1207,6 +1220,24 @@ class ReceiverListTests(unittest.TestCase):
             self.mice.changed.connect(lambda: changes.append(1))
             self.assertTrue(waitUntil(lambda: changes))
         self.assertEqual((self.mice.nodes[RECEIVER].searching, self.mice.isSearching()), (False, False))
+
+    def testALostNodeStillClosesWhenItsPrintFails(self):
+        self.nodes.add(RECEIVER, mouseHandler())
+        self.mice.start()
+        state = self.mice.nodes[RECEIVER]
+        hooked = []
+        # the message goes through the signal, so a raise lands in sys.excepthook the way it does in the service
+        with mock.patch.object(sys, "stderr", BrokenStream()), mock.patch.object(sys, "excepthook", lambda *info: hooked.append(info[1])):
+            self.mice.message.emit(("lost", state.worker, OSError(errno.EIO, "Input/output error")))
+        self.assertEqual((hooked, list(self.mice.nodes), self.mice.denied), ([], [], {RECEIVER}))
+
+    def testANewNodeStillSearchesWhenItsPrintFails(self):
+        self.nodes.add(RECEIVER, mouseHandler())
+        hooked = []
+        with mock.patch.object(sys, "stderr", BrokenStream()), mock.patch.object(sys, "excepthook", lambda *info: hooked.append(info[1])):
+            self.mice.onDevChanged("/dev")
+            found = waitUntil(lambda: self.keys() == ["02bc524c"] and not self.mice.isSearching())
+        self.assertEqual((hooked, found), ([], True))
 
     def testAMessageFromAReplacedWorkerIsIgnored(self):
         self.nodes.add(RECEIVER, mouseHandler())

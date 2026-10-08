@@ -31,6 +31,21 @@ TRANSIENT_ERROR_LIMIT = 3
 STOP_WAIT_SECONDS = 1.0
 
 
+def printLine(text):
+    # the journal's end of stderr can go away under a running service, and a print that raises partway through a handler would leave a dead node in place
+    try:
+        print(text, file=sys.stderr)
+    except (OSError, ValueError):
+        pass
+
+
+def printTraceback():
+    try:
+        traceback.print_exc()
+    except (OSError, ValueError):
+        pass
+
+
 class NodeWorker(threading.Thread):
     def __init__(self, path, node, post):
         super().__init__(name="hidpp " + path, daemon=True)
@@ -94,7 +109,7 @@ class NodeWorker(threading.Thread):
         except Exception as error:
             if (not isinstance(error, OSError)):
                 # sys.excepthook never sees another thread's exceptions, so print it here before giving the node up
-                traceback.print_exc()
+                printTraceback()
             if (not self.stopping.is_set()):
                 self.post(("lost", self, error))
         finally:
@@ -118,7 +133,7 @@ class NodeWorker(threading.Thread):
                 self.post(("failed", self, item, error))
             except Exception:
                 # sys.excepthook never sees another thread's exceptions, so print it here and keep serving the node
-                traceback.print_exc()
+                printTraceback()
                 self.post(("failed", self, item))
 
     def runItem(self, item):
@@ -331,7 +346,7 @@ class ReceiverList(QObject):
         self.deniedSignatures.pop(path, None)
         if (self.lastPrinted.get(path) != "Opened"):
             self.lastPrinted[path] = "Opened"
-            print("Opened " + path, file=sys.stderr)
+            printLine("Opened " + path)
         self.requestSearch(path)
 
     def deny(self, path, signature):
@@ -355,11 +370,11 @@ class ReceiverList(QObject):
             return
         self.reportedErrors.add((path, what, detail))
         self.lastPrinted[path] = what
-        print(what + " " + path + ": " + detail, file=sys.stderr)
+        printLine(what + " " + path + ": " + detail)
 
     def printRemoved(self, path):
         self.lastPrinted[path] = "Removed"
-        print("Removed " + path, file=sys.stderr)
+        printLine("Removed " + path)
 
     def forgetErrors(self, path):
         self.reportedErrors = {entry for entry in self.reportedErrors if entry[0] != path}
