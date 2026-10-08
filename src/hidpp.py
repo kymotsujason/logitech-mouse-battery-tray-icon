@@ -145,6 +145,27 @@ class HidppNode:
         self.onEvent = onEvent
         # a random start keeps two programs on one node from moving through the same ids in step
         self.requestCount = random.randrange(len(SW_IDS))
+        # a worker that owns the node sets its stop flag and wake pipe here, so a stop ends the request it's waiting on instead of the whole search running out
+        self.stopEvent = None
+        self.wakeFd = None
+
+    def isStopping(self):
+        return self.stopEvent is not None and self.stopEvent.is_set()
+
+    def waitForReport(self, deadline):
+        while (not self.isStopping()):
+            remaining = deadline - time.monotonic()
+            if (remaining <= 0):
+                return False
+            watched = [self.fd] if self.wakeFd is None else [self.fd, self.wakeFd]
+            ready, _, _ = select.select(watched, [], [], remaining)
+            if (self.fd in ready):
+                return True
+            if (not ready):
+                return False
+            # a wake that isn't a stop is new work, which the worker takes once this request is done, so the wait goes on
+            os.read(self.wakeFd, 256)
+        return False
 
     def nextSwId(self):
         # a new software id per request keeps a late reply from answering the next request
@@ -183,17 +204,13 @@ class HidppNode:
         if (timeout is None):
             timeout = REQUEST_TIMEOUT
         # a request its budget can't wait for would only leave a late reply on the node
-        if (timeout <= 0):
+        if (timeout <= 0 or self.isStopping()):
             return (TIMEOUT, None)
         funcSw = (function << 4) | self.nextSwId()
         self.writeReport(deviceIndex, featureIndex, funcSw, params)
         deadline = time.monotonic() + timeout
         while (True):
-            remaining = deadline - time.monotonic()
-            if (remaining <= 0):
-                return (TIMEOUT, None)
-            ready, _, _ = select.select([self.fd], [], [], remaining)
-            if (not ready):
+            if (not self.waitForReport(deadline)):
                 return (TIMEOUT, None)
             reply = self.readReport()
             if (reply is None):
@@ -306,6 +323,8 @@ def pingSlots(node, slots=None, timeout=None):
         slots = DEVICE_SLOTS
     if (timeout is None):
         timeout = PING_TIMEOUT
+    if (node.isStopping()):
+        return []
     pending = {}
     for slot in slots:
         funcSw = (1 << 4) | node.nextSwId()
@@ -314,11 +333,7 @@ def pingSlots(node, slots=None, timeout=None):
     answered = []
     deadline = time.monotonic() + timeout
     while (pending):
-        remaining = deadline - time.monotonic()
-        if (remaining <= 0):
-            break
-        ready, _, _ = select.select([node.fd], [], [], remaining)
-        if (not ready):
+        if (not node.waitForReport(deadline)):
             break
         report = node.readReport()
         if (report is None):

@@ -1,5 +1,6 @@
 import os
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -318,6 +319,14 @@ class SearchTests(unittest.TestCase):
         unreachable = FakeDevice(lambda request: [receiverError(request)])
         self.addCleanup(unreachable.close)
         self.assertEqual(unreachable.node().requestOutcome(1, 0x00, 0), (hidpp.UNREACHABLE, None))
+
+    def testAStoppedNodeSendsNothing(self):
+        self.device = FakeDevice(mouseHandler())
+        node = self.device.node()
+        node.stopEvent = threading.Event()
+        node.stopEvent.set()
+        self.assertEqual((node.requestOutcome(1, 0x00, 0, bytes([0x10, 0x04])), hidpp.pingSlots(node)), ((hidpp.TIMEOUT, None), []))
+        self.assertEqual(self.device.requests, [])
 
     def testLookupFeatureOutcomes(self):
         self.device = FakeDevice(mouseHandler())

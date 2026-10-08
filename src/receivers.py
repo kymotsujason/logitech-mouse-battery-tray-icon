@@ -61,6 +61,8 @@ class NodeWorker(threading.Thread):
         os.set_blocking(self.wakeWrite, False)
         self.transientErrors = 0
         node.onEvent = self.onEvent
+        node.stopEvent = self.stopping
+        node.wakeFd = self.wakeRead
 
     def onEvent(self, report):
         # each post is a queued hop onto the Qt thread, and another program polling the receiver gets a reply to every one of its requests, which the main thread drops anyway
@@ -245,12 +247,7 @@ class ReceiverList(QObject):
         self.stopped = True
         for timer in (self.deniedTimer, self.settleTimer, self.readAllTimer):
             timer.stop()
-        # every worker hears the stop first, so busy nodes share one wait instead of taking turns
-        for state in self.nodes.values():
-            state.worker.signalStop()
-        deadline = time.monotonic() + STOP_WAIT_SECONDS
-        for path in list(self.nodes):
-            self.closeNode(path, timeout=max(0.0, deadline - time.monotonic()))
+        self.closeNodes(list(self.nodes))
 
     def isBusy(self):
         # a queued batch isn't work in flight, and any local caller can keep one queued, which would hold every check at its full wait
@@ -304,7 +301,7 @@ class ReceiverList(QObject):
         removed = [path for path in self.nodes if path not in paths]
         for path in removed:
             self.printRemoved(path)
-            self.closeNode(path)
+        self.closeNodes(removed)
         self.keepDenied(paths)
         # a node that shows up at a path discovery dropped is a new device, so its errors get printed again
         self.reportedErrors = {entry for entry in self.reportedErrors if entry[0] in paths}
@@ -382,6 +379,14 @@ class ReceiverList(QObject):
 
     def forgetErrors(self, path):
         self.reportedErrors = {entry for entry in self.reportedErrors if entry[0] != path}
+
+    def closeNodes(self, paths):
+        # every worker hears the stop first, so busy nodes share one wait instead of taking turns on the Qt thread
+        for path in paths:
+            self.nodes[path].worker.signalStop()
+        deadline = time.monotonic() + STOP_WAIT_SECONDS
+        for path in paths:
+            self.closeNode(path, timeout=max(0.0, deadline - time.monotonic()))
 
     def closeNode(self, path, timeout=STOP_WAIT_SECONDS):
         state = self.nodes.pop(path, None)

@@ -5,6 +5,7 @@ import queue
 import shutil
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -197,19 +198,68 @@ class WorkerTests(unittest.TestCase):
         self.assertIsNotNone(message)
 
     def testAStopThatGivesUpWaitingStillClosesThePipeLater(self):
-        with mock.patch.object(hidpp, "REQUEST_TIMEOUT", 0.5):
+        release = threading.Event()
+        entered = threading.Event()
+
+        # a read stuck where no stop reaches it
+        def stuckRead(node, feature, deadline=None):
+            entered.set()
+            release.wait(2.0)
+            return (hidpp.TIMEOUT, None)
+
+        with mock.patch.object(hidpp, "readBattery", stuckRead):
             self.startWorker(silent)
             self.worker.queueWork(("read", 1, FEATURE, 0.0))
-            time.sleep(0.05)
+            self.assertTrue(entered.wait(2.0))
             self.worker.stop(timeout=0.01)
             self.assertTrue(self.worker.is_alive())
             self.worker.wake()
+            release.set()
             self.worker.join(2)
         self.assertFalse(self.worker.is_alive())
         self.assertIsNone(self.worker.wakeRead)
         # a wake after the thread closed its pipe does nothing
         self.worker.wake()
         self.worker = None
+
+    def testAStopCutsShortARequestInFlight(self):
+        with mock.patch.object(hidpp, "REQUEST_TIMEOUT", 3.0):
+            self.startWorker(pingOnly)
+            self.worker.queueWork(("search", frozenset(), 0.0))
+            # the ping was answered, so the search now waits on the slot's first identify request
+            self.assertTrue(waitUntil(lambda: any(sent[2] == 0 and (sent[3] >> 4) == 0 for sent in list(self.device.requests))))
+            started = time.monotonic()
+            self.worker.stop(timeout=5.0)
+            took = time.monotonic() - started
+        self.assertFalse(self.worker.is_alive())
+        self.assertLess(took, 0.5)
+
+    def testAStopCutsShortThePingWait(self):
+        with mock.patch.object(hidpp, "PING_TIMEOUT", 3.0):
+            self.startWorker(silent)
+            self.worker.queueWork(("search", frozenset(), 0.0))
+            self.assertTrue(waitUntil(lambda: len(self.device.requests) == len(hidpp.DEVICE_SLOTS)))
+            started = time.monotonic()
+            self.worker.stop(timeout=5.0)
+            took = time.monotonic() - started
+        self.assertFalse(self.worker.is_alive())
+        self.assertLess(took, 0.5)
+
+    def testWorkQueuedDuringARequestLetsItFinish(self):
+        def slowBattery(request):
+            if (request[2] == 5):
+                time.sleep(0.2)
+            return mouseHandler()(request)
+
+        with mock.patch.object(hidpp, "REQUEST_TIMEOUT", 1.0):
+            self.startWorker(slowBattery)
+            self.worker.queueWork(("read", 1, FEATURE, 0.0))
+            # the second read's wake lands while the first read waits for its answer
+            self.assertTrue(waitUntil(lambda: batteryReads(self.device) == 1))
+            self.worker.queueWork(("read", 1, FEATURE, 1.0))
+            first = nextMessage(self.messages, "read")
+            second = nextMessage(self.messages, "read")
+        self.assertEqual((first[3], second[3]), ((hidpp.ANSWER, hidpp.BatteryReading(81, 0)),) * 2)
 
     def testAReportTakenByARequestDoesntStallTheNextWork(self):
         self.device = FakeDevice(mouseHandler())
@@ -829,20 +879,52 @@ class ReceiverListTests(unittest.TestCase):
         receiver.send(bytes([0x11, 1, 5, 0x00, 64, 0x04, 0, 0]).ljust(20, b"\x00"))
         self.assertTrue(waitUntil(lambda: self.mouse().reading == hidpp.BatteryReading(64, 0)))
 
-    def testStoppingWaitsForBusyNodesTogether(self):
+    def holdTwoBusyNodes(self):
         self.nodes.add(RECEIVER, mouseHandler())
         self.nodes.add(CABLE, mouseHandler(slot=0xFF, unitId=bytes.fromhex("aaaaaaaa")))
         self.mice.start()
         self.assertTrue(waitUntil(lambda: len(self.keys()) == 2 and not self.mice.isBusy()))
-        for path in (RECEIVER, CABLE):
-            self.nodes.devices[path].handler = silent
-        with mock.patch.object(hidpp, "REQUEST_TIMEOUT", 3.0):
-            self.mice.readAll()
-            QTest.qWait(100)
-            started = time.monotonic()
-            self.mice.stop()
-            took = time.monotonic() - started
+        workers = [state.worker for state in self.mice.nodes.values()]
+        release = threading.Event()
+        entered = []
+
+        # a read stuck where no stop reaches it, so only the shared wait can bound the close
+        def stuckRead(node, feature, deadline=None):
+            entered.append(1)
+            release.wait(3.0)
+            return (hidpp.TIMEOUT, None)
+
+        def releaseWorkers():
+            release.set()
+            for worker in workers:
+                worker.join(2)
+
+        self.addCleanup(releaseWorkers)
+        patch = mock.patch.object(hidpp, "readBattery", stuckRead)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.mice.readAll()
+        self.assertTrue(waitUntil(lambda: len(entered) == 2))
+        return releaseWorkers
+
+    def testStoppingWaitsForBusyNodesTogether(self):
+        releaseWorkers = self.holdTwoBusyNodes()
+        started = time.monotonic()
+        self.mice.stop()
+        took = time.monotonic() - started
+        releaseWorkers()
         # one shared second, where each busy node used to get a second of its own
+        self.assertLess(took, 1.5)
+
+    def testNodesDiscoveryDropsTogetherShareOneWait(self):
+        releaseWorkers = self.holdTwoBusyNodes()
+        for path in (RECEIVER, CABLE):
+            self.nodes.hide(path)
+        started = time.monotonic()
+        self.mice.scanNodes()
+        took = time.monotonic() - started
+        releaseWorkers()
+        self.assertEqual((self.mice.nodes, self.keys()), ({}, []))
         self.assertLess(took, 1.5)
 
     def failFirstWrite(self):
