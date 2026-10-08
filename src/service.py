@@ -8,7 +8,7 @@ from PyQt6.QtCore import QCoreApplication, QObject, QSocketNotifier, QTimer, pyq
 from PyQt6.QtDBus import QDBusAbstractAdaptor, QDBusConnection, QDBusMessage
 
 import serviceState
-from exceptionHooks import installExceptionHooks
+from exceptionHooks import installExceptionHooks, printLine
 from receivers import ReceiverList
 from version import VERSION
 
@@ -136,7 +136,7 @@ def main(bus=None):
     if (served is None):
         return 1
     # an upgrade restarts the service, so the journal shows which version took over
-    print("Mouse Battery service " + VERSION + " started", file=sys.stderr)
+    printLine("Mouse Battery service " + VERSION + " started")
     # the wakeup fd is one of these sockets, so they're held until the loop ends instead of being freed and closed under the signal handler
     sigterm = quitOnSigterm(app)
     receiverList.start()

@@ -16,7 +16,7 @@ import dbusCalls
 import hidpp
 import mice
 import panelColor
-from exceptionHooks import installExceptionHooks
+from exceptionHooks import installExceptionHooks, printLine
 from icon import IconState, makeIcon
 from installWatch import InstallWatcher
 from notify import NO_REPLY, Notifier
@@ -87,14 +87,14 @@ def raiseNiceness(target=TARGET_NICENESS):
 def takeLock(runtimeDir):
     # a run without the lock can't tell whether another copy is running, so the journal says why it went ahead
     if (not runtimeDir):
-        print("Running without the single copy lock, since XDG_RUNTIME_DIR isn't set", file=sys.stderr)
+        printLine("Running without the single copy lock, since XDG_RUNTIME_DIR isn't set")
         return (True, None)
     try:
         # a link at the lock's name could point a run with someone else's environment at a file to truncate, so it isn't followed and nothing is truncated
         fd = os.open(os.path.join(runtimeDir, LOCK_NAME), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
         handle = os.fdopen(fd, "r+")
     except OSError as error:
-        print("Running without the single copy lock, since it couldn't be opened: " + str(error), file=sys.stderr)
+        printLine("Running without the single copy lock, since it couldn't be opened: " + str(error))
         return (True, None)
     try:
         fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -222,7 +222,7 @@ class MouseBatteryApp(QObject):
             autostart.setEnabled(self.configHome, checked)
         except OSError as failure:
             error = str(failure)
-            print("Couldn't change Open at Login: " + error, file=sys.stderr)
+            printLine("Couldn't change Open at Login: " + error)
         enabled = autostart.isEnabled(self.configHome)
         self.loginAction.setChecked(enabled)
         return (enabled, error)
@@ -237,7 +237,7 @@ class MouseBatteryApp(QObject):
             # the warning is given back, so it goes out again with the next reading, and each failure is printed once
             if ((key, error) not in self.noticeErrors):
                 self.noticeErrors.add((key, error))
-                print("Couldn't send the low battery notice for " + name + ": " + str(error), file=sys.stderr)
+                printLine("Couldn't send the low battery notice for " + name + ": " + str(error))
             self.mouseList.markWarningFailed(key, percent)
             return
         self.mouseList.markWarningSent(key, percent)
@@ -284,7 +284,7 @@ class MouseBatteryApp(QObject):
             message = "Couldn't read the panel color: " + str(error)
             if (message not in self.colorErrors):
                 self.colorErrors.add(message)
-                print(message, file=sys.stderr)
+                printLine(message)
             return palette
         return self.cachedColor
 
@@ -346,14 +346,6 @@ class MouseBatteryApp(QObject):
             self.updateTray()
 
 
-def printLine(text):
-    # the journal's end of stderr can go away under a running tray, and a print that raises here would end startup
-    try:
-        print(text, file=sys.stderr)
-    except (OSError, ValueError):
-        pass
-
-
 def neverRestart(manager):
     # autostart opens the app at login, so a restored session would start a second copy
     manager.setRestartHint(QSessionManager.RestartHint.RestartNever)
@@ -375,7 +367,7 @@ def main():
     canRun, lockHandle = takeLock(os.environ.get("XDG_RUNTIME_DIR"))
     if (not canRun):
         # the notice can fail as the process exits, and a launch that does nothing should still leave a line
-        print("Mouse Battery is already running.", file=sys.stderr)
+        printLine("Mouse Battery is already running.")
         Notifier().sendNow(APP_NAME, "Mouse Battery is already running.")
         return 0
     printLine("Mouse Battery " + VERSION + " started")

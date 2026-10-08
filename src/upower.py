@@ -1,5 +1,4 @@
 import math
-import sys
 from dataclasses import dataclass
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal, pyqtSlot
@@ -7,6 +6,7 @@ from PyQt6.QtDBus import QDBusConnection, QDBusMessage, QDBusServiceWatcher
 
 import dbusCalls
 import hidpp
+from exceptionHooks import printLine
 
 SERVICE = "org.freedesktop.UPower"
 ROOT_PATH = "/org/freedesktop/UPower"
@@ -198,7 +198,7 @@ class UPowerWatcher(QObject):
         if (error in self.printedErrors):
             return
         self.printedErrors.add(error)
-        print("UPower answered " + error, file=sys.stderr)
+        printLine("UPower answered " + error)
 
     def scheduleRetry(self):
         if (not self.retryTimer.isActive()):

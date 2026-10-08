@@ -1,4 +1,5 @@
 import contextlib
+import errno
 import io
 import json
 import os
@@ -49,6 +50,12 @@ def makeMouse(reading, asleep=False):
     mouse.asleep = asleep
     mouse.lastRead = LAST_READ
     return mouse
+
+
+class BrokenStream(io.StringIO):
+    # stderr once the journal's end of it has gone away
+    def write(self, text):
+        raise BrokenPipeError(errno.EPIPE, "Broken pipe")
 
 
 def waitUntil(condition, timeout=3.0):
@@ -166,6 +173,16 @@ class ProcessTests(unittest.TestCase):
             self.assertEqual(tray.takeLock(os.path.join(folder, "missing")), (True, None))
         self.assertTrue(errors.getvalue().startswith("Running without the single copy lock, since it couldn't be opened: [Errno 2]"), errors.getvalue())
 
+    def testABrokenStderrStillRunsWithoutTheLock(self):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(sys, "stderr", BrokenStream()):
+            self.assertEqual(tray.takeLock(""), (True, None))
+            self.assertEqual(tray.takeLock(os.path.join(folder, "missing")), (True, None))
+
+    def testACopyThatFindsAnotherRunningStillSendsItsNoticeWithABrokenStderr(self):
+        with mock.patch.object(tray.signal, "signal"), mock.patch.object(tray, "raiseNiceness"), mock.patch.object(tray, "QApplication"), mock.patch.object(tray, "takeLock", return_value=(False, None)), mock.patch.object(tray, "Notifier") as notifier, mock.patch.object(sys, "excepthook", sys.excepthook), mock.patch.object(exceptionHooks.threading, "excepthook", exceptionHooks.threading.excepthook), mock.patch.object(sys, "stderr", BrokenStream()):
+            self.assertEqual(tray.main(), 0)
+        notifier.return_value.sendNow.assert_called_once_with(tray.APP_NAME, "Mouse Battery is already running.")
+
     def testACopyThatFindsAnotherRunningSaysSoOnStderr(self):
         errors = io.StringIO()
         with mock.patch.object(tray.signal, "signal"), mock.patch.object(tray, "raiseNiceness"), mock.patch.object(tray, "QApplication"), mock.patch.object(tray, "takeLock", return_value=(False, None)), mock.patch.object(tray, "Notifier"), mock.patch.object(sys, "excepthook", sys.excepthook), mock.patch.object(exceptionHooks.threading, "excepthook", exceptionHooks.threading.excepthook), contextlib.redirect_stderr(errors):
@@ -234,6 +251,14 @@ class AppTests(unittest.TestCase):
         self.assertTrue(mouseApp.tray.isVisible())
         self.assertEqual(mouseApp.shownColor, app.palette().color(QPalette.ColorRole.WindowText))
         self.assertEqual(errors.getvalue(), "Couldn't read the panel color: embedded null byte\n")
+
+    def testAPanelColorErrorWithABrokenStderrStillDrawsTheTray(self):
+        mouseApp = self.makeApp(True)
+        with mock.patch.object(tray.panelColor, "baseColor", side_effect=ValueError("embedded null byte")), mock.patch.object(sys, "stderr", BrokenStream()):
+            mouseApp.shownColor = None
+            mouseApp.shownTooltip = None
+            mouseApp.onColorsChanged()
+        self.assertEqual((mouseApp.shownColor, mouseApp.shownTooltip), (app.palette().color(QPalette.ColorRole.WindowText), mouseApp.tray.toolTip()))
 
     def testAFailedFirstDrawStillShowsTheIconAndKeepsRunning(self):
         mouseApp = self.makeApp(False)
@@ -310,6 +335,21 @@ class AppTests(unittest.TestCase):
             sends = self.lowBatterySends([(None, "org.freedesktop.DBus.Error.ServiceUnknown"), (7, None), (7, None)])
         self.assertEqual(sends, ["MX Master 3 has 9% left.", "MX Master 3 has 8% left."])
 
+    def testALowBatteryNoticeThatFailsIsSentAgainWhenItsPrintFails(self):
+        mouseApp = self.makeApp(True)
+        sent = []
+        replies = [(None, "org.freedesktop.DBus.Error.ServiceUnknown"), (7, None), (7, None)]
+        hooked = []
+
+        def send(summary, body, actions=(), onAction=None, onSent=None):
+            sent.append(body)
+            onSent(*replies.pop(0))
+
+        with mock.patch.object(mouseApp.notifier, "send", send), mock.patch.object(sys, "stderr", BrokenStream()), mock.patch.object(sys, "excepthook", lambda *info: hooked.append(info[1])):
+            for percent in (9, 8, 7):
+                mouseApp.mouseList.applyUPower(upower.UPowerMouse(PATH, "12ab34cd", "MX Master 3", hidpp.BatteryReading(percent, 0)))
+        self.assertEqual((hooked, sent), ([], ["MX Master 3 has 9% left.", "MX Master 3 has 8% left."]))
+
     def testALowBatteryNoticeThatTimedOutIsntSentAgain(self):
         self.assertEqual(self.lowBatterySends([(None, "org.freedesktop.DBus.Error.NoReply"), (7, None), (7, None)]), ["MX Master 3 has 9% left."])
 
@@ -366,6 +406,15 @@ class AppTests(unittest.TestCase):
         self.assertEqual(len(sent), 1)
         self.assertTrue(sent[0][0].startswith("Couldn't change Open at Login. [Errno 13] Permission denied"), sent[0][0])
         self.assertTrue(mouseApp.loginAction.isChecked())
+
+    def testAToggleThatCantWriteStillShowsTheRealStateWithABrokenStderr(self):
+        mouseApp = self.makeApp(False)
+        self.writeReadOnlyOverride()
+        sent, patch = self.notices(mouseApp)
+        with patch, mock.patch.object(sys, "stderr", BrokenStream()):
+            mouseApp.loginAction.setChecked(False)
+            mouseApp.onLoginToggled(False)
+        self.assertEqual((len(sent), mouseApp.loginAction.isChecked()), (1, True))
 
     def testDontOpenAtLoginThatCantWriteSaysSoAndKeepsRunning(self):
         mouseApp = self.makeApp(False)

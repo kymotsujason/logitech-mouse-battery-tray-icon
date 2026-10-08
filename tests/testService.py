@@ -1,3 +1,4 @@
+import errno
 import io
 import os
 import signal
@@ -26,6 +27,12 @@ app = QApplication.instance() or QApplication([])
 RECEIVER = "/dev/hidraw18"
 OTHER_REPORT = bytes([0x11, 1, 9, 0x00, 1, 2, 3]).ljust(20, b"\x00")
 REPEATED_BATTERY = bytes([0x11, 1, 5, 0x00, 81, 0x04, 0, 0]).ljust(20, b"\x00")
+
+
+class BrokenStream(io.StringIO):
+    # stderr once the journal's end of it has gone away
+    def write(self, text):
+        raise BrokenPipeError(errno.EPIPE, "Broken pipe")
 
 
 def silent(request):
@@ -309,6 +316,12 @@ class ServiceTests(unittest.TestCase):
     def testMainExitsOneWhenTheNameIsTaken(self):
         with mock.patch.object(service, "installExceptionHooks"), mock.patch.object(service.signal, "signal"), mock.patch.object(sys, "stderr", io.StringIO()):
             self.assertEqual(service.main(self.connectTo("second")), 1)
+
+    def testMainStartsTheReceiversWhenItsStartLineCantBePrinted(self):
+        with mock.patch.object(service, "installExceptionHooks"), mock.patch.object(service.signal, "signal"), mock.patch.object(service, "serve", return_value=(object(), object())), mock.patch.object(service, "ReceiverList") as receiverList, mock.patch.object(service, "quitOnSigterm"), mock.patch.object(service, "QCoreApplication") as application, mock.patch.object(sys, "stderr", BrokenStream()):
+            application.instance.return_value.exec.return_value = 0
+            self.assertEqual(service.main(object()), 0)
+        self.assertTrue(receiverList.return_value.start.called)
 
 
 class ServiceProcessTests(unittest.TestCase):

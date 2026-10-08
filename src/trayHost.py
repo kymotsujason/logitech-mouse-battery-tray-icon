@@ -1,6 +1,5 @@
 import os
 import shutil
-import sys
 
 from PyQt6.QtCore import QObject, QProcess, QUrl, pyqtSignal, pyqtSlot
 from PyQt6.QtDBus import QDBusMessage, QDBusServiceWatcher
@@ -9,6 +8,7 @@ from PyQt6.QtGui import QDesktopServices
 import dbusCalls
 import mice
 import panelColor
+from exceptionHooks import printLine
 
 APP_NAME = "Mouse Battery"
 WATCHER_SERVICE = "org.kde.StatusNotifierWatcher"
@@ -188,12 +188,12 @@ class TrayHost(QObject):
 
     def sendNotice(self, body, actions):
         # without a tray the app has no other way to show itself, so the journal says so too
-        print("No system tray found: " + body, file=sys.stderr)
+        printLine("No system tray found: " + body)
         self.notifier.send(APP_NAME, body, actions + [("dontOpen", "Don't Open at Login")], self.onNoticeAction, onSent=self.onNoticeSent)
 
     def onNoticeSent(self, notificationId, error):
         if (notificationId is None):
-            print("Couldn't send the no tray notice: " + str(error), file=sys.stderr)
+            printLine("Couldn't send the no tray notice: " + str(error))
 
     def onNoticeAction(self, key):
         if (key == "turnOn" and self.extensionUuid is not None):
@@ -206,6 +206,6 @@ class TrayHost(QObject):
 
     def onEnabled(self, uuid, code, why):
         if (why is not None):
-            print("Couldn't turn on " + uuid + ": " + why, file=sys.stderr)
+            printLine("Couldn't turn on " + uuid + ": " + why)
         elif (code != 0):
-            print("Couldn't turn on " + uuid + ": gnome-extensions enable exited with " + str(code), file=sys.stderr)
+            printLine("Couldn't turn on " + uuid + ": gnome-extensions enable exited with " + str(code))

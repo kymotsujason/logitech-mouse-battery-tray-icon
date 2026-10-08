@@ -1,4 +1,5 @@
 import contextlib
+import errno
 import io
 import os
 import sys
@@ -19,6 +20,12 @@ import trayHost
 from tests.fakes.recordingBus import RecordingBus
 
 app = QApplication.instance() or QApplication([])
+
+
+class BrokenStream(io.StringIO):
+    # stderr once the journal's end of it has gone away
+    def write(self, text):
+        raise BrokenPipeError(errno.EPIPE, "Broken pipe")
 
 
 def answering(value):
@@ -247,6 +254,13 @@ class TrayHostTests(unittest.TestCase):
         with mock.patch.object(host.notifier, "send", failingSend), mock.patch.object(trayHost, "askNameHasOwner", ownerAnswering(False)), mock.patch.object(trayHost, "askHostRegistered", answering(False)), contextlib.redirect_stderr(errors):
             host.onNoTray()
         self.assertEqual(errors.getvalue(), "No system tray found: Mouse Battery needs a system tray with StatusNotifierItem support to show its icon.\nCouldn't send the no tray notice: org.freedesktop.DBus.Error.ServiceUnknown\n")
+
+    def testTheNoTrayNoticeGoesOutWhenItsPrintFails(self):
+        host = self.makeHost(False)
+        sent, patch = self.notices(host)
+        with patch, mock.patch.object(trayHost, "askNameHasOwner", ownerAnswering(False)), mock.patch.object(trayHost, "askHostRegistered", answering(False)), mock.patch.object(sys, "stderr", BrokenStream()):
+            host.onNoTray()
+        self.assertEqual(len(sent), 1)
 
     def testDontOpenAtLoginIsHandedToTheTray(self):
         host = self.makeHost(False)

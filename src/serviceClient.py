@@ -1,9 +1,8 @@
-import sys
-
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal, pyqtSlot
 from PyQt6.QtDBus import QDBusConnection, QDBusError, QDBusMessage, QDBusServiceWatcher
 
 import serviceState
+from exceptionHooks import printLine
 
 # the first call can start the service through D-Bus activation, which takes longer than a blocking call may wait at login
 CALL_TIMEOUT_MS = 25 * 1000
@@ -63,7 +62,7 @@ class ServiceWatcher(QObject):
         if (kind in self.problems):
             return
         self.problems.add(kind)
-        print(line, file=sys.stderr)
+        printLine(line)
 
     def readAll(self):
         if (not self.callService("ReadAll", self.onReadAllDone, self.onReadAllFailed)):
@@ -84,7 +83,7 @@ class ServiceWatcher(QObject):
             return
         if (self.problems):
             self.problems.clear()
-            print("Reached the battery service again", file=sys.stderr)
+            printLine("Reached the battery service again")
         self.retryMs = RETRY_MS
         self.stateChanged.emit(state)
         if (not self.readSent):
@@ -111,7 +110,7 @@ class ServiceWatcher(QObject):
             return
         if (error.name() not in self.readProblems):
             self.readProblems.add(error.name())
-            print("Couldn't ask the battery service for a fresh reading: " + error.name() + ": " + error.message(), file=sys.stderr)
+            printLine("Couldn't ask the battery service for a fresh reading: " + error.name() + ": " + error.message())
         # a service that holds its name but doesn't answer shows only here, so GetState finds out and fails the same way when it doesn't answer either
         self.getState()
 

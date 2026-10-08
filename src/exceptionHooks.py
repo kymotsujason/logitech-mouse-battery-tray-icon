@@ -3,12 +3,20 @@ import threading
 import traceback
 
 
+def printLine(text):
+    # the journal's end of stderr can go away under a running process, and a print that raises would end the slot before the state change after it
+    try:
+        print(text, file=sys.stderr)
+    except (OSError, ValueError):
+        pass
+
+
 def printException(kind, value, tb):
     traceback.print_exception(kind, value, tb)
 
 
 def printThreadException(args):
-    # Python's own hook names the thread, which is the only place a worker's node shows up
+    # Python's own hook names the thread, which says which worker died when the traceback alone doesn't
     name = args.thread.name if args.thread is not None else str(threading.get_ident())
     print("Exception in thread " + name + ":", file=sys.stderr)
     traceback.print_exception(args.exc_type, args.exc_value, args.exc_traceback)

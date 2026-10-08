@@ -1,4 +1,5 @@
 import contextlib
+import errno
 import io
 import os
 import sys
@@ -195,6 +196,12 @@ class ScriptedBus(RecordingBus):
         return QDBusPendingCall.fromCompletedCall(self.answer(message))
 
 
+class BrokenStream(io.StringIO):
+    # stderr once the journal's end of it has gone away
+    def write(self, text):
+        raise BrokenPipeError(errno.EPIPE, "Broken pipe")
+
+
 def failWith(name):
     return lambda message: message.createErrorReply(name, "failed on purpose")
 
@@ -247,6 +254,18 @@ class RetryTests(unittest.TestCase):
             watcher.start()
             self.assertTrue(waitFor(lambda: len(bus.calls) >= 3))
         self.assertEqual(errors.getvalue(), "UPower answered org.freedesktop.DBus.Error.NoReply\n")
+
+    def testFailedCallsAreRetriedWhenTheirPrintFails(self):
+        hooked = []
+        with mock.patch.object(sys, "stderr", BrokenStream()), mock.patch.object(sys, "excepthook", lambda *info: hooked.append(info[1])):
+            bus, watcher = self.makeWatcher(failWith("org.freedesktop.DBus.Error.NoReply"))
+            watcher.start()
+            self.assertTrue(waitFor(lambda: watcher.enumerateDue and watcher.retryTimer.isActive()))
+            watcher.retryTimer.stop()
+            watcher.printedErrors.clear()
+            watcher.refresh(PATH)
+            self.assertTrue(waitFor(lambda: PATH in watcher.retryPaths and watcher.retryTimer.isActive()))
+        self.assertEqual(hooked, [])
 
     def testNoUPowerOnTheBusIsntRetried(self):
         for name in upower.ABSENT_ERRORS:

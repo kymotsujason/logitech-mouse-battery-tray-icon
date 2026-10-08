@@ -5,6 +5,7 @@ import sys
 from PyQt6.QtCore import QFileSystemWatcher, QObject, QProcess, pyqtSignal
 
 import mice
+from exceptionHooks import printLine
 from version import VERSION
 
 INSTALL_SETTLE_MS = 2 * 1000
@@ -13,14 +14,6 @@ CHECK_TIMEOUT_MS = 60 * 1000
 CHECK_RETRY_MS = (30 * 1000, 120 * 1000, 600 * 1000)
 APP_FOLDER = os.path.dirname(os.path.abspath(__file__))
 PYTHON = sys.executable
-
-
-def printLine(text):
-    # the journal's end of stderr can go away under a running tray, and a print that raises here would end the slot partway through
-    try:
-        print(text, file=sys.stderr)
-    except (OSError, ValueError):
-        pass
 
 
 def readVersion(folder):

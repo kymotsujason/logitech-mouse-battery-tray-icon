@@ -1,3 +1,4 @@
+import errno
 import io
 import sys
 import threading
@@ -5,6 +6,12 @@ import unittest
 from unittest import mock
 
 import exceptionHooks
+
+
+class BrokenStream(io.StringIO):
+    # stderr once the journal's end of it has gone away
+    def write(self, text):
+        raise BrokenPipeError(errno.EPIPE, "Broken pipe")
 
 
 class ExceptionHookTests(unittest.TestCase):
@@ -38,6 +45,20 @@ class ExceptionHookTests(unittest.TestCase):
             worker.start()
             worker.join()
         self.assertEqual(errors.getvalue().splitlines()[0], "Exception in thread hidpp /dev/hidraw4:")
+
+    def testPrintLineWritesOneLineToStderr(self):
+        errors = io.StringIO()
+        with mock.patch.object(sys, "stderr", errors):
+            exceptionHooks.printLine("Reached the battery service again")
+        self.assertEqual(errors.getvalue(), "Reached the battery service again\n")
+
+    def testPrintLineOnABrokenStderrDoesntRaise(self):
+        # a closed stream raises ValueError instead of OSError
+        closed = io.StringIO()
+        closed.close()
+        for stream in (BrokenStream(), closed):
+            with self.subTest(stream=stream), mock.patch.object(sys, "stderr", stream):
+                exceptionHooks.printLine("UPower answered org.freedesktop.DBus.Error.NoReply")
 
 
 if (__name__ == "__main__"):

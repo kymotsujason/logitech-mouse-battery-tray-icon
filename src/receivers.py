@@ -2,7 +2,6 @@ import errno
 import os
 import queue
 import select
-import sys
 import threading
 import time
 import traceback
@@ -10,6 +9,7 @@ import traceback
 from PyQt6.QtCore import QFileSystemWatcher, QObject, QTimer, pyqtSignal
 
 import hidpp
+from exceptionHooks import printLine
 
 WAKE_RETRY_MS = 6 * 1000
 ERROR_RETRY_LIMIT = 3
@@ -29,14 +29,6 @@ IDENTIFY_GAP_MS = 1000
 GONE_ERRNOS = (errno.ENODEV, errno.EIO, errno.ESHUTDOWN, errno.EBADF, errno.ENXIO, errno.ENOENT)
 TRANSIENT_ERROR_LIMIT = 3
 STOP_WAIT_SECONDS = 1.0
-
-
-def printLine(text):
-    # the journal's end of stderr can go away under a running service, and a print that raises partway through a handler would leave a dead node in place
-    try:
-        print(text, file=sys.stderr)
-    except (OSError, ValueError):
-        pass
 
 
 def printTraceback(heading):

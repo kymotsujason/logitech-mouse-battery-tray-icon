@@ -1,3 +1,4 @@
+import errno
 import io
 import os
 import shutil
@@ -22,6 +23,12 @@ from tests.fakes.privateBus import FAKES, PrivateBus, requireTools
 app = QApplication.instance() or QApplication([])
 STATE = '{"version": 1, "busy": false, "searching": false, "nodes": ["/dev/hidraw4"], "deniedPaths": [], "mice": [{"key": "02bc524c", "pathKey": false, "name": "PRO X3 SUPERSTRIKE", "source": "/dev/hidraw4", "percent": 53, "charging": 0, "millivolts": null, "level": null, "asleep": false, "lastRead": 1790000000.0, "wokeAt": 1789999000.0}]}'
 LATER = STATE.replace('"percent": 53', '"percent": 52').replace("1790000000.0", "1790000060.0")
+
+
+class BrokenStream(io.StringIO):
+    # stderr once the journal's end of it has gone away
+    def write(self, text):
+        raise BrokenPipeError(errno.EPIPE, "Broken pipe")
 
 
 def waitUntil(condition, timeout=5.0):
@@ -276,6 +283,61 @@ class ServiceWatcherTests(unittest.TestCase):
         self.assertEqual(len(lines), 2, lines)
         self.assertTrue(lines[0].startswith("Couldn't reach the battery service: org.freedesktop.DBus.Error.ServiceUnknown"), lines[0])
         self.assertEqual(lines[1], "Reached the battery service again")
+
+    def brokenStderr(self):
+        hooked = []
+        patches = [mock.patch.object(sys, "stderr", BrokenStream()), mock.patch.object(sys, "excepthook", lambda *info: hooked.append(info[1]))]
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+        return hooked
+
+    def testAnUnreachableServiceStillSendsNoneAndRetriesWhenItsPrintFails(self):
+        self.privateBus = PrivateBus()
+        hooked = self.brokenStderr()
+        self.startWatcher()
+        self.assertTrue(waitUntil(lambda: self.states.count(None) >= 2))
+        self.assertEqual(hooked, [])
+
+    def testAServiceThatComesBackReachesTheTrayWhenItsPrintFails(self):
+        self.privateBus = PrivateBus()
+        self.startWatcher()
+        self.assertTrue(waitUntil(lambda: None in self.states))
+        hooked = self.brokenStderr()
+        self.startFake()
+        self.assertTrue(waitUntil(lambda: self.goodStates()))
+        self.assertEqual((hooked, self.watcher.retryMs), ([], serviceClient.RETRY_MS))
+
+    def testAServiceThatGoesAwaySendsNoneWhenItsPrintFails(self):
+        self.privateBus = PrivateBus()
+        self.startFake()
+        self.startWatcher()
+        self.assertTrue(waitUntil(lambda: self.goodStates()))
+        hooked = self.brokenStderr()
+        self.stopFake()
+        self.assertTrue(waitUntil(lambda: self.states[-1] is None))
+        self.assertEqual(hooked, [])
+
+    def testAStateThatDoesntDecodeSendsNoneAndRetriesWhenItsPrintFails(self):
+        self.privateBus = PrivateBus()
+        self.writeState("not json")
+        self.startFake()
+        hooked = self.brokenStderr()
+        self.startWatcher()
+        self.assertTrue(waitUntil(lambda: self.states.count(None) >= 2))
+        self.assertEqual(hooked, [])
+
+    def testAReadAllTurnedDownStillAsksForTheStateWhenItsPrintFails(self):
+        self.privateBus = PrivateBus()
+        log = self.startFake()
+        self.startWatcher()
+        self.assertTrue(waitUntil(lambda: self.goodStates()))
+        self.setAnswer(serviceState.CALLER_UNKNOWN)
+        before = self.privateBus.lines(log).count("GetState")
+        hooked = self.brokenStderr()
+        self.watcher.readAll()
+        self.assertTrue(waitUntil(lambda: self.privateBus.lines(log).count("GetState") == before + 1))
+        self.assertEqual(hooked, [])
 
     def testAServiceThatGoesAwayIsPrinted(self):
         self.privateBus = PrivateBus()
