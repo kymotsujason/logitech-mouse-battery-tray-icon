@@ -1363,6 +1363,8 @@ class ReceiverListTests(unittest.TestCase):
             self.nodes.add(RECEIVER, mouseHandler())
             self.mice.start()
             for i in range(2):
+                # each loss comes straight after its open, however long a loaded machine took to get here
+                self.mice.nodes[RECEIVER].openedAt = time.monotonic()
                 self.mice.onLost(self.mice.nodes[RECEIVER], OSError(errno.EIO, "Input/output error"))
                 self.mice.retryDenied()
             # the journal said the node keeps failing, so once it has served as long as a stable node does it says it works again
