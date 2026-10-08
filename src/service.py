@@ -70,6 +70,10 @@ class BatteryService(QDBusAbstractAdaptor):
 
     def takeRead(self, caller):
         now = time.monotonic()
+        # a full budget is what an unseen account starts with, so dropping it changes nothing while the map stays as small as the accounts calling lately
+        for other, (reads, since) in list(self.callerBudgets.items()):
+            if (reads + (now - since) / READ_ALL_REFILL_SECONDS >= READ_ALL_BURST):
+                del self.callerBudgets[other]
         reads, since = self.callerBudgets.get(caller, (READ_ALL_BURST, now))
         reads = min(READ_ALL_BURST, reads + (now - since) / READ_ALL_REFILL_SECONDS)
         if (reads < 1):

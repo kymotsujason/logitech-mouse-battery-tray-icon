@@ -243,6 +243,17 @@ class ServiceTests(unittest.TestCase):
             caller.call("ReadAll")
             self.assertTrue(waitUntil(lambda: batteryReads(device) > before))
 
+    def testAnAccountWhoseBudgetRefilledIsDropped(self):
+        adaptor = self.served[1]
+        with mock.patch.object(service, "READ_ALL_BURST", 2), mock.patch.object(service, "READ_ALL_REFILL_SECONDS", 0.1):
+            for caller in range(50):
+                self.assertTrue(adaptor.takeRead(caller))
+            # a budget that's still refilling is kept, since dropping it would hand its account a full one early
+            self.assertEqual(len(adaptor.callerBudgets), 50)
+            time.sleep(0.3)
+            self.assertTrue(adaptor.takeRead(1000))
+        self.assertEqual(list(adaptor.callerBudgets), [1000])
+
     def testARefusedReadAllAnswersWithAnError(self):
         self.startWithMouse()
         caller = Caller(self.connectTo("other"))
