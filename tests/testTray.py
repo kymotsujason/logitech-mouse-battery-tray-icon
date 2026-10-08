@@ -127,6 +127,20 @@ class ProcessTests(unittest.TestCase):
             self.assertTrue(again[0])
             again[1].close()
 
+    def runMain(self, stderr):
+        with mock.patch.object(tray, "installExceptionHooks"), mock.patch.object(tray, "raiseNiceness"), mock.patch.object(tray.signal, "signal"), mock.patch.object(tray, "QApplication"), mock.patch.object(tray, "QIcon"), mock.patch.object(tray, "takeLock", return_value=(True, None)), mock.patch.object(tray, "MouseBatteryApp") as mouseApp, mock.patch.object(tray.sys, "stderr", stderr):
+            mouseApp.return_value.start.side_effect = lambda: None
+            return (tray.main(), mouseApp)
+
+    def testStartingLogsTheVersion(self):
+        errors = io.StringIO()
+        self.runMain(errors)
+        self.assertEqual(errors.getvalue(), "Mouse Battery " + tray.VERSION + " started\n")
+
+    def testABrokenStderrDoesNotStopStartup(self):
+        code, mouseApp = self.runMain(mock.Mock(write=mock.Mock(side_effect=OSError(5, "I/O error"))))
+        self.assertTrue(mouseApp.return_value.start.called)
+
     def testTheLockDoesntTruncateThroughALink(self):
         with tempfile.TemporaryDirectory() as runtimeDir, tempfile.TemporaryDirectory() as other:
             victim = os.path.join(other, "victim")
@@ -376,7 +390,7 @@ class AppTests(unittest.TestCase):
                 mouseApp.installWatcher.onChanged()
                 self.assertTrue(waitUntil(lambda: mouseApp.installWatcher.check is None, timeout=10.0))
         self.assertIn("couldn't start", errors.getvalue())
-        self.assertEqual((mouseApp.mouseList.stopped, mouseApp.mouseList.readTimer.isActive()), (False, True))
+        self.assertTrue(mouseApp.mouseList.readTimer.isActive())
 
     def testARemovedStatusLineIsFreed(self):
         mouseApp = self.makeApp(True)
@@ -422,6 +436,17 @@ class AppTests(unittest.TestCase):
         self.assertTrue(sip.isdeleted(first))
         self.assertTrue(mouseApp.aboutBox.isVisible())
         mouseApp.aboutBox.close()
+
+    def testAboutOpenedAgainAfterItsWindowIsHiddenIsANewBox(self):
+        mouseApp = self.makeApp(True)
+        mouseApp.showAbout()
+        first = mouseApp.aboutBox
+        first.hide()
+        mouseApp.showAbout()
+        self.assertIsNot(mouseApp.aboutBox, first)
+        self.assertTrue(mouseApp.aboutBox.isVisible())
+        mouseApp.aboutBox.close()
+        first.close()
 
     def runAboutCycles(self, *ways):
         env = {key: value for key, value in os.environ.items() if key not in ("DISPLAY", "WAYLAND_DISPLAY")}

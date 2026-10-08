@@ -71,7 +71,6 @@ class MouseList(QObject):
     def __init__(self):
         super().__init__()
         self.mice = []
-        self.stopped = False
         self.warner = LowBatteryWarner()
         self.answered = False
         self.serviceState = None
@@ -84,7 +83,6 @@ class MouseList(QObject):
         self.readTimer.start()
 
     def stop(self):
-        self.stopped = True
         self.readTimer.stop()
 
     def readAll(self):
