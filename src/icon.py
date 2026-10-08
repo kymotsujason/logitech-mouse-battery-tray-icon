@@ -4,7 +4,8 @@ from dataclasses import dataclass
 from PyQt6.QtCore import QPointF, QRectF, Qt
 from PyQt6.QtGui import QColor, QFont, QFontDatabase, QFontMetricsF, QIcon, QImage, QPainter, QPainterPath, QPixmap
 
-ICON_SIZES = [16, 22, 24, 32, 44, 48, 64, 96, 128]
+# Qt's D-Bus tray drops any size over 64 px, so larger ones would only cost paint time
+ICON_SIZES = [16, 22, 24, 32, 44, 48, 64]
 # below this size the digits don't read, so the icon keeps its fill and drops the number
 NUMBER_MIN_SIZE = 22
 # up to this size antialiased digits read faint, so they're drawn crisp

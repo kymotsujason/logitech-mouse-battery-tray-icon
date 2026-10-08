@@ -91,7 +91,7 @@ class IconTests(unittest.TestCase):
 
     def testIconHoldsEverySize(self):
         sizes = makeIcon(IconState(percent=81), WHITE).availableSizes()
-        self.assertEqual(sorted(size.width() for size in sizes), [16, 22, 24, 32, 44, 48, 64, 96, 128])
+        self.assertEqual(sorted(size.width() for size in sizes), [16, 22, 24, 32, 44, 48, 64])
 
     def testSmallestSizeKeepsTheFillAndDropsTheNumber(self):
         image = renderImage(IconState(percent=81), 16, WHITE)
