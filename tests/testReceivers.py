@@ -563,6 +563,17 @@ class ReceiverListTests(unittest.TestCase):
         QTest.qWait(300)
         self.assertEqual(pingsTo(receiver, 2), before)
 
+    def testARegisterReplyToAnotherProgramStartsNoSearch(self):
+        receiver = self.nodes.add(RECEIVER, mouseHandler())
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"] and not self.mice.isBusy()))
+        before = pingsTo(receiver, 0xFF)
+        # another program reading the receiver's register 0x00 and getting an error back on register 0xF0
+        receiver.send(bytes([0x10, 0xFF, 0x81, 0x00, 0x00, 0x09, 0x00]))
+        receiver.send(bytes([0x10, 0xFF, 0x8F, 0x81, 0xF0, 0x02, 0x00]))
+        QTest.qWait(300)
+        self.assertEqual(pingsTo(receiver, 0xFF), before)
+
     def testAReportFromASlotHidppNeverPingsStartsNoSearch(self):
         receiver = self.nodes.add(RECEIVER, mouseHandler())
         self.mice.start()

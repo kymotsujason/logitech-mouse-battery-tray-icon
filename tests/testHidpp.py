@@ -449,6 +449,18 @@ class EventTests(unittest.TestCase):
         self.assertFalse(hidpp.isReply(bytes([0x10, 1, 0x41, 0x1C, 0x40, 0x00, 0x00])))
         self.assertFalse(hidpp.isReply(bytes([0x10, 1])))
 
+    def testRegisterRepliesAndTheirErrorsAreRepliesWhateverTheAddress(self):
+        # HID++ 1.0 register access has no software id, so byte 3 is the register address, and 0x00 or 0xF0 would look like an event's
+        for subId in (0x80, 0x81, 0x82, 0x83):
+            for address in (0x00, 0xF0, 0x02):
+                with self.subTest(subId=subId, address=address):
+                    self.assertTrue(hidpp.isReply(bytes([0x10, 0xFF, subId, address, 0x00, 0x00, 0x00])))
+                    self.assertTrue(hidpp.isReply(bytes([0x10, 0xFF, 0x8F, subId, address, 0x02, 0x00])))
+        self.assertTrue(hidpp.isReply(bytes([0x11, 0xFF, 0x83, 0xB5, 0x20, 0x00, 0x00]).ljust(20, b"\x00")))
+        # a feature event from an index outside the register sub ids is still an event
+        self.assertFalse(hidpp.isReply(bytes([0x11, 0xFF, 0x7F, 0x00, 1, 2, 3]).ljust(20, b"\x00")))
+        self.assertFalse(hidpp.isReply(bytes([0x11, 0xFF, 0x84, 0x00, 1, 2, 3]).ljust(20, b"\x00")))
+
     def testBatteryStatusEvent(self):
         feature = hidpp.BatteryFeature(1, hidpp.FEATURE_BATTERY_STATUS, 6, True)
         report = bytes([0x11, 1, 6, 0x00, 55, 50, 1]).ljust(20, b"\x00")

@@ -15,6 +15,8 @@ REPORT_LENGTH = 20
 SW_IDS = range(0x08, 0x10)
 RECEIVER_ERROR = 0x8F
 DEVICE_ERROR = 0xFF
+# set and get, short and long register
+REGISTER_SUB_IDS = (0x80, 0x81, 0x82, 0x83)
 REQUEST_TIMEOUT = 1.0
 SHORT_REPORT = 0x10
 REPORT_LENGTHS = {SHORT_REPORT: 7, LONG_REPORT: 20}
@@ -459,8 +461,11 @@ def isReply(report):
     # the device sends its own events with software id 0, so anything else answers some program's request
     if (len(report) < 5):
         return False
+    # HID++ 1.0 register access carries no software id, and a device never sends a register reply or its error on its own, the same call Solaar's make_notification makes
+    if (report[2] in REGISTER_SUB_IDS):
+        return True
     if (report[2] in (RECEIVER_ERROR, DEVICE_ERROR)):
-        return (report[4] & 0x0F) != 0
+        return report[3] in REGISTER_SUB_IDS or (report[4] & 0x0F) != 0
     if (report[2] == CONNECTION_NOTIFICATION):
         return False
     return (report[3] & 0x0F) != 0
