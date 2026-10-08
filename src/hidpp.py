@@ -94,6 +94,8 @@ class FoundMouse:
     feature: BatteryFeature
     reading: BatteryReading | None
     outcome: int = ANSWER
+    # the monotonic time the worker got the reading, which a battery event it read later is newer than
+    readAt: float | None = None
 
 
 @dataclass(frozen=True)
@@ -369,11 +371,12 @@ def identifySlot(node, slot, deadline=None):
         return (UNKNOWN, None)
     # the battery goes first, since a device decides how slowly it answers each name chunk and the reading is what the identify is for
     outcome, reading = readBattery(node, feature, deadline)
+    readAt = time.monotonic()
     # a read cut off by the budget says the identify ran out of time, not that the mouse went quiet, so the mouse is kept and read again later as one that answered with an error
     if (outcome == TIMEOUT and time.monotonic() >= deadline):
         return (FOUND, FoundMouse(slot, unitId, None, feature, None, ERROR))
     name = readName(node, slot, deadline)
-    return (FOUND, FoundMouse(slot, unitId, name, feature, reading, outcome))
+    return (FOUND, FoundMouse(slot, unitId, name, feature, reading, outcome, readAt))
 
 
 def searchNode(node, skipped=frozenset(), pingTimeout=None, deadline=None):

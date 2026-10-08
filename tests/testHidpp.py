@@ -359,9 +359,11 @@ class SearchTests(unittest.TestCase):
 
     def testSearchFindsTheMouse(self):
         self.device = FakeDevice(mouseHandler())
+        before = time.monotonic()
         result = hidpp.searchNode(self.device.node(), pingTimeout=0.05)
         feature = hidpp.BatteryFeature(1, hidpp.FEATURE_UNIFIED_BATTERY, 5, True)
-        self.assertEqual(result.mice, (hidpp.FoundMouse(1, "02bc524c", NAME.decode(), feature, hidpp.BatteryReading(81, 0)),))
+        self.assertEqual(result.mice, (hidpp.FoundMouse(1, "02bc524c", NAME.decode(), feature, hidpp.BatteryReading(81, 0), readAt=mock.ANY),))
+        self.assertTrue(before < result.mice[0].readAt < time.monotonic())
         self.assertEqual((result.skipped, result.unknown), (frozenset(), frozenset()))
 
     def testSearchSkipsAKeyboard(self):

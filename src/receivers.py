@@ -60,7 +60,8 @@ class NodeWorker(threading.Thread):
         # each post is a queued hop onto the Qt thread, and another program polling the receiver gets a reply to every one of its requests, which the main thread drops anyway
         if (len(report) < 5 or hidpp.isReply(report)):
             return
-        self.post(("report", self, report))
+        # stamped as it's read, since a search's reading crosses to the Qt thread only after events this thread read later
+        self.post(("report", self, report, time.monotonic()))
 
     def queueWork(self, item):
         self.work.put(item)
@@ -460,7 +461,7 @@ class ReceiverList(QObject):
         if (state is None or state.worker is not worker):
             return
         if (kind == "report"):
-            self.onReport(state, message[2])
+            self.onReport(state, message[2], message[3])
         elif (kind == "searched"):
             self.onSearched(state, message[2], message[3])
         elif (kind == "read"):
@@ -560,7 +561,11 @@ class ReceiverList(QObject):
         mouse.nodePath = path
         mouse.slot = found.slot
         mouse.feature = found.feature
-        self.applyOutcome(mouse, found.outcome, found.reading, queuedAt, woke=(moved or linkUp))
+        reading = found.reading
+        if (found.outcome == hidpp.ANSWER and found.readAt is not None and mouse.batteryEventAt is not None and mouse.batteryEventAt > found.readAt and mouse.reading is not None):
+            # a battery event the worker read after this reading has already reached the mouse, so the older reading doesn't replace it
+            reading = mouse.reading
+        self.applyOutcome(mouse, found.outcome, reading, queuedAt, woke=(moved or linkUp))
 
     def mouseFor(self, key, pathKey=False):
         for mouse in self.mice:
@@ -707,7 +712,7 @@ class ReceiverList(QObject):
         self.retryLater(mouse)
         self.readMouse(mouse)
 
-    def onReport(self, state, report):
+    def onReport(self, state, report, receivedAt):
         if (len(report) < 5 or hidpp.isReply(report)):
             return
         slot = report[1]
@@ -715,7 +720,7 @@ class ReceiverList(QObject):
             state.noticedSlots.add(slot)
         mouse = self.findByNode(state.path, slot)
         if (mouse is not None):
-            self.onMouseReport(state, mouse, report)
+            self.onMouseReport(state, mouse, report, receivedAt)
             return
         if (slot in state.skipped):
             if (report[2] == hidpp.CONNECTION_NOTIFICATION):
@@ -745,12 +750,12 @@ class ReceiverList(QObject):
         state.reportSearchAt = now
         self.requestSearch(state.path)
 
-    def onMouseReport(self, state, mouse, report):
+    def onMouseReport(self, state, mouse, report, receivedAt):
         mouse.errorRetries = 0
         kind, reading = hidpp.parseEvent(report, mouse.feature)
         before = (mouse.reading, mouse.asleep, mouse.lastRead)
         if (kind == hidpp.EVENT_BATTERY):
-            mouse.batteryEventAt = time.monotonic()
+            mouse.batteryEventAt = receivedAt
             self.applyReading(mouse, reading)
         elif (kind == hidpp.EVENT_LINK_DOWN):
             mouse.asleep = True

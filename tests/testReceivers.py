@@ -86,7 +86,7 @@ class WorkerTests(unittest.TestCase):
         self.startWorker(mouseHandler())
         event = bytes([0x11, 1, 5, 0x00, 42, 0x04, 0, 0]).ljust(20, b"\x00")
         self.device.send(event)
-        self.assertEqual(nextMessage(self.messages, "report"), ("report", self.worker, event))
+        self.assertEqual(nextMessage(self.messages, "report")[:3], ("report", self.worker, event))
 
     def testRepliesAndShortReportsStayOnTheWorker(self):
         self.startWorker(mouseHandler())
@@ -97,7 +97,7 @@ class WorkerTests(unittest.TestCase):
         self.worker.onEvent(bytes([0x10, 1, 0x41]))
         self.device.send(bytes(answer))
         self.device.send(event)
-        self.assertEqual(nextMessage(self.messages, "report"), ("report", self.worker, event))
+        self.assertEqual(nextMessage(self.messages, "report")[:3], ("report", self.worker, event))
 
     def testExceptionInAWorkItemKeepsTheThreadRunning(self):
         self.startWorker(mouseHandler())
@@ -462,11 +462,11 @@ class ReceiverListTests(unittest.TestCase):
         state = self.mice.nodes[RECEIVER]
         report = bytearray(OTHER_REPORT)
         report[1] = 2
-        self.mice.onReport(state, bytes(report))
+        self.mice.onReport(state, bytes(report), time.monotonic())
         self.mice.onSearched(state, hidpp.SearchResult((), frozenset(), frozenset({2})), 0.0)
         self.assertTrue(state.retryTimer.isActive())
         state.retryTimer.stop()
-        self.mice.onReport(state, OTHER_REPORT)
+        self.mice.onReport(state, OTHER_REPORT, time.monotonic())
         self.mice.onSearched(state, hidpp.SearchResult((), frozenset({1}), frozenset()), 0.0)
         self.assertFalse(state.retryTimer.isActive())
 
@@ -870,6 +870,39 @@ class ReceiverListTests(unittest.TestCase):
         self.assertTrue(waitUntil(lambda: not self.mice.nodes[RECEIVER].pendingReads))
         self.assertEqual((self.mouse().reading, self.mouse().asleep), (hidpp.BatteryReading(42, 0), False))
 
+    def eventDuringTheName(self, receiver):
+        # the battery reply comes first, and a battery event the mouse sends while its name is read is the newer level
+        event = bytes([0x11, 1, 5, 0x00, 42, 0x04, 0, 0]).ljust(20, b"\x00")
+        mouse = mouseHandler()
+
+        def handler(request):
+            if (request[1] == 1 and request[2] == 2 and (request[3] >> 4) == 0):
+                return [event] + mouse(request)
+            return mouse(request)
+
+        receiver.handler = handler
+
+    def testABatteryEventDuringASearchsNameReadWinsOverItsReading(self):
+        receiver = self.nodes.add(RECEIVER, mouseHandler())
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"] and not self.mice.isBusy()))
+        self.eventDuringTheName(receiver)
+        self.mice.requestSearch(RECEIVER)
+        self.assertTrue(waitUntil(lambda: not self.mice.isBusy()))
+        mouse = self.mouse()
+        self.assertEqual((mouse.reading, mouse.asleep, mouse.name), (hidpp.BatteryReading(42, 0), False, NAME.decode()))
+
+    def testABatteryEventDuringAnIdentifysNameReadWinsOverItsReading(self):
+        receiver = self.nodes.add(RECEIVER, mouseHandler())
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"] and not self.mice.isBusy()))
+        self.eventDuringTheName(receiver)
+        identified = []
+        self.mice.message.connect(lambda message: identified.append(message) if message[0] == "identified" else None)
+        receiver.send(LINK_UP)
+        self.assertTrue(waitUntil(lambda: identified and not self.mice.isBusy()))
+        self.assertEqual(self.mouse().reading, hidpp.BatteryReading(42, 0))
+
     def testAnErrorOnANewMousesFirstReadReadsItAgainSoon(self):
         answers = {(5, 0): [0x0F, 0x02]}
         self.nodes.add(RECEIVER, mouseHandler(answers=answers))
@@ -995,7 +1028,7 @@ class ReceiverListTests(unittest.TestCase):
         state.reportSearchAt = time.monotonic() - 60
         state.retryTimer.start(0)
         self.assertTrue(waitUntil(lambda: state.searching))
-        self.mice.onReport(state, OTHER_REPORT)
+        self.mice.onReport(state, OTHER_REPORT, time.monotonic())
         self.assertFalse(state.searchAgain)
 
     def testARetryDuringARunningSearchQueuesNoOther(self):
@@ -1025,7 +1058,7 @@ class ReceiverListTests(unittest.TestCase):
                 # past the retry wait, while the retry's own search still runs
                 QTest.qWait(200)
                 self.assertTrue(state.searching)
-                self.mice.onReport(state, OTHER_REPORT)
+                self.mice.onReport(state, OTHER_REPORT, time.monotonic())
         self.assertFalse(state.searchAgain)
 
     def testASearchThatRaisesWithASlotWaitingArmsTheRetry(self):
