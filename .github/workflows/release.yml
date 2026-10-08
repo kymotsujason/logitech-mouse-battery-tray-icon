@@ -89,6 +89,26 @@ jobs:
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-checksums: dist/SHA256SUMS
+      # GitHub ignores the publish step's --target when the tag already exists, so a tag pushed at another commit would
+      # carry these assets under that commit's source, and an annotated tag's own line names the tag object, not its commit
+      - name: Check that the version's tag, if one exists, points at this commit
+        run: |
+          if git ls-remote --exit-code --tags "https://github.com/$GITHUB_REPOSITORY.git" "refs/tags/v$VERSION" "refs/tags/v$VERSION^{}" > /tmp/tag.log; then
+            commit=$(awk -v peeled="refs/tags/v$VERSION^{}" '$2 == peeled { print $1 }' /tmp/tag.log)
+            if [ -z "$commit" ]; then
+              commit=$(awk '{ print $1 }' /tmp/tag.log)
+            fi
+            if [ "$commit" != "$GITHUB_SHA" ]; then
+              echo "::error::v$VERSION already points at $commit, not at $GITHUB_SHA, and the release would publish under it"
+              exit 1
+            fi
+          else
+            code=$?
+            if [ "$code" -ne 2 ]; then
+              echo "::error::couldn't look up the v$VERSION tag"
+              exit 1
+            fi
+          fi
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}

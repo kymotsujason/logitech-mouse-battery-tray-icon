@@ -1,5 +1,7 @@
 import os
 import re
+import subprocess
+import tempfile
 import unittest
 import xml.etree.ElementTree as ElementTree
 
@@ -393,6 +395,55 @@ class WorkflowTests(unittest.TestCase):
 
     def testTheAurBundleCarriesTheInstallFile(self):
         self.assertIn('run: tar -czf "dist/logitech-mouse-battery-$VERSION-aur.tar.gz" -C dist/aur PKGBUILD .SRCINFO logitech-mouse-battery.install\n', self.releaseJob())
+
+    def tagCheck(self):
+        release = self.releaseJob()
+        start = release.index("      - name: Check that the version's tag, if one exists, points at this commit\n")
+        self.assertLess(release.index("subject-checksums"), start)
+        self.assertLess(start, release.index("gh release create"))
+        lines = release[start:].split("\n        run: |\n", 1)[1].split("\n")
+        body = []
+        for line in lines:
+            if (line.strip() != "" and not line.startswith("          ")):
+                break
+            body.append(line[10:])
+        return "\n".join(body)
+
+    def runTagCheck(self, output, code):
+        with tempfile.TemporaryDirectory() as folder:
+            git = os.path.join(folder, "git")
+            with open(git, "w") as f:
+                f.write('#!/bin/sh\necho "$@" > "$FAKE_FOLDER/args"\nprintf "%s" "$FAKE_OUTPUT"\nexit "$FAKE_CODE"\n')
+            os.chmod(git, 0o755)
+            env = {"PATH": folder + ":" + os.environ["PATH"], "FAKE_FOLDER": folder, "FAKE_OUTPUT": output, "FAKE_CODE": str(code), "VERSION": "1.1.1", "GITHUB_SHA": "a" * 40, "GITHUB_REPOSITORY": "owner/repo"}
+            result = subprocess.run(["bash", "-e", "-c", self.tagCheck()], env=env, capture_output=True, text=True)
+            with open(os.path.join(folder, "args")) as f:
+                args = f.read().split()
+        return (result.returncode, result.stdout + result.stderr, args)
+
+    def testTheReleaseAsksForTheTagAndItsPeeledCommit(self):
+        self.assertEqual(self.runTagCheck("", 2)[2], ["ls-remote", "--exit-code", "--tags", "https://github.com/owner/repo.git", "refs/tags/v1.1.1", "refs/tags/v1.1.1^{}"])
+
+    def testTheReleasePublishesWhenNoTagExists(self):
+        self.assertEqual(self.runTagCheck("", 2)[0], 0)
+
+    def testTheReleasePublishesUnderATagAtThisCommit(self):
+        self.assertEqual(self.runTagCheck("a" * 40 + "\trefs/tags/v1.1.1\n", 0)[0], 0)
+        self.assertEqual(self.runTagCheck("b" * 40 + "\trefs/tags/v1.1.1\n" + "a" * 40 + "\trefs/tags/v1.1.1^{}\n", 0)[0], 0)
+
+    def testTheReleaseStopsOnATagAtAnotherCommit(self):
+        code, output, args = self.runTagCheck("c" * 40 + "\trefs/tags/v1.1.1\n", 0)
+        self.assertEqual(code, 1)
+        self.assertIn("::error::v1.1.1 already points at " + "c" * 40, output)
+        # an annotated tag's own line names the tag object, so a tag object that happens to match proves nothing
+        code, output, args = self.runTagCheck("a" * 40 + "\trefs/tags/v1.1.1\n" + "c" * 40 + "\trefs/tags/v1.1.1^{}\n", 0)
+        self.assertEqual(code, 1)
+        self.assertIn("::error::v1.1.1 already points at " + "c" * 40, output)
+
+    def testTheReleaseStopsWhenTheTagLookupFails(self):
+        code, output, args = self.runTagCheck("", 128)
+        self.assertEqual(code, 1)
+        self.assertIn("::error::couldn't look up the v1.1.1 tag", output)
 
 
 if (__name__ == "__main__"):
