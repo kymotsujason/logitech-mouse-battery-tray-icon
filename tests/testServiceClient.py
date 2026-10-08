@@ -305,18 +305,42 @@ class ServiceWatcherTests(unittest.TestCase):
         self.assertTrue(waitUntil(lambda: self.states == [None], timeout=1.0))
         self.assertTrue(self.watcher.retryTimer.isActive())
 
-    def testTheRetryBackoffReachesAServiceThatStartsOnTheThirdTry(self):
+    def startActivatableBus(self):
+        # the bus starts the fake on the first call to its name, and the fake fails its first two starts
         serviceDir = os.path.join(self.work, "services")
         os.mkdir(serviceDir)
         with open(os.path.join(serviceDir, serviceState.SERVICE_NAME + ".service"), "w") as f:
             f.write("[D-BUS Service]\nName=" + serviceState.SERVICE_NAME + "\nExec=" + sys.executable + " " + os.path.join(FAKES, "fakeService.py") + " starter " + self.stateFile + " " + self.startsFile + "\n")
         self.privateBus = PrivateBus(serviceDir)
+
+    def starts(self):
+        with open(self.startsFile) as f:
+            return f.read().splitlines()
+
+    def testTheRetryBackoffReachesAServiceThatStartsOnTheThirdTry(self):
+        self.startActivatableBus()
         self.startWatcher()
         self.assertTrue(waitUntil(lambda: self.goodStates(), timeout=15.0))
-        with open(self.startsFile) as f:
-            self.assertEqual(len(f.read().splitlines()), 3)
+        self.assertEqual(len(self.starts()), 3)
         self.assertEqual(self.states[:2], [None, None])
         self.assertEqual(self.goodStates()[0], serviceState.decodeState(STATE))
+
+    def testTheNextReadStartsAServiceThatStoppedCleanly(self):
+        self.startActivatableBus()
+        self.startWatcher()
+        self.assertTrue(waitUntil(lambda: self.goodStates(), timeout=15.0))
+        # systemd stops the service with SIGTERM, and Restart=on-failure leaves a clean stop down
+        os.kill(int(self.starts()[-1]), signal.SIGTERM)
+        self.assertTrue(waitUntil(lambda: self.states[-1] is None))
+        # the tray doesn't start a stopped service on its own, so an admin's stop holds until someone asks for a reading
+        QTest.qWait(500)
+        self.assertEqual(len(self.starts()), 3)
+        count = len(self.goodStates())
+        self.writeState(LATER)
+        self.watcher.readAll()
+        self.assertTrue(waitUntil(lambda: len(self.goodStates()) > count, timeout=10.0))
+        self.assertEqual(len(self.starts()), 4)
+        self.assertEqual(self.goodStates()[-1], serviceState.decodeState(LATER))
 
 
 if (__name__ == "__main__"):
