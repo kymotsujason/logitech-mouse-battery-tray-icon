@@ -81,6 +81,10 @@ def isCount(value):
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+def isPathList(value):
+    return isinstance(value, list) and all(isinstance(path, str) for path in value)
+
+
 def isReading(fields):
     # a reading reaches comparisons and the icon inside Qt slots, so a field of the wrong type turns the state away instead of raising there
     if (not isCount(fields["charging"])):
@@ -97,13 +101,16 @@ def decodeEntry(fields):
         return None
     if (not isStamp(fields["lastRead"]) or not isStamp(fields["wokeAt"])):
         return None
+    if (not isinstance(fields["pathKey"], bool) or not isinstance(fields["asleep"], bool)):
+        return None
+    if (fields["name"] is not None and not isinstance(fields["name"], str)):
+        return None
     reading = None
     if (fields["charging"] is not None):
         if (not isReading(fields)):
             return None
         reading = hidpp.BatteryReading(fields["percent"], fields["charging"], fields["millivolts"], fields["level"])
-    name = fields["name"] if isinstance(fields["name"], str) else None
-    return ServiceEntry(fields["key"], bool(fields["pathKey"]), name, fields["source"], reading, bool(fields["asleep"]), fields["lastRead"], fields["wokeAt"])
+    return ServiceEntry(fields["key"], fields["pathKey"], fields["name"], fields["source"], reading, fields["asleep"], fields["lastRead"], fields["wokeAt"])
 
 
 def decodeState(text):
@@ -116,9 +123,11 @@ def decodeState(text):
     version = fields["version"]
     if (isinstance(version, bool) or version != STATE_VERSION):
         return None
-    if (not all(isinstance(fields[key], list) for key in ("nodes", "deniedPaths", "mice"))):
+    if (not isPathList(fields["nodes"]) or not isPathList(fields["deniedPaths"]) or not isinstance(fields["mice"], list)):
+        return None
+    if (not isinstance(fields["busy"], bool) or not isinstance(fields["searching"], bool)):
         return None
     mice = tuple(decodeEntry(entry) for entry in fields["mice"])
     if (None in mice):
         return None
-    return ServiceState(bool(fields["busy"]), bool(fields["searching"]), tuple(str(path) for path in fields["nodes"]), tuple(str(path) for path in fields["deniedPaths"]), mice)
+    return ServiceState(fields["busy"], fields["searching"], tuple(fields["nodes"]), tuple(fields["deniedPaths"]), mice)

@@ -98,6 +98,21 @@ class StateTests(unittest.TestCase):
         for key, value in cases:
             self.assertIsNone(serviceState.decodeState(exampleWith(lambda fields: fields["mice"][0].update({key: value}))), (key, value))
 
+    def testAFlagOrPathOfTheWrongTypeDecodesToNone(self):
+        stateCases = [("busy", "false"), ("busy", 0), ("searching", None), ("searching", 1), ("nodes", [4]), ("nodes", [None]), ("deniedPaths", [["/dev/hidraw9"]])]
+        for key, value in stateCases:
+            self.assertIsNone(serviceState.decodeState(exampleWith(lambda fields: fields.update({key: value}))), (key, value))
+        entryCases = [("pathKey", "false"), ("pathKey", 0), ("pathKey", None), ("asleep", "false"), ("asleep", 1), ("name", 5), ("name", ["PRO X3"])]
+        for key, value in entryCases:
+            self.assertIsNone(serviceState.decodeState(exampleWith(lambda fields: fields["mice"][0].update({key: value}))), (key, value))
+
+    def testTheFlagsTheServiceSendsStillDecode(self):
+        def setFlags(fields):
+            fields.update(busy=True, searching=True, deniedPaths=["/dev/hidraw9"])
+            fields["mice"][0].update(pathKey=True, asleep=True)
+        state = serviceState.decodeState(exampleWith(setFlags))
+        self.assertEqual((state.busy, state.searching, state.deniedPaths, state.mice[0].pathKey, state.mice[0].asleep), (True, True, ("/dev/hidraw9",), True, True))
+
     def testAReadingWithOnlyAVoltageOrALevelStillDecodes(self):
         voltage = exampleWith(lambda fields: fields["mice"][0].update(percent=None, millivolts=3900))
         level = exampleWith(lambda fields: fields["mice"][0].update(percent=None, level="good"))
