@@ -89,12 +89,22 @@ class WorkerTests(unittest.TestCase):
 
     def testExceptionInAWorkItemKeepsTheThreadRunning(self):
         self.startWorker(mouseHandler())
-        with mock.patch.object(receivers.traceback, "print_exc") as printed:
+        with mock.patch.object(receivers.traceback, "print_exc") as printed, mock.patch.object(sys, "stderr", io.StringIO()):
             self.worker.queueWork(("bogus",))
             self.assertEqual(nextMessage(self.messages, "failed"), ("failed", self.worker, ("bogus",)))
         self.assertTrue(printed.called)
         self.worker.queueWork(("read", 1, FEATURE, 0.0))
         self.assertIsNotNone(nextMessage(self.messages, "read"))
+
+    def testAFailedItemPrintsItsKindAndNodeBeforeTheTraceback(self):
+        self.startWorker(mouseHandler())
+        errors = io.StringIO()
+        with mock.patch.object(sys, "stderr", errors):
+            self.worker.queueWork(("bogus",))
+            self.assertIsNotNone(nextMessage(self.messages, "failed"))
+        lines = errors.getvalue().splitlines()
+        self.assertEqual(lines[0], "Error running bogus on " + PATH + ":")
+        self.assertIn("ValueError: unknown work item 'bogus'", lines)
 
     def testUnplugPostsLost(self):
         self.startWorker(mouseHandler())
@@ -160,11 +170,13 @@ class WorkerTests(unittest.TestCase):
 
     def testAnUnexpectedErrorInTheLoopPostsLost(self):
         self.startWorker(mouseHandler())
-        with mock.patch.object(receivers.traceback, "print_exc") as printed, mock.patch.object(self.worker.node, "readReport", side_effect=ValueError("bad")):
+        errors = io.StringIO()
+        with mock.patch.object(sys, "stderr", errors), mock.patch.object(self.worker.node, "readReport", side_effect=ValueError("bad")):
             self.device.send(bytes([0x11, 1, 9, 0x00, 1, 2, 3]).ljust(20, b"\x00"))
             message = nextMessage(self.messages, "lost")
         self.assertEqual((message[1], type(message[2])), (self.worker, ValueError))
-        self.assertTrue(printed.called)
+        lines = errors.getvalue().splitlines()
+        self.assertEqual((lines[0], lines[-1]), ("Error reading " + PATH + ":", "ValueError: bad"))
 
     def testALoopErrorWithABrokenStderrStillPostsLost(self):
         self.startWorker(mouseHandler())

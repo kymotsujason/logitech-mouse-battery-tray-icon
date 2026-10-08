@@ -39,7 +39,8 @@ def printLine(text):
         pass
 
 
-def printTraceback():
+def printTraceback(heading):
+    printLine(heading)
     try:
         traceback.print_exc()
     except (OSError, ValueError):
@@ -109,7 +110,7 @@ class NodeWorker(threading.Thread):
         except Exception as error:
             if (not isinstance(error, OSError)):
                 # sys.excepthook never sees another thread's exceptions, so print it here before giving the node up
-                printTraceback()
+                printTraceback("Error reading " + self.path + ":")
             if (not self.stopping.is_set()):
                 self.post(("lost", self, error))
         finally:
@@ -133,7 +134,7 @@ class NodeWorker(threading.Thread):
                 self.post(("failed", self, item, error))
             except Exception:
                 # sys.excepthook never sees another thread's exceptions, so print it here and keep serving the node
-                printTraceback()
+                printTraceback("Error running " + str(item[0]) + " on " + self.path + ":")
                 self.post(("failed", self, item))
 
     def runItem(self, item):

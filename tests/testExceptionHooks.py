@@ -31,6 +31,14 @@ class ExceptionHookTests(unittest.TestCase):
             worker.join()
         self.assertIn("ZeroDivisionError", errors.getvalue())
 
+    def testAThreadExceptionNamesItsThread(self):
+        errors = io.StringIO()
+        with mock.patch.object(sys, "stderr", errors), mock.patch.object(threading, "excepthook", exceptionHooks.printThreadException):
+            worker = threading.Thread(target=lambda: 1 / 0, name="hidpp /dev/hidraw4")
+            worker.start()
+            worker.join()
+        self.assertEqual(errors.getvalue().splitlines()[0], "Exception in thread hidpp /dev/hidraw4:")
+
 
 if (__name__ == "__main__"):
     unittest.main()
