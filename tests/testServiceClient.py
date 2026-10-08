@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import QApplication
 
 import serviceClient
 import serviceState
+import version
 from tests.fakes.privateBus import FAKES, PrivateBus, requireTools
 
 app = QApplication.instance() or QApplication([])
@@ -219,6 +220,34 @@ class ServiceWatcherTests(unittest.TestCase):
         self.watcher.readAll()
         self.assertTrue(waitUntil(lambda: self.states == [None], timeout=1.0))
         self.assertTrue(self.watcher.retryTimer.isActive())
+
+    def percents(self):
+        return [entry.reading.percent for state in self.goodStates() for entry in state.mice if entry.reading is not None]
+
+    def serviceHolds(self, bus, percent):
+        reply = bus.call(QDBusMessage.createMethodCall(serviceState.SERVICE_NAME, serviceState.OBJECT_PATH, serviceState.INTERFACE, "GetState"))
+        arguments = reply.arguments()
+        state = serviceState.decodeState(arguments[0]) if (arguments and isinstance(arguments[0], str)) else None
+        return state is not None and any(entry.reading is not None and entry.reading.percent == percent for entry in state.mice)
+
+    def testTheRealServiceSendsTheTrayAReadsNewPercent(self):
+        self.privateBus = PrivateBus()
+        percentFile = os.path.join(self.work, "percent")
+        with open(percentFile, "w") as f:
+            f.write("60")
+        with mock.patch.dict(os.environ, {"LIVE_PERCENT_FILE": percentFile}):
+            log = self.privateBus.startFake("runService.py")
+        self.assertTrue(self.privateBus.waitForLine(log, "Mouse Battery service " + version.VERSION + " started", timeout=15.0))
+        # the service has read the mouse before the tray starts, so the first percent comes in GetState's reply and only the second needs the signal
+        probe = self.connectTo("probe")
+        self.assertTrue(waitUntil(lambda: self.serviceHolds(probe, 60), timeout=15.0))
+        self.startWatcher()
+        self.assertTrue(waitUntil(lambda: 60 in self.percents()))
+        with open(percentFile, "w") as f:
+            f.write("42")
+        # ReadAll's reply is empty, so the new percent can only reach the tray through StateChanged
+        self.watcher.readAll()
+        self.assertTrue(waitUntil(lambda: 42 in self.percents(), timeout=15.0))
 
     def testAStateThatDoesntDecodeSendsNone(self):
         self.privateBus = PrivateBus()
