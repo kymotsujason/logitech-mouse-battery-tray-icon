@@ -624,13 +624,14 @@ class AppTests(unittest.TestCase):
         with mock.patch.object(serviceClient.ServiceWatcher, "readAll") as readAll:
             mouseApp = self.makeApp(True)
             mouseApp.onMenuShown()
-            self.assertEqual(readAll.call_count, 1)
             mouseApp.onActivated(QSystemTrayIcon.ActivationReason.Trigger)
-            self.assertEqual(readAll.call_count, 2)
+            self.assertEqual(readAll.call_args_list, [mock.call(True)] * 2)
             mouseApp.mouseList.readTimer.start(10)
             QTest.qWait(100)
             mouseApp.mouseList.readTimer.stop()
+        # only a person's read may start the service, so the timer's read can't start a failing one again and again
         self.assertGreaterEqual(readAll.call_count, 3)
+        self.assertEqual(readAll.call_args_list[2:], [mock.call(False)] * (readAll.call_count - 2))
 
 
 class ConfigFolderTests(unittest.TestCase):

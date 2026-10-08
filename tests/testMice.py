@@ -274,12 +274,14 @@ class MouseListTests(unittest.TestCase):
 
     def testReadAllAsksTheServiceToRead(self):
         requests = []
-        self.mice.readRequested.connect(lambda: requests.append(1))
+        self.mice.readRequested.connect(lambda *flags: requests.append(flags))
         self.mice.readAll()
         self.mice.readTimer.start(10)
         QTest.qWait(50)
         self.mice.readTimer.stop()
+        # the flag says a person asked, which only readAll's callers do
         self.assertGreaterEqual(len(requests), 2)
+        self.assertEqual(requests, [(True,)] + [(False,)] * (len(requests) - 1))
 
     def warningsAcrossTheNodeGoing(self, key, pathKey):
         warnings = self.sentWarnings()

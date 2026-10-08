@@ -15,6 +15,7 @@ from PyQt6.QtDBus import QDBusConnection, QDBusMessage
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
 
+import mice
 import serviceClient
 import serviceState
 import version
@@ -416,6 +417,40 @@ class ServiceWatcherTests(unittest.TestCase):
         self.readUntilTheThirdStart()
         self.assertEqual(len(self.starts()), 3)
         self.assertEqual(self.goodStates()[0], serviceState.decodeState(STATE))
+
+    def testTheTimedReadDoesntStartAServiceThatFailedToStart(self):
+        self.startActivatableBus()
+        self.startWatcher()
+        mouseList = mice.MouseList()
+        self.addCleanup(mouseList.stop)
+        # wired the way the tray wires it
+        mouseList.readRequested.connect(self.watcher.readAll)
+        self.assertTrue(waitUntil(lambda: None in self.states, timeout=15.0))
+        mouseList.readTimer.start(50)
+        self.assertTrue(waitUntil(lambda: self.watcher.readProblems, timeout=15.0))
+        QTest.qWait(500)
+        mouseList.readTimer.stop()
+        # each 300 s read of every tray would start a new round of failed starts past the unit's start limit
+        self.assertEqual(len(self.starts()), 1)
+        self.assertEqual(self.watcher.readProblems, {"org.freedesktop.DBus.Error.NameHasNoOwner"})
+
+    def testTheTraysOwnReadsDontStartTheService(self):
+        self.privateBus = PrivateBus()
+        self.setAnswer(serviceState.READ_ALL_LIMITED)
+        self.startFake()
+        calls = []
+        realCall = serviceClient.ServiceWatcher.callService
+
+        def recordCall(watcher, member, replySlot, errorSlot, activate=True):
+            calls.append((member, activate))
+            return realCall(watcher, member, replySlot, errorSlot, activate)
+
+        with mock.patch.object(serviceState, "READ_ALL_REFILL_SECONDS", 0.3), mock.patch.object(serviceClient.ServiceWatcher, "callService", recordCall):
+            self.startWatcher()
+            self.assertTrue(waitUntil(lambda: [member for member, activate in calls].count("ReadAll") >= 2))
+            self.watcher.stop()
+        # the start's GetState may start the service, while the read after the first good state and the read after a refill wait are the tray's own
+        self.assertEqual(calls[:3], [("GetState", True), ("ReadAll", False), ("ReadAll", False)])
 
     def testARefusedReadAllWaitingWhenTheServiceGoesAwayIsDropped(self):
         self.privateBus = PrivateBus()

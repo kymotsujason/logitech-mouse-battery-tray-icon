@@ -66,7 +66,8 @@ class Mouse:
 class MouseList(QObject):
     changed = pyqtSignal()
     lowBattery = pyqtSignal(str, str, int)
-    readRequested = pyqtSignal()
+    # the flag says a person asked, and only then may the read start the service
+    readRequested = pyqtSignal(bool)
 
     def __init__(self):
         super().__init__()
@@ -77,7 +78,7 @@ class MouseList(QObject):
         self.appliedEntries = {}
         self.readTimer = QTimer(self)
         self.readTimer.setInterval(READ_INTERVAL_MS)
-        self.readTimer.timeout.connect(self.readAll)
+        self.readTimer.timeout.connect(self.readOnTimer)
 
     def start(self):
         self.readTimer.start()
@@ -86,7 +87,10 @@ class MouseList(QObject):
         self.readTimer.stop()
 
     def readAll(self):
-        self.readRequested.emit()
+        self.readRequested.emit(True)
+
+    def readOnTimer(self):
+        self.readRequested.emit(False)
 
     def applyService(self, state):
         self.answered = True

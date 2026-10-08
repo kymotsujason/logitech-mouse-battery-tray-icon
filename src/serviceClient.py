@@ -31,7 +31,7 @@ class ServiceWatcher(QObject):
         self.retryTimer.timeout.connect(self.getState)
         self.readRetryTimer = QTimer(self)
         self.readRetryTimer.setSingleShot(True)
-        self.readRetryTimer.timeout.connect(self.readAll)
+        self.readRetryTimer.timeout.connect(self.readOnItsOwn)
         self.ownerWatcher = None
         self.readSent = False
         # each kind of trouble is printed once until the service answers again, so a retry loop stays quiet in the journal
@@ -68,9 +68,13 @@ class ServiceWatcher(QObject):
         self.problems.add(kind)
         printLine(line)
 
-    def readAll(self):
-        if (not self.callService("ReadAll", self.onReadAllDone, self.onReadAllFailed)):
+    def readAll(self, activate=True):
+        # a read the tray sends on its own doesn't start the service, or each tray's 300 s read would start a service that fails at start again past the unit's start limit, while a person's read still tries once more each time they ask
+        if (not self.callService("ReadAll", self.onReadAllDone, self.onReadAllFailed, activate)):
             self.getState()
+
+    def readOnItsOwn(self):
+        self.readAll(False)
 
     def fail(self):
         self.stateChanged.emit(None)
@@ -93,7 +97,7 @@ class ServiceWatcher(QObject):
         if (not self.readSent):
             # a service that udev started at boot can hold readings from then, as the tray read every mouse when it started in 1.0.1
             self.readSent = True
-            self.readAll()
+            self.readOnItsOwn()
 
     @pyqtSlot(QDBusError, QDBusMessage)
     def onError(self, error, message):
@@ -129,7 +133,7 @@ class ServiceWatcher(QObject):
 
     def onOwnerChanged(self, name, oldOwner, newOwner):
         if (not newOwner):
-            # a read waiting out the refill would start the stopped service again through activation
+            # a read waiting out the refill has no service to go to now, and would only fail and print a line about it
             self.readRetryTimer.stop()
             self.reportProblem("gone", "The battery service went away")
             self.stateChanged.emit(None)
