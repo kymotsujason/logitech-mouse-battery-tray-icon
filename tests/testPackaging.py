@@ -453,6 +453,49 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("::error::couldn't look up the v1.1.1 tag", output)
 
+    def publishStep(self):
+        release = self.releaseJob()
+        start = release.index("      - name: Publish the release\n")
+        lines = release[start:].split("\n        run: |\n", 1)[1].split("\n")
+        body = []
+        for line in lines:
+            if (line.strip() != "" and not line.startswith("          ")):
+                break
+            body.append(line[10:])
+        return "\n".join(body)
+
+    def runPublish(self, listing):
+        with tempfile.TemporaryDirectory() as folder:
+            gh = os.path.join(folder, "gh")
+            with open(gh, "w") as f:
+                f.write('#!/bin/sh\necho "$@" >> "$FAKE_FOLDER/calls"\nif [ "$1" = api ] && [ "$2" = --paginate ]; then printf "%s" "$FAKE_LISTING"; fi\n')
+            os.chmod(gh, 0o755)
+            env = {"PATH": folder + ":" + os.environ["PATH"], "FAKE_FOLDER": folder, "FAKE_LISTING": listing, "VERSION": "1.1.1", "GITHUB_SHA": "a" * 40, "GITHUB_REPOSITORY": "owner/repo"}
+            result = subprocess.run(["bash", "-e", "-c", self.publishStep()], env=env, capture_output=True, text=True)
+            with open(os.path.join(folder, "calls")) as f:
+                calls = f.read().splitlines()
+        return (result.returncode, result.stdout + result.stderr, calls)
+
+    def testAStrandedDraftIsDeletedBeforeThePublish(self):
+        code, output, calls = self.runPublish("77\n")
+        self.assertEqual(code, 0)
+        self.assertIn("found a draft release for v1.1.1", output)
+        deletes = [call for call in calls if call.startswith("api -X DELETE")]
+        self.assertEqual(deletes, ["api -X DELETE repos/owner/repo/releases/77"])
+        self.assertTrue(calls[-1].startswith("release create v1.1.1 "), calls)
+        self.assertLess(calls.index(deletes[0]), len(calls) - 1)
+
+    def testThePublishDeletesNothingWithoutADraft(self):
+        code, output, calls = self.runPublish("")
+        self.assertEqual(code, 0)
+        self.assertEqual([call for call in calls if "DELETE" in call], [])
+        self.assertNotIn("draft", output)
+        self.assertEqual(len(calls), 2)
+
+    def testTheDraftListingOnlyKeepsDraftsOfThisTag(self):
+        listing = [call for call in self.runPublish("")[2] if call.startswith("api --paginate")][0]
+        self.assertIn(".draft and .tag_name == \"v1.1.1\"", listing)
+
 
 if (__name__ == "__main__"):
     unittest.main()

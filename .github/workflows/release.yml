@@ -114,4 +114,11 @@ jobs:
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "v$VERSION" --target "$GITHUB_SHA" --title "Mouse Battery $VERSION" --notes "Install steps are in the README." dist/*.deb dist/*.rpm dist/*.pkg.tar.zst dist/*.tar.gz dist/SHA256SUMS
+        run: |
+          # the check job's read token and the tag lookup both skip drafts, so a draft a failed run left behind is cleared here, where the token can list it
+          drafts=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.draft and .tag_name == \"v$VERSION\") | .id")
+          for id in $drafts; do
+            echo "found a draft release for v$VERSION from an earlier run, so it's replaced"
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
+          done
+          gh release create "v$VERSION" --target "$GITHUB_SHA" --title "Mouse Battery $VERSION" --notes "Install steps are in the README." dist/*.deb dist/*.rpm dist/*.pkg.tar.zst dist/*.tar.gz dist/SHA256SUMS
