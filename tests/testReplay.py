@@ -1,3 +1,4 @@
+import gc
 import io
 import os
 import random
@@ -5,6 +6,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+import warnings
 from unittest import mock
 
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
@@ -112,7 +114,9 @@ class Replay:
             self.wake(at + 1)
         self.recorder.stop()
         self.recorder.store.lastAttempt = None
-        return self.recorder.summary(KEY)
+        summary = self.recorder.summary(KEY)
+        self.recorder.store.closeQuietly()
+        return summary
 
 
 class ReplayTests(unittest.TestCase):
@@ -127,6 +131,13 @@ class ReplayTests(unittest.TestCase):
 
     def lines(self, summary):
         return [line.kind for line in health.assess(summary, hidpp.BatteryReading(100, 0), START + 130 * DAY).lines]
+
+    def testAReplayLeavesNoDatabaseConnectionOpen(self):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            Replay(self.folder).run(1)
+            gc.collect()
+        self.assertEqual([str(each.message) for each in caught if issubclass(each.category, ResourceWarning)], [])
 
     def testAMonthInItsStillLearningWithItsCount(self):
         summary = Replay(self.folder).run(30)
