@@ -629,11 +629,25 @@ class UPowerHistoryTests(unittest.TestCase):
     def testUPowerReadingsGoToTheRecorderAndARemovalIsAGap(self):
         recorder = mock.Mock()
         glue = service.UPowerHistory(recorder, QDBusConnection("unconnected"))
-        glue.onMouse(FakeUPowerMouse("/org/freedesktop/UPower/devices/mouse_0", "9a1b2c3d", 70))
-        glue.onRemoved("/org/freedesktop/UPower/devices/mouse_0")
-        glue.onRemoved("/org/freedesktop/UPower/devices/other")
+        glue.watcher.mouseChanged.emit(FakeUPowerMouse("/org/freedesktop/UPower/devices/mouse_0", "9a1b2c3d", 70))
+        glue.watcher.mouseRemoved.emit("/org/freedesktop/UPower/devices/mouse_0")
+        glue.watcher.mouseRemoved.emit("/org/freedesktop/UPower/devices/other")
         recorder.addReading.assert_called_once_with("9a1b2c3d", hidpp.BatteryReading(70, 0), history.ORIGIN_UPOWER, name="MX Master 3S", source=history.SOURCE_UPOWER, pathKey=False)
         recorder.addMarker.assert_called_once_with("9a1b2c3d", history.ORIGIN_GAP, source=history.SOURCE_UPOWER, pathKey=False)
+
+    def testAPathKeyMouseKeepsItsFlagThroughTheRemoval(self):
+        recorder = mock.Mock()
+        glue = service.UPowerHistory(recorder, QDBusConnection("unconnected"))
+        glue.watcher.mouseChanged.emit(FakeUPowerMouse("/org/freedesktop/UPower/devices/mouse_1", "/dev/hidraw4#1", 40, pathKey=True))
+        glue.watcher.mouseRemoved.emit("/org/freedesktop/UPower/devices/mouse_1")
+        recorder.addMarker.assert_called_once_with("/dev/hidraw4#1", history.ORIGIN_GAP, source=history.SOURCE_UPOWER, pathKey=True)
+
+    def testStartWatchesTheOwnerAndStopsTheWatcher(self):
+        glue = service.UPowerHistory(mock.Mock(), QDBusConnection("unconnected"))
+        with mock.patch.object(glue, "watcher") as watcher:
+            glue.start()
+            glue.stop()
+        self.assertEqual([call[0] for call in watcher.method_calls], ["watchOwner", "start", "stop"])
 
 
 class StateFolderTests(unittest.TestCase):
