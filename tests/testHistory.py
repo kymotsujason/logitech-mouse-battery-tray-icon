@@ -510,6 +510,16 @@ class TimerTests(RecorderCase):
             self.assertTrue(waitUntil(lambda: len(self.rows()) == 2))
         self.assertEqual([row[2] for row in self.rows()], [50, 49])
 
+    def testTheTimerWaitsOnTheMonotonicClock(self):
+        self.recorder.stop()
+        self.recorder = history.Recorder(self.folder, self.clock, monotonic=self.clock.monotonic)
+        self.clock.now = START + 100
+        self.recorder.addReading(KEY, battery(50), history.ORIGIN_EVENT)
+        self.assertAlmostEqual(self.recorder.timer.interval(), history.WAKE_SET_SECONDS * 1000, delta=5)
+        self.clock.now = START - 2 * 60 * 60
+        self.recorder.schedule()
+        self.assertAlmostEqual(self.recorder.timer.interval(), history.WAKE_SET_SECONDS * 1000, delta=5)
+
 
 class SessionTests(RecorderCase):
     def setUp(self):
@@ -589,6 +599,24 @@ class SessionTests(RecorderCase):
 
     def testAMouseWithoutWakeSupportNeedsThreeRisesOfOne(self):
         self.recorder.setWakeSupport(KEY, False)
+        self.event(0, 40)
+        self.event(600, 41)
+        self.event(1200, 42)
+        self.assertEqual([s[0] for s in self.sessions()], [0])
+        self.event(1800, 43)
+        self.assertEqual([s[0] for s in self.sessions()], [0, 1])
+
+    def testAMouseWhoseWakesArentSeenNeedsFivePoints(self):
+        # saved with wake support, but the receiver hasn't found the index this run
+        self.recorder.setWakeSupport(KEY, None)
+        self.event(0, 40)
+        self.event(600, 42)
+        self.assertEqual([s[0] for s in self.sessions()], [0])
+        self.event(1200, 47)
+        self.assertEqual([(s[0], s[3]) for s in self.sessions()], [(0, 40), (1, 47)])
+
+    def testAMouseWhoseWakesArentSeenNeedsThreeRisesOfOne(self):
+        self.recorder.setWakeSupport(KEY, None)
         self.event(0, 40)
         self.event(600, 41)
         self.event(1200, 42)
@@ -796,6 +824,19 @@ class ReportsItselfTests(RecorderCase):
         self.clock.now = START + 5000 + history.OPEN_RETRY_SECONDS
         self.event(5700, 56)
         self.assertEqual((self.recorder.reportsItself(KEY), self.savedFlags()[0]), (False, None))
+
+    def testAFlagSetWhileTheHistoryIsDownIsSavedForAMouseAlreadySaved(self):
+        self.event(0, 60)
+        self.recorder.stop()
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic)
+        self.clock.now = START + 100
+        with self.failOpening():
+            self.recorder.setWakeSupport(KEY, True)
+            self.event(100, 60)
+            self.event(1100, 59)
+        self.assertTrue(self.recorder.reportsItself(KEY))
+        self.event(2000, 58, origin=history.ORIGIN_READ)
+        self.assertEqual((self.recorder.reportsItself(KEY), self.savedFlags()[0]), (True, START + 1100))
 
     def testAFlagSetBeforeTheMouseIsSavedIsSavedWithIt(self):
         key = "aabbccdd"
