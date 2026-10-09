@@ -1,3 +1,4 @@
+import contextlib
 import errno
 import io
 import os
@@ -21,7 +22,7 @@ from PyQt6.QtWidgets import QApplication
 import hidpp
 import history
 import receivers
-from tests.fakes.fakeDevice import NAME, FakeDevice, FakeNodes, mouseHandler, reply
+from tests.fakes.fakeDevice import NAME, FakeDevice, FakeNodes, deviceError, mouseHandler, reply
 
 app = QApplication.instance() or QApplication([])
 FEATURE = hidpp.BatteryFeature(1, hidpp.FEATURE_UNIFIED_BATTERY, 5, True)
@@ -1695,7 +1696,7 @@ class ReceiverHistoryTests(unittest.TestCase):
     def origins(self):
         # stop writes every reading still waiting out the wake set and the hold, so the rows are all there
         self.recorder.stop()
-        with sqlite3.connect(os.path.join(self.folder, history.FILE_NAME)) as db:
+        with contextlib.closing(sqlite3.connect(os.path.join(self.folder, history.FILE_NAME))) as db:
             return [origin for (origin,) in db.execute("select origin from readings order by at, seq")]
 
     def start(self, handler=None):
@@ -1718,6 +1719,54 @@ class ReceiverHistoryTests(unittest.TestCase):
         self.start()
         self.assertEqual(self.mouse().wakeIndex, 23)
         self.assertTrue(self.recorder.entries[self.mouse().key].track.wakeSupport)
+
+    def savedWakeSupport(self):
+        with contextlib.closing(sqlite3.connect(os.path.join(self.folder, history.FILE_NAME))) as db:
+            return db.execute("select wakeSupport from mice where key = ?", (self.mouse().key,)).fetchone()[0]
+
+    def identifyAgainWith(self, receiver, lookupReplies):
+        answer = mouseHandler(features=WIRELESS_FEATURES)
+
+        def handle(request):
+            if (request[2] == 0 and (request[3] >> 4) == 0 and ((request[4] << 8) | request[5]) == hidpp.FEATURE_WIRELESS_STATUS):
+                return lookupReplies(request)
+            return answer(request)
+        lookups = sum(1 for sent in receiver.requests if sent[2] == 0 and sent[4:6] == b"\x1d\x4b")
+        receiver.handler = handle
+        receiver.send(LINK_UP)
+        self.assertTrue(waitUntil(lambda: not self.mice.isBusy() and sum(1 for sent in receiver.requests if sent[2] == 0 and sent[4:6] == b"\x1d\x4b") > lookups))
+
+    def testAWirelessStatusLookupThatErrorsKeepsTheKnownIndex(self):
+        receiver = self.start()
+        self.identifyAgainWith(receiver, lambda request: [deviceError(request)])
+        self.assertEqual((self.mouse().wakeIndex, self.recorder.entries[self.mouse().key].track.wakeSupport, self.savedWakeSupport()), (23, True, 1))
+
+    def testAWirelessStatusLookupThatTimesOutKeepsTheKnownIndex(self):
+        receiver = self.start()
+        self.identifyAgainWith(receiver, silent)
+        self.assertEqual((self.mouse().wakeIndex, self.recorder.entries[self.mouse().key].track.wakeSupport, self.savedWakeSupport()), (23, True, 1))
+
+    def testAWirelessStatusLookupAnsweringNoFeatureTurnsWakeSupportOff(self):
+        receiver = self.start()
+        self.identifyAgainWith(receiver, lambda request: [reply(request, [0])])
+        self.assertEqual((self.mouse().wakeIndex, self.recorder.entries[self.mouse().key].track.wakeSupport, self.savedWakeSupport()), (None, False, 0))
+
+    def testAnIdentifyOutOfBudgetKeepsTheKnownIndex(self):
+        self.start()
+        state = self.mice.nodes[RECEIVER]
+        found = hidpp.FoundMouse(1, "02bc524c", None, FEATURE, None, hidpp.ERROR)
+        with mock.patch.object(self.mice, "retryLater"):
+            self.mice.registerFound(state, found)
+        self.assertEqual((self.mouse().wakeIndex, self.recorder.entries[self.mouse().key].track.wakeSupport, self.savedWakeSupport()), (23, True, 1))
+
+    def testAMouseWithoutAUnitIdTakesTheLookupAsItCame(self):
+        self.start(mouseHandler(features={0x0005: 2, 0x1004: 5, 0x1D4B: 23}))
+        self.assertEqual((self.mouse().key, self.mouse().wakeIndex), (RECEIVER + "#1", 23))
+        state = self.mice.nodes[RECEIVER]
+        found = hidpp.FoundMouse(1, None, None, FEATURE, None, hidpp.ERROR)
+        with mock.patch.object(self.mice, "retryLater"):
+            self.mice.registerFound(state, found)
+        self.assertEqual((self.mouse().wakeIndex, self.recorder.entries[self.mouse().key].track.wakeSupport), (None, False))
 
     def testAWirelessStatusEventIsAWakeWhileAwakeWithoutARead(self):
         receiver = self.start()

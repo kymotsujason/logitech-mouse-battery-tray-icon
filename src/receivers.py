@@ -642,8 +642,10 @@ class ReceiverList(QObject):
         mouse.nodePath = path
         mouse.slot = found.slot
         mouse.feature = found.feature
-        mouse.wakeIndex = found.wakeIndex
-        self.recorder.setWakeSupport(key, found.wakeIndex is not None, pathKey=mouse.pathKey)
+        # a unit id's feature index doesn't change, so a lookup that didn't answer keeps the one it had, while a slot key may now hold another device
+        if (found.wakeAnswered or not found.unitId):
+            mouse.wakeIndex = found.wakeIndex
+        self.recorder.setWakeSupport(key, mouse.wakeIndex is not None, pathKey=mouse.pathKey)
         # the service may have missed something before a mouse it hadn't seen, one that moved, or one whose link came back
         if (isNew or moved or linkUp):
             self.recorder.addMarker(key, history.ORIGIN_GAP, pathKey=mouse.pathKey)

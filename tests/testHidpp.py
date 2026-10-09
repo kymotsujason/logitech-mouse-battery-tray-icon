@@ -204,12 +204,12 @@ class DeviceTests(unittest.TestCase):
     def testAnIdentifyFindsTheWirelessStatusFeature(self):
         self.device = FakeDevice(mouseHandler(features={0x0003: 3, 0x0005: 2, 0x1004: 5, 0x1D4B: 23}))
         outcome, found = hidpp.identifySlot(self.device.node(), 1)
-        self.assertEqual((outcome, found.wakeIndex), (hidpp.FOUND, 23))
+        self.assertEqual((outcome, found.wakeIndex, found.wakeAnswered), (hidpp.FOUND, 23, True))
 
     def testAMouseWithoutTheWirelessStatusFeatureHasNoWakeIndex(self):
         self.device = FakeDevice(mouseHandler())
         outcome, found = hidpp.identifySlot(self.device.node(), 1)
-        self.assertEqual((outcome, found.wakeIndex), (hidpp.FOUND, None))
+        self.assertEqual((outcome, found.wakeIndex, found.wakeAnswered), (hidpp.FOUND, None, True))
 
     def testAFailedWirelessStatusLookupStillFindsTheMouse(self):
         answer = mouseHandler(features={0x0003: 3, 0x0005: 2, 0x1004: 5, 0x1D4B: 23})
@@ -220,7 +220,30 @@ class DeviceTests(unittest.TestCase):
             return answer(request)
         self.device = FakeDevice(failWirelessLookup)
         outcome, found = hidpp.identifySlot(self.device.node(), 1)
-        self.assertEqual((outcome, found.wakeIndex, found.name), (hidpp.FOUND, None, NAME.decode()))
+        self.assertEqual((outcome, found.wakeIndex, found.wakeAnswered, found.name), (hidpp.FOUND, None, False, NAME.decode()))
+
+    def testAWirelessStatusLookupWithNoAnswerIsNotAnAnswer(self):
+        answer = mouseHandler(features={0x0003: 3, 0x0005: 2, 0x1004: 5, 0x1D4B: 23})
+
+        def dropWirelessLookup(request):
+            if (request[2] == 0 and (request[3] >> 4) == 0 and ((request[4] << 8) | request[5]) == 0x1D4B):
+                return []
+            return answer(request)
+        self.device = FakeDevice(dropWirelessLookup)
+        with mock.patch.object(hidpp, "REQUEST_TIMEOUT", 0.1):
+            outcome, found = hidpp.identifySlot(self.device.node(), 1)
+        self.assertEqual((outcome, found.wakeIndex, found.wakeAnswered), (hidpp.FOUND, None, False))
+
+    def testAnIdentifyOutOfBudgetAfterItsBatteryReadHasNoWakeAnswer(self):
+        answer = mouseHandler(features={0x0003: 3, 0x0005: 2, 0x1004: 5, 0x1D4B: 23})
+
+        def dropBatteryRead(request):
+            if (request[2] == 5 and (request[3] >> 4) == 1):
+                return []
+            return answer(request)
+        self.device = FakeDevice(dropBatteryRead)
+        outcome, found = hidpp.identifySlot(self.device.node(), 1, time.monotonic() + 0.3)
+        self.assertEqual((outcome, found.outcome, found.wakeIndex, found.wakeAnswered), (hidpp.FOUND, hidpp.ERROR, None, False))
 
     def testAUnifiedReadingKeepsItsPowerByte(self):
         self.device = FakeDevice(mouseHandler(answers={(5, 0): [0x0F, 0x02], (5, 1): [22, 0x02, 1, 2]}))
@@ -388,7 +411,7 @@ class SearchTests(unittest.TestCase):
         before = time.monotonic()
         result = hidpp.searchNode(self.device.node(), pingTimeout=0.05)
         feature = hidpp.BatteryFeature(1, hidpp.FEATURE_UNIFIED_BATTERY, 5, True)
-        self.assertEqual(result.mice, (hidpp.FoundMouse(1, "02bc524c", NAME.decode(), feature, hidpp.BatteryReading(81, 0, power=0), readAt=mock.ANY),))
+        self.assertEqual(result.mice, (hidpp.FoundMouse(1, "02bc524c", NAME.decode(), feature, hidpp.BatteryReading(81, 0, power=0), readAt=mock.ANY, wakeAnswered=True),))
         self.assertTrue(before < result.mice[0].readAt < time.monotonic())
         self.assertEqual((result.skipped, result.unknown), (frozenset(), frozenset()))
 

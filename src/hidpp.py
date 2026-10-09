@@ -103,6 +103,8 @@ class FoundMouse:
     readAt: float | None = None
     # the wireless status feature's index, or None when the device has none or the lookup failed
     wakeIndex: int | None = None
+    # whether the device answered the wireless status lookup, since an index of None from a lookup that failed says nothing about the feature
+    wakeAnswered: bool = False
 
 
 @dataclass(frozen=True)
@@ -382,17 +384,17 @@ def identifySlot(node, slot, deadline=None):
     # a read cut off by the budget says the identify ran out of time, not that the mouse went quiet, so the mouse is kept and read again later as one that answered with an error
     if (outcome == TIMEOUT and time.monotonic() >= deadline):
         return (FOUND, FoundMouse(slot, unitId, None, feature, None, ERROR))
-    wakeIndex = findWakeIndex(node, slot, deadline)
+    wakeAnswered, wakeIndex = findWakeIndex(node, slot, deadline)
     name = readName(node, slot, deadline)
-    return (FOUND, FoundMouse(slot, unitId, name, feature, reading, outcome, readAt, wakeIndex))
+    return (FOUND, FoundMouse(slot, unitId, name, feature, reading, outcome, readAt, wakeIndex, wakeAnswered))
 
 
 def findWakeIndex(node, deviceIndex, deadline=None):
-    # a lookup that fails leaves the mouse on the old wake rule instead of failing the identify
+    # a lookup that fails is told apart from a device without the feature, and it doesn't fail the identify
     kind, featureIndex = lookupFeature(node, deviceIndex, FEATURE_WIRELESS_STATUS, deadline)
-    if (kind != ANSWER or not featureIndex):
-        return None
-    return featureIndex
+    if (kind != ANSWER):
+        return (False, None)
+    return (True, featureIndex or None)
 
 
 def searchNode(node, skipped=frozenset(), pingTimeout=None, deadline=None):
