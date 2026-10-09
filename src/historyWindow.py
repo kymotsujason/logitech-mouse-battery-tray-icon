@@ -305,7 +305,7 @@ class ChoiceMenu(QWidget):
     def open(self, choices, value, anchor, onPick):
         self.choices = choices
         self.marked = next((index for index, (choice, name) in enumerate(choices) if choice == value), 0)
-        self.hover = self.marked
+        self.setHover(self.marked)
         self.onPick = onPick
         self.pressed = False
         self.setGeometry(self.owner.rect())
@@ -325,6 +325,12 @@ class ChoiceMenu(QWidget):
         self.setFocus()
         self.update()
 
+    def setHover(self, index):
+        self.hover = index
+        # the rows are painted, so the menu itself tells a screen reader which choice the keys are on
+        self.setAccessibleDescription(self.choices[index][1])
+        self.update()
+
     def rowRect(self, index):
         return QRectF(self.panel.x() + CHOICE_PADDING, self.panel.y() + CHOICE_PADDING + index * CHOICE_ROW_HEIGHT, self.panel.width() - 2 * CHOICE_PADDING, CHOICE_ROW_HEIGHT)
 
@@ -338,8 +344,7 @@ class ChoiceMenu(QWidget):
     def mouseMoveEvent(self, event):
         index = self.rowAt(event.position())
         if (index is not None and index != self.hover):
-            self.hover = index
-            self.update()
+            self.setHover(index)
 
     def mousePressEvent(self, event):
         if (not self.panel.contains(event.position())):
@@ -365,8 +370,7 @@ class ChoiceMenu(QWidget):
         if (key == Qt.Key.Key_Escape):
             self.hide()
         elif (key in (Qt.Key.Key_Up, Qt.Key.Key_Down)):
-            self.hover = max(0, min(len(self.choices) - 1, self.hover + (1 if key == Qt.Key.Key_Down else -1)))
-            self.update()
+            self.setHover(max(0, min(len(self.choices) - 1, self.hover + (1 if key == Qt.Key.Key_Down else -1))))
         elif (key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space)):
             self.choose(self.hover)
 
@@ -458,6 +462,9 @@ class Sidebar(QWidget):
         # each row is (key, name, second line, capsule fill from 0 to 1 or None, color name of the second line)
         self.rows = rows
         self.selected = selected
+        # painted instead of a list view, so a screen reader gets the chosen mouse and its line from here
+        chosen = next((row for row in rows if row[0] == selected), None)
+        self.setAccessibleName("Mice" if chosen is None else "Mice, " + chosen[1] + ", " + chosen[2])
         self.update()
 
     def rowRect(self, index):
@@ -587,6 +594,7 @@ class HistoryWindow(QWidget):
         self.segments = SegmentedControl(self)
         self.segments.setParent(self.pane)
         self.segments.chosen.connect(self.showChart)
+        self.nameSegments()
         self.levelChart = charts.LevelChart(self.pane)
         self.hoursChart = charts.LineChart("Hours per Charge", "h", charts.HOURS_EMPTY, charts.HOURS_CAPTION, self.pane)
         self.chargingChart = charts.LineChart("Charging Speed", "min per 10%", charts.CHARGING_EMPTY, None, self.pane)
@@ -741,6 +749,9 @@ class HistoryWindow(QWidget):
             self.paneFade.setEnabled(False)
         self.refresh()
 
+    def nameSegments(self):
+        self.segments.setAccessibleName("Chart, " + SEGMENTS[self.segments.index])
+
     def nameRangeControl(self):
         self.rangeControl.setAccessibleName("Chart range, " + charts.RANGE_TITLES[self.levelRange].split(", ", 1)[1])
 
@@ -789,6 +800,7 @@ class HistoryWindow(QWidget):
             del self.levelErrors[item]
 
     def showChart(self, index):
+        self.nameSegments()
         self.rangeControl.setVisible(index == 0)
         chart = self.charts[index]
         for other in self.charts:

@@ -68,6 +68,8 @@ class Chart(QWidget):
     def __init__(self, title, parent=None):
         super().__init__(parent)
         self.title = title
+        # the chart is painted, so its title is its name for a screen reader
+        self.setAccessibleName(title)
         self.theme = glass.DARK
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
 
@@ -119,6 +121,7 @@ class LevelChart(Chart):
         self.rough = rough
         self.rangeName = rangeName
         self.title = RANGE_TITLES[rangeName]
+        self.setAccessibleName(self.title)
         self.message = message
         self.update()
 
