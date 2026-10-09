@@ -173,6 +173,41 @@ class IconTests(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(folder, "OFL.txt")))
 
 
+class GlyphTests(unittest.TestCase):
+    # the rows are written out here instead of read from icon.DIGITS, so a swapped or misdrawn glyph fails
+    DRAWN = {
+        "0": ["####", "#..#", "#..#", "#..#", "#..#", "#..#", "####"],
+        "1": ["..#.", ".##.", "..#.", "..#.", "..#.", "..#.", ".###"],
+        "2": ["####", "...#", "...#", "####", "#...", "#...", "####"],
+        "3": ["####", "...#", "...#", ".###", "...#", "...#", "####"],
+        "4": ["#..#", "#..#", "#..#", "####", "...#", "...#", "...#"],
+        "5": ["####", "#...", "#...", "####", "...#", "...#", "####"],
+        "6": ["####", "#...", "#...", "####", "#..#", "#..#", "####"],
+        "7": ["####", "...#", "...#", "..#.", "..#.", ".#..", ".#.."],
+        "8": ["####", "#..#", "#..#", "####", "#..#", "#..#", "####"],
+        "9": ["####", "#..#", "#..#", "####", "...#", "...#", "####"],
+    }
+    HUNDRED = [".#.###.###", "##.#.#.#.#", ".#.#.#.#.#", ".#.#.#.#.#", ".#.###.###"]
+
+    def litRows(self, percent, left, top, width, height):
+        # charging puts the fill green, so only a digit cell is the white
+        image = renderImage(IconState(percent=percent, charging=True), 22, WHITE)
+        return ["".join("#" if image.pixelColor(x, y).rgba() == WHITE.rgba() else "." for x in range(left, left + width)) for y in range(top, top + height)]
+
+    def testEachDigitIsDrawnAsItsRows(self):
+        for digit, rows in self.DRAWN.items():
+            self.assertEqual(self.litRows(int(digit), 9, 11, 4, 7), rows, digit)
+
+    def testHundredIsDrawnAsItsRows(self):
+        self.assertEqual(self.litRows(100, 6, 12, 10, 5), self.HUNDRED)
+
+    def testNothingElseIsLitAroundADigit(self):
+        for percent in (8, 100):
+            image = renderImage(IconState(percent=percent, charging=True), 22, WHITE)
+            lit = [(x, y) for y in range(22) for x in range(22) if image.pixelColor(x, y).rgba() == WHITE.rgba()]
+            self.assertTrue(all(6 <= x <= 15 and 11 <= y <= 17 for x, y in lit), percent)
+
+
 class WithoutNumberTests(unittest.TestCase):
     def testTheWindowsIconHasNoPlate(self):
         cells, plate = icon.numberLayout("62", 120)
