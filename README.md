@@ -50,9 +50,9 @@ Opening the menu takes a fresh reading from each mouse it reads over HID++, whil
 
 ## Battery health
 
-Click the tray icon, or pick "Battery Health" from its menu, to open the battery window. It shows the mouse, its level, a health line, a level chart over the last 24 hours, 7 days, 30 days, 6 months, or year, or the mouse's whole history, how many hours a charge lasts and how fast it charges month by month, and the number of charge cycles. The chart keeps the range you picked the next time it opens. With two or more mice a sidebar lists them all.
+Click the tray icon, or pick "Battery Health" from its menu, to open the battery window. It shows the mouse, its level, a health line, a level chart over the last 24 hours, 7 days, 30 days, 6 months, or year, or all time (the last 120 months, about 10 years), how many hours a charge lasts and how fast it charges month by month, and the number of charge cycles. The chart keeps the range you picked the next time it opens. With two or more mice a sidebar lists them all.
 
-The battery service saves each mouse's charges and discharges in `/var/lib/logitech-mouse-battery/history.sqlite3`, about 20 MB after 10 years of heavy use. It saves a row only when a reading changes, and never asks the mouse for more readings than before. The health line compares how fast the battery drains and charges now with how it did when tracking began, stretch by stretch of the battery, and says when a charge lasts 15% less or charging takes 15% longer than it used to. That needs about 42 discharges first, so the window says "Still learning" for the first months. A mouse that doesn't give a serial number gets no history, and one that reports only a rough level or a voltage gets no drain or charge figures.
+The battery service saves each mouse's charges and discharges in `/var/lib/logitech-mouse-battery/history.sqlite3`, about 20 MB after 10 years of heavy use. It saves a row when a reading changes, and also when a mouse wakes, falls asleep, or drops out of sight, and it never asks the mouse for more readings than before. The health line compares how fast the battery drains and charges now with how it did when tracking began, stretch by stretch of the battery, and says when a charge lasts 15% less or charging takes 15% longer than it used to. That needs about 42 discharges first, so the window says "Still learning" for the first months. A mouse that doesn't give a serial number gets no history, and one that reports only a rough level or a voltage gets no drain or charge figures.
 
 Any account on the computer can read the history through the service, as it can read the battery levels, and the history shows when each mouse was in use.
 
@@ -77,7 +77,7 @@ It has been tested with the PRO X3 SUPERSTRIKE on its receiver and on its cable,
 
 ## What the udev rule allows
 
-The rule hands the HID++ interface of any Logitech USB device that the kernel leaves to its generic HID driver, such as a receiver or a mouse on its cable, to the `logitech-mouse-battery` group, when that interface's report descriptor passes the app's own check. The check rejects any interface with a keyboard, keypad, or mouse collection and any receiver interface that carries a paired keyboard's keystrokes. Only Mouse Battery's service runs in that group, as its own system user in a systemd sandbox, and it offers nothing but battery readings and each mouse's saved history on the system bus. Any local user may read those, which include each mouse's name, its unit id, and when it last woke and was read, and any local user may ask for a new read. The service runs at most one read a second, and each account gets five reads at once and then one every 30 seconds, after which a read is turned down with an error. Reading a mouse's saved history has its own budget of the same size, and reading the levels for the chart gets ten at once and then one every 5 seconds. Nothing this package installs lets a program you run open the receiver or cable, or send it HID++ commands.
+The rule hands the HID++ interface of any Logitech USB device that the kernel leaves to its generic HID driver, such as a receiver or a mouse on its cable, to the `logitech-mouse-battery` group, when that interface's report descriptor passes the app's own check. The check rejects any interface with a keyboard, keypad, or mouse collection and any receiver interface that carries a paired keyboard's keystrokes. Only Mouse Battery's service runs in that group, as its own system user in a systemd sandbox, and it offers nothing but battery readings and each mouse's saved history on the system bus. Any local user may read those, which include each mouse's name, its unit id, and when it last woke and was read, and any local user may ask for a new read. The service runs a full read at most once a second and a silent read (a read of only the mice that don't report on their own) at most once a second, and each account gets five reads at once and then one every 30 seconds, after which a read is turned down with an error. Reading a mouse's saved history has its own budget of the same size, and reading the levels for the chart gets ten at once and then one every 5 seconds. Nothing this package installs lets a program you run open the receiver or cable, or send it HID++ commands.
 
 Another package's udev rule can still give your account access of its own, as Solaar's does for every Logitech receiver. A current Solaar keeps that access when Mouse Battery is installed. However, the older Solaar that Debian 12 and Ubuntu 24.04 ship loses it until the receiver is plugged in again or the computer restarts.
 
@@ -110,10 +110,10 @@ Apart from these, two limits are known. A mouse that reports its battery without
 The app is the flat set of modules in `src/`, which the packages install side by side in `/usr/share/logitech-mouse-battery/`:
 
 - `tray.py` starts the app and owns the tray icon, its menu and tooltip, Open at Login, and About.
-- `service.py` is the battery service, the only part that opens receivers and cables, which serves their readings on the system bus.
+- `service.py` is the battery service, the only part that opens receivers and cables. It serves their readings and the saved history on the system bus, and it runs its own UPower watcher so the history covers the mice UPower reads too.
 - `receivers.py` finds, opens, and reads the receivers and cables in the service, with a worker thread for each HID++ node.
 - `serviceState.py` is the state the service sends and the tray reads.
-- `serviceClient.py` follows the service from the tray.
+- `serviceClient.py` follows the service from the tray, sends it read requests, and asks it for the history and chart levels the window shows.
 - `clearAccess.py` closes the access 1.0.x gave plugged in receivers and cables, when the package is installed.
 - `exceptionHooks.py` prints an exception in a slot or a thread instead of ending the app or the service.
 - `trayHost.py` waits for a system tray and sends a notice when none shows up.
@@ -126,12 +126,12 @@ The app is the flat set of modules in `src/`, which the packages install side by
 - `hidpp.py` speaks Logitech's HID++ protocol over hidraw.
 - `hidDescriptor.py` checks a HID report descriptor, for discovery and for the udev rule.
 - `isHidpp.py` is the check the udev rule runs.
-- `upower.py` reads the mice the kernel drives through UPower.
+- `upower.py` reads the mice the kernel drives through UPower, for the tray and the window and for the service's history.
 - `lowBattery.py` decides when a mouse gets a low battery warning.
 - `notify.py` sends desktop notifications.
 - `dbusCalls.py` makes the tray's D-Bus calls to the desktop and to UPower with a timeout, answering through a callback so a slow peer never holds it still. It also makes the blocking calls, each with a timeout, for the terminal check (to the battery service and UPower) and for the notice a second tray sends before it quits, and it unwraps the values in a reply. `serviceClient.py` makes the tray's own calls to the battery service, with its own callbacks and timeout.
-- `panelColor.py` works out the color the icon is drawn in, from the desktop's theme.
-- `icon.py` draws the tray icon.
+- `panelColor.py` works out the color the icon is drawn in from the desktop's theme, and reads the desktop portal's color scheme and reduced motion settings, which the window follows too.
+- `icon.py` draws the tray icon and the mouse picture in the battery window.
 - `autostart.py` turns Open at Login on and off.
 - `check.py` is the terminal check.
 - `version.py` holds the version.
