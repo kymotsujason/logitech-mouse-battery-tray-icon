@@ -627,9 +627,14 @@ class Recorder(QObject):
             return True
         if (entry.source == SOURCE_HIDPP):
             return False
-        if (entry.source is None and self.isHidppKey(entry)):
-            entry.source = SOURCE_HIDPP
-            return False
+        if (entry.source is None):
+            hidppKey = self.isHidppKey(entry)
+            # a lookup that failed drops this reading and leaves the next one to ask again
+            if (hidppKey is None):
+                return False
+            if (hidppKey):
+                entry.source = SOURCE_HIDPP
+                return False
         entry.source = SOURCE_UPOWER
         return True
 
@@ -665,7 +670,14 @@ class Recorder(QObject):
         # a key only UPower has named this run is still a HID++ mouse when its saved history says so
         if (not entry.persist or not self.available()):
             return False
-        found = self.store.db.execute("select source from mice where key = ?", (entry.key,)).fetchone()
+        try:
+            found = self.store.db.execute("select source from mice where key = ?", (entry.key,)).fetchone()
+        except sqlite3.Error as error:
+            if (isCorruption(error)):
+                self.store.markCorrupt(error)
+            else:
+                self.store.say("Couldn't read the history: " + describe(error))
+            return None
         return found is not None and found[0] == SOURCE_HIDPP
 
     def checkMissedStep(self, entry, row):

@@ -572,6 +572,37 @@ class RecorderTests(RecorderCase):
         self.assertEqual([(s[0], s[1], s[2]) for s in self.sessions()], [(1, 0, 600), (0, 1200, None)])
         self.assertEqual([row[1] for row in self.rows()][-2:], [4, 0])
 
+    def failLookups(self, error):
+        self.assertTrue(self.recorder.available())
+        real = self.recorder.store.db
+
+        class FailingDb:
+            def execute(self, *args):
+                raise error
+
+            def close(self):
+                real.close()
+        self.recorder.store.db = FailingDb()
+        return real
+
+    def testAFailedHidppLookupForAUPowerReadingDropsItAndAsksAgain(self):
+        real = self.failLookups(sqlite3.OperationalError("disk I/O error"))
+        self.recorder.addReading("9a1b2c3d", battery(70), history.ORIGIN_UPOWER, source=history.SOURCE_UPOWER, at=START)
+        entry = self.recorder.entries["9a1b2c3d"]
+        self.assertEqual((entry.source, entry.pending), (None, []))
+        self.assertIn("Couldn't read the history: disk I/O error", self.errors.getvalue())
+        self.recorder.store.db = real
+        self.recorder.addReading("9a1b2c3d", battery(70), history.ORIGIN_UPOWER, source=history.SOURCE_UPOWER, at=START + 60)
+        self.assertEqual((entry.source, len(entry.pending)), (history.SOURCE_UPOWER, 1))
+
+    def testACorruptHidppLookupForAUPowerReadingMarksTheHistoryCorrupt(self):
+        error = sqlite3.DatabaseError("database disk image is malformed")
+        error.sqlite_errorcode = sqlite3.SQLITE_CORRUPT
+        self.failLookups(error)
+        self.recorder.addReading("9a1b2c3d", battery(70), history.ORIGIN_UPOWER, source=history.SOURCE_UPOWER, at=START)
+        self.assertTrue(self.recorder.store.brokenThisRun)
+        self.assertFalse(self.recorder.available())
+
     def testWithNoFolderTheRulesStillRunInMemory(self):
         recorder = history.Recorder(None, self.clock, timers=False)
         recorder.setWakeSupport(KEY, True)
