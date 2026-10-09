@@ -178,7 +178,25 @@ brokenFiles() {
     sudo find /var/lib/$name -maxdepth 1 -name 'history.sqlite3.broken-*' | wc -l
 }
 
-# waits for a new process to log its start line, so a count read before it opened the file can't pass
+# a read row is something only a running service makes, since a stopping one writes only gap rows, so a read row at or after
+# a time taken before the restart can only come from the new process, once it has opened the file
+readsSince() {
+    sudo python3 -c "import sqlite3, sys; print(sqlite3.connect('file:/var/lib/$name/history.sqlite3?mode=ro', uri=True).execute('select count(*) from readings where origin = 1 and at >= ?', (int(sys.argv[1]),)).fetchone()[0])" "$1" 2>/dev/null || echo 0
+}
+
+waitForReadsSince() {
+    local reads=0
+    for i in $(seq 300); do
+        reads=$(readsSince "$1")
+        if [ "$reads" -ge 1 ] 2>/dev/null; then
+            break
+        fi
+        sleep 0.1
+    done
+    echo "$reads"
+}
+
+# waits for a new process to log its start line, which gives the pid the next restart is told apart from
 waitForStart() {
     local pid="" count=0
     for i in $(seq 150); do
@@ -202,15 +220,17 @@ check "GetHistory answers for the fake mouse" "$(busctl --system --timeout=5 cal
 check "GetLevels answers a range for the fake mouse" "$(busctl --system --timeout=5 call "$service" "$objectPath" "$interface" GetLevels ss 02bc524c year 2>&1 | grep -c '\\"range\\": \\"year\\"')" "1"
 oldest=$(oldestReading)
 [ -n "$oldest" ] || stop "the history has no first reading to compare against"
+restartedAt=$(date +%s)
 sudo systemctl restart "$unit"
 waitForStart
-after=$(waitForRows $((rows + 1)))
-check "the history survived a service restart" "$( [ "$after" -gt "$rows" ] 2>/dev/null && [ "$(oldestReading)" = "$oldest" ] && echo kept || echo "$after rows, first reading $(oldestReading)")" "kept"
+reads=$(waitForReadsSince "$restartedAt")
+check "the history survived a service restart" "$( [ "$reads" -ge 1 ] 2>/dev/null && [ "$(oldestReading)" = "$oldest" ] && echo kept || echo "$reads reads since the restart, first reading $(oldestReading)")" "kept"
 check "the restart set no broken history file aside" "$(brokenFiles)" "0"
+reinstalledAt=$(date +%s)
 sudo DEBIAN_FRONTEND=noninteractive apt-get install --reinstall -y "$repo/dist/${name}_${version}_all.deb" > "$work/install3.log" 2>&1 || stop "the reinstall failed"
 waitForStart
-again=$(waitForRows $((after + 1)))
-check "the history survived a reinstall of the same package" "$( [ "$again" -gt "$after" ] 2>/dev/null && [ "$(oldestReading)" = "$oldest" ] && echo kept || echo "$again rows, first reading $(oldestReading)")" "kept"
+reads=$(waitForReadsSince "$reinstalledAt")
+check "the history survived a reinstall of the same package" "$( [ "$reads" -ge 1 ] 2>/dev/null && [ "$(oldestReading)" = "$oldest" ] && echo kept || echo "$reads reads since the reinstall, first reading $(oldestReading)")" "kept"
 check "the reinstall set no broken history file aside" "$(brokenFiles)" "0"
 
 if [ "$failures" -gt 0 ]; then
