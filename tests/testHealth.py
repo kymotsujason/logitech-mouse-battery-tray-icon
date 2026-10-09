@@ -123,6 +123,10 @@ class LineTests(unittest.TestCase):
         del old["wakesVisible"]
         self.assertEqual(self.lines(old)[0][0][1], "Still learning, 0 of 3 battery ranges measured.")
 
+    def testAFreshMouseWhoseLookupHasntAnsweredIsntSaidToLackWakes(self):
+        value = summary(wakeSupport=False, wakesVisible=False)
+        self.assertEqual(self.lines(value), ([(health.LEARNING, health.WAKES_UNSEEN_TEXT)], health.SYMBOL_CLOCK))
+
     def testNoMoreThanThreeLines(self):
         value = summary(lastError=NOW, drain={"buckets": readyBuckets((80, 70, 60), 30.0, (24.0, 24.0, 24.0)), "largeSteps": False}, charge=[{"power": 2, "buckets": readyBuckets((20, 30, 40), 0.5, (0.6, 0.6, 0.6))}])
         self.assertEqual([kind for kind, text in self.lines(value)[0]], [health.ALERT, health.DRAIN, health.CHARGE_LINE_KIND])
