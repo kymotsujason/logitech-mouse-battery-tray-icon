@@ -79,6 +79,24 @@ class LevelChartTests(ChartCase):
         self.assertEqual(chart.barAt(area.right() - 1), 83)
         self.assertIsNone(chart.barAt(area.x() - 5))
 
+    def testTheSameRangeKeepsTheHoveredBar(self):
+        chart = self.make(charts.LevelChart())
+        chart.setSlots(slots())
+        chart.hover = 40
+        chart.setSlots(slots())
+        self.assertEqual(chart.hover, 40)
+        chart.setSlots(slots(percent=61))
+        self.assertEqual(chart.hover, 40)
+        for change in ({"rangeName": "month"}, {"message": historyWindow.LOADING_TEXT}):
+            chart.setSlots(slots())
+            chart.hover = 40
+            chart.setSlots(slots(), **change)
+            self.assertIsNone(chart.hover, change)
+        chart.setSlots(slots())
+        chart.hover = 40
+        chart.setSlots(slots()[:20])
+        self.assertIsNone(chart.hover)
+
     def testAVoltageAxisSpansTheWeek(self):
         chart = self.make(charts.LevelChart())
         chart.setSlots([[NOW, None, None, 3800 + index, False] for index in range(84)], voltage=True)

@@ -555,6 +555,14 @@ class WindowTests(WindowCase):
         self.assertEqual(self.watcher.levelAsks, [])
         self.assertEqual(window.levelChart.slots, reply("02bc524c")["recent"])
 
+    def testAStateChangeKeepsTheLevelChartsReadout(self):
+        window = self.opened(entry())
+        QTest.mouseMove(window.levelChart, window.levelChart.area().center().toPoint())
+        hovered = window.levelChart.hover
+        self.assertIsNotNone(hovered)
+        self.state(entry(reading=hidpp.BatteryReading(61, 0)))
+        self.assertEqual(window.levelChart.hover, hovered)
+
     def testPickingARangeAsksForItOnceAndSavesTheChoice(self):
         window = self.opened(entry())
         saved = []

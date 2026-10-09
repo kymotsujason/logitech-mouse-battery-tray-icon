@@ -110,6 +110,9 @@ class LevelChart(Chart):
         self.setMouseTracking(True)
 
     def setSlots(self, slots, voltage=False, rangeName="week", message=None, rough=False):
+        # every state change sets the slots again, so the bar under the pointer keeps its readout until the range changes, a message takes the bars' place, or the bar is gone
+        if (rangeName != self.rangeName or message is not None or (self.hover is not None and self.hover >= len(slots))):
+            self.hover = None
         # message stands in for the bars while a range loads or can't be read
         self.slots = slots
         self.voltage = voltage
@@ -117,7 +120,6 @@ class LevelChart(Chart):
         self.rangeName = rangeName
         self.title = RANGE_TITLES[rangeName]
         self.message = message
-        self.hover = None
         self.update()
 
     def isSpan(self):
