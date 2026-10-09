@@ -244,10 +244,9 @@ class ReceiverList(QObject):
         self.settleTimer = singleShotTimer(self, SETTLE_MS, self.scanNodes)
         self.settleSince = None
         self.readAllTimer = singleShotTimer(self, READ_ALL_GAP_MS, self.runReadAll)
-        self.lastReadAll = None
-        # a silent read has its own queue, so a full read asked for while one waits still runs in full
+        # a silent read has its own queue, so a full read asked for while one waits still runs in full, while the two share one gap since either costs every mouse a read
         self.readSilentTimer = singleShotTimer(self, READ_ALL_GAP_MS, self.runReadSilent)
-        self.lastReadSilent = None
+        self.lastBatch = None
         self.lastReadAllSearch = None
         self.devWatcher = QFileSystemWatcher(["/dev"], self)
         self.devWatcher.directoryChanged.connect(self.onDevChanged)
@@ -274,19 +273,26 @@ class ReceiverList(QObject):
     def isReadAllQueued(self):
         return self.readAllTimer.isActive()
 
+    def batchWait(self):
+        if (self.lastBatch is None):
+            return 0
+        return READ_ALL_GAP_MS - (time.monotonic() - self.lastBatch) * 1000
+
     def requestReadAll(self):
         # any local user may ask, so a batch that waits for its turn takes in every call until it runs
         if (self.isReadAllQueued()):
             return
-        gap = READ_ALL_GAP_MS / 1000
-        now = time.monotonic()
-        if (self.lastReadAll is not None and now - self.lastReadAll < gap):
-            self.readAllTimer.start(max(1, int((self.lastReadAll + gap - now) * 1000)))
+        wait = self.batchWait()
+        if (wait > 0):
+            # the full read reads every mouse a silent one waiting with it would
+            self.readSilentTimer.stop()
+            self.readAllTimer.start(max(1, int(wait)))
             return
         self.runReadAll()
 
     def runReadAll(self):
-        self.lastReadAll = time.monotonic()
+        self.lastBatch = time.monotonic()
+        self.readSilentTimer.stop()
         self.readAll()
         self.searchNodesWithoutMice()
 
@@ -294,17 +300,16 @@ class ReceiverList(QObject):
         return self.readSilentTimer.isActive()
 
     def requestReadSilent(self):
-        if (self.isReadSilentQueued()):
+        if (self.isReadSilentQueued() or self.isReadAllQueued()):
             return
-        gap = READ_ALL_GAP_MS / 1000
-        now = time.monotonic()
-        if (self.lastReadSilent is not None and now - self.lastReadSilent < gap):
-            self.readSilentTimer.start(max(1, int((self.lastReadSilent + gap - now) * 1000)))
+        wait = self.batchWait()
+        if (wait > 0):
+            self.readSilentTimer.start(max(1, int(wait)))
             return
         self.runReadSilent()
 
     def runReadSilent(self):
-        self.lastReadSilent = time.monotonic()
+        self.lastBatch = time.monotonic()
         # a mouse that reports each step on its own needs no timed read
         for mouse in self.mice:
             if (mouse.nodePath is not None and not self.recorder.reportsItself(mouse.key)):

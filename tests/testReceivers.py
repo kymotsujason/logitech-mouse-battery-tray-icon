@@ -1595,6 +1595,21 @@ class ReceiverListTests(unittest.TestCase):
         QTest.qWait(400)
         self.assertEqual(batteryReads(receiver) - before, 2)
 
+    def testAReadAllAndAReadSilentTogetherCostOneReadPerGap(self):
+        receiver = self.nodes.add(RECEIVER, mouseHandler())
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"] and not self.mice.isBusy()))
+        before = batteryReads(receiver)
+        self.mice.requestReadAll()
+        QTest.qWait(100)
+        # another account's silent read shares the full read's gap, since each costs every mouse a read
+        self.mice.requestReadSilent()
+        self.assertTrue(waitUntil(lambda: not self.mice.isBusy()))
+        self.assertEqual((batteryReads(receiver) - before, self.mice.isReadSilentQueued()), (1, True))
+        self.assertTrue(waitUntil(lambda: batteryReads(receiver) - before == 2 and not self.mice.isBusy()))
+        QTest.qWait(400)
+        self.assertEqual(batteryReads(receiver) - before, 2)
+
     def testReadAllSearchesANodeWithNoKnownMouse(self):
         receiver = self.nodes.add(RECEIVER, silent)
         self.mice.start()
@@ -1896,9 +1911,9 @@ class ReceiverHistoryTests(unittest.TestCase):
         self.mice.requestReadSilent()
         self.assertTrue(self.mice.isReadSilentQueued())
         with mock.patch.object(self.mice, "searchNodesWithoutMice") as search:
-            self.mice.lastReadAll = None
             self.mice.requestReadAll()
-            search.assert_called_once()
+            self.assertEqual((self.mice.isReadAllQueued(), self.mice.isReadSilentQueued()), (True, False))
+            self.assertTrue(waitUntil(lambda: search.called))
 
 
 if (__name__ == "__main__"):
