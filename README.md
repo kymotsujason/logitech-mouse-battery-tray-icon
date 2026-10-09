@@ -77,7 +77,7 @@ It has been tested with the PRO X3 SUPERSTRIKE on its receiver and on its cable,
 
 ## What the udev rule allows
 
-The rule hands the HID++ interface of any Logitech USB device that the kernel leaves to its generic HID driver, such as a receiver or a mouse on its cable, to the `logitech-mouse-battery` group, when that interface's report descriptor passes the app's own check. The check rejects any interface with a keyboard, keypad, or mouse collection and any receiver interface that carries a paired keyboard's keystrokes. Only Mouse Battery's service runs in that group, as its own system user in a systemd sandbox, and it offers nothing but battery readings on the system bus. Any local user may read those readings, which include each mouse's name, its unit id, and when it last woke and was read, and any local user may ask for a new read. The service runs at most one read a second, and each account gets five reads at once and then one every 30 seconds, after which a read is turned down with an error. Nothing this package installs lets a program you run open the receiver or cable, or send it HID++ commands.
+The rule hands the HID++ interface of any Logitech USB device that the kernel leaves to its generic HID driver, such as a receiver or a mouse on its cable, to the `logitech-mouse-battery` group, when that interface's report descriptor passes the app's own check. The check rejects any interface with a keyboard, keypad, or mouse collection and any receiver interface that carries a paired keyboard's keystrokes. Only Mouse Battery's service runs in that group, as its own system user in a systemd sandbox, and it offers nothing but battery readings and each mouse's saved history on the system bus. Any local user may read those, which include each mouse's name, its unit id, and when it last woke and was read, and any local user may ask for a new read. The service runs at most one read a second, and each account gets five reads at once and then one every 30 seconds, after which a read is turned down with an error. Reading a mouse's saved history has its own budget of the same size, and reading the levels for the chart gets ten at once and then one every 5 seconds. Nothing this package installs lets a program you run open the receiver or cable, or send it HID++ commands.
 
 Another package's udev rule can still give your account access of its own, as Solaar's does for every Logitech receiver. A current Solaar keeps that access when Mouse Battery is installed. However, the older Solaar that Debian 12 and Ubuntu 24.04 ship loses it until the receiver is plugged in again or the computer restarts.
 
@@ -87,7 +87,7 @@ One limit stays after an upgrade from 1.0.x. A program that already had a receiv
 
 Remove the package the way you installed it, with Discover, GNOME Software, `sudo apt remove logitech-mouse-battery`, `sudo dnf remove logitech-mouse-battery`, or `sudo pacman -R logitech-mouse-battery`. The running app notices and quits within a few seconds.
 
-Removing the package leaves the battery history in `/var/lib/logitech-mouse-battery`, since systemd makes that folder and no package owns it, so delete it with `sudo rm -r /var/lib/logitech-mouse-battery` if you don't want it kept. Each account can also be left with `~/.config/logitech-mouse-battery/settings.ini`, written when you change the sleep check, and `~/.config/autostart/logitech-mouse-battery.desktop`, written only when you turn off "Open at Login", and neither does anything once the app is gone. The service's group keeps its access to a plugged in receiver or cable until you replug it or restart, and the `logitech-mouse-battery` system user stays, as package managers leave system users in place.
+Removing the package leaves the battery history in `/var/lib/logitech-mouse-battery`, since systemd makes that folder and no package owns it, so delete it with `sudo rm -r /var/lib/logitech-mouse-battery` if you don't want it kept. Each account can also be left with `~/.config/logitech-mouse-battery/settings.ini`, written when you change the sleep check or the chart range, and `~/.config/autostart/logitech-mouse-battery.desktop`, written only when you turn off "Open at Login", and neither does anything once the app is gone. The service's group keeps its access to a plugged in receiver or cable until you replug it or restart, and the `logitech-mouse-battery` system user stays, as package managers leave system users in place.
 
 ## Not tested
 
@@ -122,7 +122,7 @@ The app is the flat set of modules in `src/`, which the packages install side by
 - `history.py` saves each mouse's readings, charges, discharges, and steps in the service, and puts together the history the window shows.
 - `health.py` turns a history into the window's health line and figures.
 - `historyWindow.py` is the battery window, with `glass.py` for its colors and glass panels and `charts.py` for its charts.
-- `settings.py` saves the window's sleep check setting.
+- `settings.py` saves the window's sleep check setting and chart range.
 - `hidpp.py` speaks Logitech's HID++ protocol over hidraw.
 - `hidDescriptor.py` checks a HID report descriptor, for discovery and for the udev rule.
 - `isHidpp.py` is the check the udev rule runs.
