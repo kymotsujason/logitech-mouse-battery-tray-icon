@@ -902,8 +902,12 @@ class Recorder(QObject):
             entry.needsGap = True
         track = entry.track.copy()
         self.apply(track, row, NullWriter())
+        flagChanged = (track.reportsItselfSince is None) != (entry.track.reportsItselfSince is None)
         entry.track = track
         entry.lastWriteAt = row.at
+        # nothing was saved, so the revision stays, but the service still has to pick up the new flag
+        if (flagChanged):
+            self.changed.emit(entry.key)
 
     def apply(self, track, row, writer):
         if (row.origin in MARKER_ORIGINS):

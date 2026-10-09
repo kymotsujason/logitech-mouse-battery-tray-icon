@@ -569,6 +569,18 @@ class ReportsItselfTests(RecorderCase):
             self.assertEqual(db.execute("select count(*) from mice").fetchone()[0], 1)
 
 
+    def testAMouseWithoutAHistorySaysWhenItsFlagChanges(self):
+        key = "/dev/hidraw4#1"
+        changed = []
+        self.recorder.changed.connect(changed.append)
+        self.recorder.setWakeSupport(key, True, pathKey=True)
+        self.recorder.addReading(key, battery(60), history.ORIGIN_EVENT, pathKey=True, at=START)
+        self.at(500)
+        self.assertEqual(changed, [])
+        self.recorder.addReading(key, battery(59), history.ORIGIN_EVENT, pathKey=True, at=START + 1000)
+        self.at(1100)
+        self.assertEqual(changed, [key])
+
 class RecorderTests(RecorderCase):
     def testUPowerRowsForAHidppMouseAreLeftOut(self):
         self.event(0, 50)
