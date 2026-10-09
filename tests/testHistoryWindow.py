@@ -9,7 +9,7 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 from PyQt6 import sip
 from PyQt6.QtCore import QAbstractAnimation, QObject, QPoint, QPointF, QRectF, Qt, pyqtSignal
-from PyQt6.QtDBus import QDBusMessage
+from PyQt6.QtDBus import QDBusVariant
 from PyQt6.QtGui import QColor, QPalette
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QMenu, QWidget
@@ -508,9 +508,8 @@ class WindowTests(WindowCase):
             app.setPalette(saved)
 
     def portalSignal(self, key, value):
-        message = QDBusMessage.createSignal("/org/freedesktop/portal/desktop", panelColor.SETTINGS_INTERFACE, "SettingChanged")
-        message.setArguments([panelColor.APPEARANCE, key, value])
-        return message
+        # a stand-in, since PyQt6 unwraps a variant when it reads a real message's arguments, and the unwrap in onPortalSetting would never be tested
+        return mock.Mock(arguments=lambda: [panelColor.APPEARANCE, key, QDBusVariant(value)])
 
     def testTheReducedMotionChoiceTurnsTheFadesOff(self):
         window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))
