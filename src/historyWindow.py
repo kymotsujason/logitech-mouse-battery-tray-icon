@@ -69,7 +69,7 @@ RANGE_WIDTHS = (30, 30, 30, 34, 30, 36)
 RANGE_HEIGHT = 22
 # an older service answers these the same way every time, so asking again changes nothing
 RESTART_LEVEL_ERRORS = (serviceState.UNKNOWN_METHOD, serviceState.ACCESS_DENIED, serviceState.INVALID_ARGS)
-FINAL_LEVEL_ERRORS = RESTART_LEVEL_ERRORS + (serviceClient.UNDECODABLE,)
+FINAL_ERRORS = RESTART_LEVEL_ERRORS + (serviceClient.UNDECODABLE,)
 # a refused range waits out the refill of its budget before it's asked for again
 LEVEL_RETRY_MS = serviceState.LEVELS_REFILL_SECONDS * 1000
 NOT_REFRESHED_TEXT = "Couldn't refresh the history."
@@ -729,13 +729,13 @@ class HistoryWindow(QWidget):
             self.levelErrors.pop((key, rangeName), None)
         else:
             self.levelErrors[(key, rangeName)] = error
-            if (error not in FINAL_LEVEL_ERRORS):
+            if (error not in FINAL_ERRORS):
                 self.levelRetryTimer.start(LEVEL_RETRY_MS if error == serviceState.READ_ALL_LIMITED else RETRY_MS)
         self.refresh()
 
     def retryLevels(self):
         for item, error in list(self.levelErrors.items()):
-            if (error not in FINAL_LEVEL_ERRORS):
+            if (error not in FINAL_ERRORS):
                 del self.levelErrors[item]
         self.refresh()
 
@@ -814,6 +814,9 @@ class HistoryWindow(QWidget):
     def considerFetch(self, mouse):
         if (mouse.pathKey or self.mouseList.serviceLost() or mouse.key in self.pending):
             return
+        # the same answer would come back, so only a service restart or the next open asks again
+        if (self.errors.get(mouse.key) in FINAL_ERRORS):
+            return
         reply = self.replies.get(mouse.key)
         if (reply is not None and not self.isOld(mouse, reply)):
             self.scheduleAge(reply)
@@ -859,6 +862,7 @@ class HistoryWindow(QWidget):
             self.notRefreshed.discard(key)
         elif (key in self.replies):
             self.notRefreshed.add(key)
+            self.errors[key] = error
         else:
             self.errors[key] = error
             if (error == serviceState.HISTORY_UNAVAILABLE and self.isVisible()):

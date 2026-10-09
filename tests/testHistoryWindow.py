@@ -203,6 +203,39 @@ class WindowTests(WindowCase):
         self.upower.mouseChanged.emit(UPowerMouse())
         self.assertEqual(self.watcher.asked, ["02bc524c", "02bc524c"])
 
+    def testAnErrorThatWontChangeIsntAskedForAgain(self):
+        for error in historyWindow.FINAL_ERRORS:
+            self.window.close()
+            self.window.replies.clear()
+            self.window.lastFetch.clear()
+            self.watcher.asked.clear()
+            self.watcher.answers["02bc524c"] = (None, error)
+            window = self.opened(entry())
+            self.assertFalse(window.fetchTimer.isActive(), error)
+            window.lastFetch.clear()
+            window.refresh()
+            self.assertEqual(self.watcher.asked, ["02bc524c"], error)
+            # a reopen is a new ask from the user, so it gets one more try
+            window.close()
+            window.lastFetch.clear()
+            window.open()
+            self.assertEqual(self.watcher.asked, ["02bc524c"] * 2, error)
+            del self.watcher.answers["02bc524c"]
+            window.lastFetch.clear()
+            self.watcher.serviceRestarted.emit()
+            self.assertEqual(self.watcher.asked, ["02bc524c"] * 3, error)
+
+    def testAnErrorThatWontChangeStopsTheRefreshesToo(self):
+        window = self.opened(entry())
+        self.watcher.answers["02bc524c"] = (None, serviceClient.UNDECODABLE)
+        window.lastFetch.clear()
+        self.state(entry(revision=2))
+        self.assertEqual((len(self.watcher.asked), window.refreshLabel.text()), (2, historyWindow.NOT_REFRESHED_TEXT))
+        window.lastFetch.clear()
+        window.refresh()
+        self.assertEqual(len(self.watcher.asked), 2)
+        self.assertFalse(window.fetchTimer.isActive())
+
     def testAServiceRestartForgetsTheReplies(self):
         window = self.opened(entry())
         self.watcher.serviceRestarted.emit()
