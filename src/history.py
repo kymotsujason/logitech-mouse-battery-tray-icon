@@ -623,6 +623,8 @@ class Recorder(QObject):
     def claim(self, entry, source):
         # one mouse never gets two histories, so UPower's rows for a mouse read over HID++ are left out
         if (source == SOURCE_HIDPP):
+            if (entry.source == SOURCE_UPOWER):
+                self.takeFromUPower(entry)
             entry.source = SOURCE_HIDPP
             return True
         if (entry.source == SOURCE_HIDPP):
@@ -637,6 +639,22 @@ class Recorder(QObject):
                 return False
         entry.source = SOURCE_UPOWER
         return True
+
+    def takeFromUPower(self, entry):
+        # UPower can name a mouse before the HID++ search does, so its rows still waiting are dropped and the saved source moves over
+        entry.pending = []
+        entry.held = None
+        entry.latest = None
+        entry.latestBroken = True
+        if (not entry.persist or not entry.loaded or not self.store.isOpen()):
+            return
+        try:
+            with self.store.transaction() as db:
+                db.execute("update mice set source = ? where id = ?", (SOURCE_HIDPP, entry.mouseId))
+        except sqlite3.Error as error:
+            self.writeFailed(entry, error)
+            # loading again saves the source once the database answers
+            entry.loaded = False
 
     def setWakeSupport(self, key, supported, pathKey=False):
         entry = self.entryFor(key, pathKey)

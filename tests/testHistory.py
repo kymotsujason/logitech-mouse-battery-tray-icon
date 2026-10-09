@@ -519,6 +519,43 @@ class RecorderTests(RecorderCase):
         self.at(700)
         self.assertEqual([row[2] for row in self.rows()], [50])
 
+    def testAUPowerRowQueuedBeforeTheHidppSearchIsLeftOut(self):
+        self.recorder.addReading(KEY, battery(49), history.ORIGIN_UPOWER, source=history.SOURCE_UPOWER, at=START)
+        self.clock.now = START + 1
+        self.recorder.setWakeSupport(KEY, True)
+        self.recorder.addMarker(KEY, history.ORIGIN_GAP, at=START + 1)
+        self.event(1, 50)
+        self.at(600)
+        self.assertEqual([row[1] for row in self.rows()], [history.ORIGIN_GAP, history.ORIGIN_EVENT])
+
+    def testAHidppClaimAfterSavedUPowerRowsSavesTheSourceAsHidpp(self):
+        self.recorder.addReading(KEY, battery(49), history.ORIGIN_UPOWER, source=history.SOURCE_UPOWER, at=START)
+        self.at(10)
+        self.recorder.setWakeSupport(KEY, True)
+        with self.db() as db:
+            self.assertEqual(db.execute("select source from mice").fetchone()[0], history.SOURCE_HIDPP)
+        self.recorder.stop()
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False)
+        self.recorder.addReading(KEY, battery(48), history.ORIGIN_UPOWER, source=history.SOURCE_UPOWER, at=START + 600)
+        self.at(700)
+        self.assertEqual([row[2] for row in self.rows()], [49])
+
+    def testASourceThatFailedToSaveIsSavedWhenTheMouseLoadsAgain(self):
+        self.recorder.addReading(KEY, battery(49), history.ORIGIN_UPOWER, source=history.SOURCE_UPOWER, at=START)
+        self.at(10)
+        real = self.recorder.store.transaction
+        calls = []
+
+        def failingOnce():
+            calls.append(1)
+            if (len(calls) == 1):
+                raise sqlite3.OperationalError("database or disk is full")
+            return real()
+        with mock.patch.object(self.recorder.store, "transaction", failingOnce):
+            self.recorder.setWakeSupport(KEY, True)
+        with self.db() as db:
+            self.assertEqual(db.execute("select source from mice").fetchone()[0], history.SOURCE_HIDPP)
+
     def testAUPowerOnlyMouseGetsAHistory(self):
         self.recorder.addReading("9a1b2c3d", battery(70), history.ORIGIN_UPOWER, source=history.SOURCE_UPOWER, at=START)
         self.at(10)
