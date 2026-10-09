@@ -127,6 +127,10 @@ class LineTests(unittest.TestCase):
         value = summary(wakeSupport=False, wakesVisible=False)
         self.assertEqual(self.lines(value), ([(health.LEARNING, health.WAKES_UNSEEN_TEXT)], health.SYMBOL_CLOCK))
 
+    def testALargeStepsMouseKeepsItsLineWhileWakesAreUnseen(self):
+        value = summary(wakesVisible=False, drain={"buckets": readyBuckets((), 0, ()), "largeSteps": True})
+        self.assertEqual(self.lines(value), ([(health.LEARNING, health.LARGE_STEPS_TEXT)], health.SYMBOL_CLOCK))
+
     def testNoMoreThanThreeLines(self):
         value = summary(lastError=NOW, drain={"buckets": readyBuckets((80, 70, 60), 30.0, (24.0, 24.0, 24.0)), "largeSteps": False}, charge=[{"power": 2, "buckets": readyBuckets((20, 30, 40), 0.5, (0.6, 0.6, 0.6))}])
         self.assertEqual([kind for kind, text in self.lines(value)[0]], [health.ALERT, health.DRAIN, health.CHARGE_LINE_KIND])

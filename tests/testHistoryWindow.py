@@ -870,7 +870,7 @@ class WindowTests(WindowCase):
             self.assertTrue(QRectF(menu.rect()).contains(menu.panel), name)
             QTest.keyClick(menu, Qt.Key.Key_Escape)
 
-    def testOtherMouseButtonsChangeNothing(self):
+    def testOtherMouseButtonsPickNothingAndCloseFromOutside(self):
         window, menu = self.openMenu()
         picked = []
         window.sleepCheckChanged.connect(picked.append)

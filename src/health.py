@@ -120,12 +120,13 @@ def drainMessage(summary, reading, readyRanges):
     if (reading is not None and reading.percent is None and reading.millivolts is not None):
         return Line(LEARNING, VOLTAGE_TEXT)
     # a lookup that hasn't answered leaves wakeSupport at its saved or default value, which nobody has confirmed, and a summary from a service older than the field says nothing either way
-    if (not summary.get("wakesVisible", True)):
-        return Line(LEARNING, WAKES_UNSEEN_TEXT)
-    if (not summary.get("wakeSupport")):
+    wakesVisible = summary.get("wakesVisible", True)
+    if (wakesVisible and not summary.get("wakeSupport")):
         return Line(LEARNING, NO_WAKES_TEXT)
     if (summary["drain"].get("largeSteps")):
         return Line(LEARNING, LARGE_STEPS_TEXT)
+    if (not wakesVisible):
+        return Line(LEARNING, WAKES_UNSEEN_TEXT)
     return Line(LEARNING, "Still learning, " + str(readyRanges) + " of " + str(READY_BUCKETS) + " battery ranges measured.")
 
 
