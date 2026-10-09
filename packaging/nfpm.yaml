@@ -116,6 +116,14 @@ contents:
     dst: /usr/share/logitech-mouse-battery/health.py
     file_info:
       mode: 0644
+  - src: src/glass.py
+    dst: /usr/share/logitech-mouse-battery/glass.py
+    file_info:
+      mode: 0644
+  - src: src/charts.py
+    dst: /usr/share/logitech-mouse-battery/charts.py
+    file_info:
+      mode: 0644
   - src: src/version.py
     dst: /usr/share/logitech-mouse-battery/version.py
     file_info:
