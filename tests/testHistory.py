@@ -144,6 +144,28 @@ class StoreTests(RecorderCase):
         self.assertTrue(self.recorder.available())
         self.assertIs(sqlite3.connect, real)
 
+    def testAnOpenFailureThatComesBackAfterARecoveryIsPrintedAgain(self):
+        def failing(*args, **kwargs):
+            raise sqlite3.OperationalError("disk I/O error")
+        with mock.patch.object(sqlite3, "connect", failing):
+            self.assertFalse(self.recorder.available())
+        self.clock.now += history.OPEN_RETRY_SECONDS
+        self.assertTrue(self.recorder.available())
+        self.recorder.store.closeQuietly()
+        with mock.patch.object(sqlite3, "connect", failing):
+            self.assertFalse(self.recorder.available())
+        self.assertEqual(self.errors.getvalue().splitlines(), ["Couldn't open the history: disk I/O error", "The history is open again", "Couldn't open the history: disk I/O error"])
+
+    def testAReadFailureThatComesBackAfterARecoveryIsPrintedAgain(self):
+        def failing(*args):
+            raise sqlite3.OperationalError("disk I/O error")
+        for attempt in range(2):
+            with mock.patch.object(history, "readSummary", failing):
+                with self.assertRaises(history.HistoryUnavailable):
+                    self.recorder.summary(KEY)
+            self.recorder.summary(KEY)
+        self.assertEqual(self.errors.getvalue().splitlines(), ["Couldn't read the history: disk I/O error", "The history can be read again"] * 2)
+
     def testCorruptionDuringARunStopsTheHistoryAndAsksForTheFullCheck(self):
         self.event(0, 50)
         self.recorder.store.markCorrupt(history.CorruptHistory("test"))
@@ -675,6 +697,14 @@ class RecorderTests(RecorderCase):
         self.event(3600, 48)
         self.assertEqual([row[:3] for row in self.rows()], [(0, 0, 50), (3600, 4, None), (3600, 0, 48)])
         self.assertIn("database or disk is full", self.errors.getvalue())
+
+    def testASaveFailureThatComesBackAfterARecoveryIsPrintedAgain(self):
+        self.event(0, 50)
+        for seconds, percent in ((1800, 49), (5400, 47)):
+            with self.failOnce(sqlite3.OperationalError("database or disk is full")):
+                self.event(seconds, percent)
+            self.event(seconds + 1800, percent - 1)
+        self.assertEqual(self.errors.getvalue().splitlines(), ["Couldn't save to the history: database or disk is full", "The history is saving again"] * 2)
 
     def testARestartReloadsTheOpenSession(self):
         self.recorder.setWakeSupport(KEY, True)

@@ -253,6 +253,16 @@ class AppTests(unittest.TestCase):
         self.assertEqual(mouseApp.shownColor, app.palette().color(QPalette.ColorRole.WindowText))
         self.assertEqual(errors.getvalue(), "Couldn't read the panel color: embedded null byte\n")
 
+    def testAPanelColorErrorThatComesBackAfterAGoodReadIsPrintedAgain(self):
+        mouseApp = self.makeApp(True)
+        errors = io.StringIO()
+        good = app.palette().color(QPalette.ColorRole.WindowText)
+        with mock.patch.object(tray.panelColor, "baseColor", side_effect=[ValueError("embedded null byte"), good, ValueError("embedded null byte")]), contextlib.redirect_stderr(errors):
+            for i in range(3):
+                mouseApp.clearColor()
+                mouseApp.baseColor()
+        self.assertEqual(errors.getvalue(), "Couldn't read the panel color: embedded null byte\n" * 2)
+
     def testAPanelColorErrorWithABrokenStderrStillDrawsTheTray(self):
         mouseApp = self.makeApp(True)
         with mock.patch.object(tray.panelColor, "baseColor", side_effect=ValueError("embedded null byte")), mock.patch.object(sys, "stderr", BrokenStream()):
@@ -622,6 +632,20 @@ class AppTests(unittest.TestCase):
             self.lowBatterySends([(None, "org.freedesktop.DBus.Error.ServiceUnknown")] * 3)
         # the recording bus has no service, so the service watcher prints its own line beside this one
         self.assertEqual([line for line in errors.getvalue().splitlines() if "low battery" in line], ["Couldn't send the low battery notice for MX Master 3: org.freedesktop.DBus.Error.ServiceUnknown"])
+
+    def testALowBatteryNoticeThatFailsAgainAfterOneWentThroughIsLoggedAgain(self):
+        mouseApp = self.makeApp(True)
+        replies = [(None, "org.freedesktop.DBus.Error.ServiceUnknown"), (7, None), (None, "org.freedesktop.DBus.Error.ServiceUnknown")]
+
+        def send(summary, body, actions=(), onAction=None, onSent=None):
+            onSent(*replies.pop(0))
+
+        errors = io.StringIO()
+        with mock.patch.object(mouseApp.notifier, "send", send), contextlib.redirect_stderr(errors):
+            for percent in (9, 8, lowBattery.CRITICAL_PERCENT):
+                mouseApp.mouseList.applyUPower(upower.UPowerMouse(PATH, "12ab34cd", "MX Master 3", hidpp.BatteryReading(percent, 0)))
+        self.assertEqual(replies, [])
+        self.assertEqual([line for line in errors.getvalue().splitlines() if "low battery" in line], ["Couldn't send the low battery notice for MX Master 3: org.freedesktop.DBus.Error.ServiceUnknown"] * 2)
 
     def testALowBatteryNoticeThatTimedOutIsLoggedOnce(self):
         mouseApp = self.makeApp(True)

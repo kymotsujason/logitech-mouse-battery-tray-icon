@@ -272,6 +272,8 @@ class MouseBatteryApp(QObject):
     def onLowBatterySent(self, key, name, percent, notificationId, error):
         if (notificationId is not None):
             self.mouseList.markWarningSent(key, percent)
+            # a notice went through, so the next failure for this mouse is printed as news
+            self.noticeErrors = {each for each in self.noticeErrors if each[0] != key}
             return
         # NoReply means the bus already handed the message to the server (or is starting the server for it), and asking again after a timeout would send it twice
         if (error == NO_REPLY):
@@ -281,7 +283,7 @@ class MouseBatteryApp(QObject):
             # the warning is given back, so it goes out again with the next reading
             self.mouseList.markWarningFailed(key, percent)
             line = "Couldn't send the low battery notice for " + name + ": " + str(error)
-        # each kind of failure is printed once per mouse
+        # each kind of failure is printed once per mouse until a notice for it goes through
         if ((key, error) not in self.noticeErrors):
             self.noticeErrors.add((key, error))
             printLine(line)
@@ -324,12 +326,13 @@ class MouseBatteryApp(QObject):
         try:
             self.cachedColor = panelColor.baseColor(os.environ, self.configHome, panelColor.dataDirs(os.environ), self.portalScheme, palette)
         except Exception as error:
-            # every redraw asks again, so each error is printed only the first time
+            # every redraw asks again, so each error is printed only the first time until a read goes through
             message = "Couldn't read the panel color: " + str(error)
             if (message not in self.colorErrors):
                 self.colorErrors.add(message)
                 printLine(message)
             return palette
+        self.colorErrors.clear()
         return self.cachedColor
 
     def updateTray(self, *args):

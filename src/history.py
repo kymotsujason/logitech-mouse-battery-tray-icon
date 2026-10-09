@@ -26,6 +26,9 @@ MILLIVOLT_STEP = 20
 REPORTS_ITSELF_AFTER_SECONDS = 60
 CLEAR_POINTS = 2
 CORRUPTION_CODES = (sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB)
+FAILED_OPEN = "open"
+FAILED_SAVE = "save"
+FAILED_READ = "read"
 
 ORIGIN_EVENT = 0
 ORIGIN_READ = 1
@@ -138,14 +141,25 @@ class Store:
         self.brokenThisRun = False
         self.lastAttempt = None
         self.printed = set()
+        # the lines each kind of failure still going on has printed, so its end gets a line and the next outage prints again
+        self.failing = {}
 
     def path(self, suffix=""):
         return os.path.join(self.folder, FILE_NAME + suffix)
 
-    def say(self, line):
+    def say(self, line, kind=None):
+        if (kind is not None):
+            self.failing.setdefault(kind, set()).add(line)
         if (line in self.printed):
             return
         self.printed.add(line)
+        printLine(line)
+
+    def works(self, kind, line):
+        lines = self.failing.pop(kind, None)
+        if (lines is None):
+            return
+        self.printed -= lines
         printLine(line)
 
     def isOpen(self):
@@ -168,7 +182,7 @@ class Store:
         except sqlite3.Error as error:
             if (not isCorruption(error)):
                 self.closeQuietly()
-                self.say("Couldn't open the history: " + describe(error))
+                self.say("Couldn't open the history: " + describe(error), FAILED_OPEN)
                 return False
         # closing a connection deletes the write log beside the file, so the files move aside while it's still open
         renamed = self.renameBroken()
@@ -179,7 +193,7 @@ class Store:
             return self.openOnce()
         except sqlite3.Error as error:
             self.closeQuietly()
-            self.say("Couldn't start a new history: " + describe(error))
+            self.say("Couldn't start a new history: " + describe(error), FAILED_OPEN)
             return False
 
     def openOnce(self):
@@ -209,6 +223,7 @@ class Store:
             except OSError:
                 pass
         self.lastAttempt = None
+        self.works(FAILED_OPEN, "The history is open again")
         return True
 
     def renameBroken(self):
@@ -219,7 +234,7 @@ class Store:
                 if (os.path.exists(self.path(extension))):
                     os.replace(self.path(extension), self.path(suffix + extension))
         except OSError as error:
-            self.say("Couldn't move the broken history aside: " + str(error))
+            self.say("Couldn't move the broken history aside: " + str(error), FAILED_OPEN)
             return False
         self.say("The history was corrupt, so it was kept as " + FILE_NAME + suffix + " and a new one was started")
         return True
@@ -255,6 +270,7 @@ class Store:
             except sqlite3.Error:
                 pass
             raise
+        self.works(FAILED_SAVE, "The history is saving again")
 
 
 class DbWriter:
@@ -602,13 +618,15 @@ class Recorder(QObject):
         if (self.store is None or not self.store.ensureOpen()):
             raise HistoryUnavailable()
         try:
-            return readSummary(self.store.db, self.entries.get(key), key, self.clock())
+            summary = readSummary(self.store.db, self.entries.get(key), key, self.clock())
         except sqlite3.Error as error:
             if (isCorruption(error)):
                 self.store.markCorrupt(error)
             else:
-                self.store.say("Couldn't read the history: " + describe(error))
+                self.store.say("Couldn't read the history: " + describe(error), FAILED_READ)
             raise HistoryUnavailable() from error
+        self.store.works(FAILED_READ, "The history can be read again")
+        return summary
 
     def levels(self, key, rangeName):
         if (rangeName not in LEVEL_RANGES):
@@ -616,13 +634,15 @@ class Recorder(QObject):
         if (self.store is None or not self.store.ensureOpen()):
             raise HistoryUnavailable()
         try:
-            return readLevels(self.store.db, key, rangeName, self.clock())
+            levels = readLevels(self.store.db, key, rangeName, self.clock())
         except sqlite3.Error as error:
             if (isCorruption(error)):
                 self.store.markCorrupt(error)
             else:
-                self.store.say("Couldn't read the history: " + describe(error))
+                self.store.say("Couldn't read the history: " + describe(error), FAILED_READ)
             raise HistoryUnavailable() from error
+        self.store.works(FAILED_READ, "The history can be read again")
+        return levels
 
     def claim(self, entry, source):
         # one mouse never gets two histories, so UPower's rows for a mouse read over HID++ are left out
@@ -700,8 +720,9 @@ class Recorder(QObject):
             if (isCorruption(error)):
                 self.store.markCorrupt(error)
             else:
-                self.store.say("Couldn't read the history: " + describe(error))
+                self.store.say("Couldn't read the history: " + describe(error), FAILED_READ)
             return None
+        self.store.works(FAILED_READ, "The history can be read again")
         return found is not None and found[0] == SOURCE_HIDPP
 
     def checkMissedStep(self, entry, row):
@@ -921,7 +942,7 @@ class Recorder(QObject):
             self.store.markCorrupt(error)
             entry.loaded = False
             return
-        self.store.say("Couldn't save to the history: " + describe(error))
+        self.store.say("Couldn't save to the history: " + describe(error), FAILED_SAVE)
 
 
 class HistoryUnavailable(Exception):

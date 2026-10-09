@@ -193,11 +193,13 @@ class UPowerWatcher(QObject):
         # a device still failing keeps its backoff, which its own answer starts over once it goes through
         if (not self.retryPaths):
             self.retryMs = RETRY_MS
+            # UPower answers again, so a failure after this is printed as news
+            self.printedErrors.clear()
         for path in paths:
             self.refresh(path)
 
     def reportError(self, error):
-        # the retries keep going quietly, so each kind of failure gets one line
+        # the retries keep going quietly, so each kind of failure gets one line until UPower answers again
         if (error in self.printedErrors):
             return
         self.printedErrors.add(error)
@@ -246,6 +248,7 @@ class UPowerWatcher(QObject):
         self.retryPaths.discard(path)
         if (not self.retryPaths and not self.enumerateDue):
             self.retryMs = RETRY_MS
+            self.printedErrors.clear()
         mouse = mouseFromProperties(path, props)
         if (mouse is None):
             self.dropPath(path)
