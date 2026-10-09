@@ -425,7 +425,8 @@ def main():
     printLine("Mouse Battery " + VERSION + " started")
     mouseApp = MouseBatteryApp(app)
     mouseApp.start()
-    mouseApp.applyArguments(sys.argv)
+    # run from the event loop, so a window that fails to build reaches the exception hook the way a click's slot does, instead of ending the tray before it starts
+    QTimer.singleShot(0, lambda: mouseApp.applyArguments(sys.argv))
     code = app.exec()
     mouseApp.stop()
     return code

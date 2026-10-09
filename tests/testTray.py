@@ -145,6 +145,17 @@ class ProcessTests(unittest.TestCase):
         self.runMain(errors)
         self.assertEqual(errors.getvalue(), "Mouse Battery " + tray.VERSION + " started\n")
 
+    def testAWindowThatFailsToReopenAtStartGoesToTheHookAndTheTrayRuns(self):
+        hooked = []
+        with mock.patch.object(tray, "installExceptionHooks"), mock.patch.object(tray, "raiseNiceness"), mock.patch.object(tray.signal, "signal"), mock.patch.object(tray, "QApplication"), mock.patch.object(tray, "QIcon"), mock.patch.object(tray, "takeLock", return_value=(True, None)), mock.patch.object(tray, "MouseBatteryApp") as mouseApp, mock.patch.object(tray.sys, "stderr", io.StringIO()), mock.patch.object(sys, "excepthook", lambda *info: hooked.append(info[1])):
+            mouseApp.return_value.applyArguments.side_effect = RuntimeError("broken window")
+            tray.main()
+            # the restart's arguments are applied from the event loop, the way a click's slot runs
+            self.assertEqual(mouseApp.return_value.applyArguments.call_count, 0)
+            QTest.qWait(20)
+        mouseApp.return_value.applyArguments.assert_called_once_with(sys.argv)
+        self.assertEqual([str(error) for error in hooked], ["broken window"])
+
     def testABrokenStderrDoesNotStopStartup(self):
         code, mouseApp = self.runMain(mock.Mock(write=mock.Mock(side_effect=OSError(5, "I/O error"))))
         self.assertTrue(mouseApp.return_value.start.called)
