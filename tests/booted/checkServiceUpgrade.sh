@@ -14,6 +14,7 @@ interface=io.github.kymotsujason.LogitechMouseBattery1
 work=$(mktemp -d)
 fakePid=""
 node=""
+startedAt=0
 failures=0
 
 check() {
@@ -178,8 +179,8 @@ brokenFiles() {
     sudo find /var/lib/$name -maxdepth 1 -name 'history.sqlite3.broken-*' | wc -l
 }
 
-# a read row is something only a running service makes, since a stopping one writes only gap rows, so a read row at or after
-# a time taken before the restart can only come from the new process, once it has opened the file
+# a stopping service can still write read rows, since it processes every pending reading on SIGTERM, so a read row only
+# proves the new process when its time is at or after the new process's start second, which waitForStart takes
 readsSince() {
     sudo python3 -c "import sqlite3, sys; print(sqlite3.connect('file:/var/lib/$name/history.sqlite3?mode=ro', uri=True).execute('select count(*) from readings where origin = 1 and at >= ?', (int(sys.argv[1]),)).fetchone()[0])" "$1" 2>/dev/null || echo 0
 }
@@ -211,6 +212,8 @@ waitForStart() {
     done
     [ "$count" = "1" ] || stop "the restarted service never logged that $version started"
     lastPid=$pid
+    startedAt=$(date -d "$(systemctl show -p ExecMainStartTimestamp --value "$unit")" +%s 2>/dev/null)
+    [ "$startedAt" -gt 0 ] 2>/dev/null || stop "the restarted service has no start time"
 }
 
 check "the upgrade gave the service its state folder" "$(sudo stat -c '%U %a' /var/lib/$name 2>&1)" "$name 750"
@@ -220,16 +223,17 @@ check "GetHistory answers for the fake mouse" "$(busctl --system --timeout=5 cal
 check "GetLevels answers a range for the fake mouse" "$(busctl --system --timeout=5 call "$service" "$objectPath" "$interface" GetLevels ss 02bc524c year 2>&1 | grep -c '\\"range\\": \\"year\\"')" "1"
 oldest=$(oldestReading)
 [ -n "$oldest" ] || stop "the history has no first reading to compare against"
-restartedAt=$(date +%s)
-sudo systemctl restart "$unit"
+# stopped for a second before it starts, so nothing the old process writes can share a second with the new start
+sudo systemctl stop "$unit"
+sleep 1
+sudo systemctl start "$unit"
 waitForStart
-reads=$(waitForReadsSince "$restartedAt")
+reads=$(waitForReadsSince "$startedAt")
 check "the history survived a service restart" "$( [ "$reads" -ge 1 ] 2>/dev/null && [ "$(oldestReading)" = "$oldest" ] && echo kept || echo "$reads reads since the restart, first reading $(oldestReading)")" "kept"
 check "the restart set no broken history file aside" "$(brokenFiles)" "0"
-reinstalledAt=$(date +%s)
 sudo DEBIAN_FRONTEND=noninteractive apt-get install --reinstall -y "$repo/dist/${name}_${version}_all.deb" > "$work/install3.log" 2>&1 || stop "the reinstall failed"
 waitForStart
-reads=$(waitForReadsSince "$reinstalledAt")
+reads=$(waitForReadsSince "$startedAt")
 check "the history survived a reinstall of the same package" "$( [ "$reads" -ge 1 ] 2>/dev/null && [ "$(oldestReading)" = "$oldest" ] && echo kept || echo "$reads reads since the reinstall, first reading $(oldestReading)")" "kept"
 check "the reinstall set no broken history file aside" "$(brokenFiles)" "0"
 
