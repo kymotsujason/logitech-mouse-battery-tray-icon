@@ -659,6 +659,16 @@ class AppTests(unittest.TestCase):
         mouseApp.historyWindow.popup.pick(60)
         self.assertEqual((settings.loadSleepCheck(self.temp.name), mouseApp.mouseList.sleepCheckSeconds), (60, 60))
 
+    def testAPickedRangeIsSavedAndTheNextWindowOpensOnIt(self):
+        mouseApp = self.makeApp(True)
+        mouseApp.showHistory()
+        mouseApp.historyWindow.pickRange("year")
+        self.assertEqual(settings.loadLevelRange(self.temp.name), "year")
+        mouseApp.historyWindow.close()
+        again = self.makeApp(True)
+        again.showHistory()
+        self.assertEqual(again.historyWindow.levelRange, "year")
+
     def testTheMenuALeftClickAndTheTimerEachAskTheServiceToRead(self):
         with mock.patch.object(serviceClient.ServiceWatcher, "readAll") as readAll:
             mouseApp = self.makeApp(True)

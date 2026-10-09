@@ -30,5 +30,24 @@ class SettingsTests(unittest.TestCase):
             self.assertEqual(settings.loadSleepCheck(self.folder), 0, text)
 
 
+    def testNothingSavedIsTheWeek(self):
+        self.assertEqual(settings.loadLevelRange(self.folder), "week")
+
+    def testAPickedRangeIsKeptBesideTheSleepCheck(self):
+        self.assertTrue(settings.saveSleepCheck(self.folder, 60))
+        self.assertTrue(settings.saveLevelRange(self.folder, "halfYear"))
+        self.assertEqual((settings.loadLevelRange(self.folder), settings.loadSleepCheck(self.folder)), ("halfYear", 60))
+
+    def testARangeThatIsntAChoiceIsTheWeek(self):
+        os.makedirs(os.path.dirname(settings.settingsPath(self.folder)))
+        with open(settings.settingsPath(self.folder), "w") as f:
+            f.write("[General]\nlevelRange=decade\n")
+        self.assertEqual(settings.loadLevelRange(self.folder), "week")
+
+    def testTheChoicesAreTheServicesRanges(self):
+        import history
+        self.assertEqual(settings.LEVEL_RANGE_CHOICES, tuple(history.LEVEL_RANGES))
+
+
 if (__name__ == "__main__"):
     unittest.main()

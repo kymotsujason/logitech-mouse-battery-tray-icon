@@ -14,6 +14,7 @@ XML = """
     <method name="ReadAll"/>
     <method name="ReadSilent"/>
     <method name="GetHistory"><arg type="s" direction="in"/><arg type="s" direction="out"/></method>
+    <method name="GetLevels"><arg type="s" direction="in"/><arg type="s" direction="in"/><arg type="s" direction="out"/></method>
     <signal name="StateChanged"><arg type="s"/></signal>
   </interface>
 </node>
@@ -79,9 +80,9 @@ def onCall(conn, sender, path, interface, method, params, invocation):
     if (method == "GetState"):
         invocation.return_value(GLib.Variant("(s)", (readState(),)))
         return
-    if (method == "GetHistory"):
+    if (method in ("GetHistory", "GetLevels")):
         # a test writes the reply to this file, or an error name to the answer file to have it refused
-        historyAnswer = historyText()
+        historyAnswer = historyText(".history" if method == "GetHistory" else ".levels")
         if (historyAnswer.startswith("error:")):
             invocation.return_dbus_error(historyAnswer[len("error:"):].strip(), "refused by the fake")
             return
@@ -93,9 +94,9 @@ def onCall(conn, sender, path, interface, method, params, invocation):
     invocation.return_value(None)
 
 
-def historyText():
+def historyText(suffix):
     try:
-        with open(stateFile + ".history") as f:
+        with open(stateFile + suffix) as f:
             return f.read()
     except OSError:
         return "error: io.github.kymotsujason.LogitechMouseBattery1.Error.HistoryUnavailable"

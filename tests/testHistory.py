@@ -4,6 +4,7 @@ import shutil
 import sqlite3
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -742,6 +743,92 @@ class SummaryTests(RecorderCase):
         charged = [slot[4] for slot in self.recorder.summary(KEY)["recent"]]
         self.assertEqual(charged[:4], [False, True, True, False])
 
+
+    def addRoughRow(self, at, level=None, millivolts=None):
+        with self.recorder.store.transaction():
+            self.database.execute("insert into readings (mouseId, at, seq, level, millivolts, charging, power, origin) values (1, ?, 0, ?, ?, 0, 0, ?)", (START + at, level, millivolts, history.ORIGIN_EVENT))
+
+    def testEachRangeEndsNowWithItsOwnSlotCount(self):
+        self.clock.now = START + 400 * 24 * 60 * 60
+        for name, count, seconds in (("day", 48, 30 * 60), ("week", 84, 2 * 60 * 60), ("month", 60, 12 * 60 * 60), ("halfYear", 26, 7 * 24 * 60 * 60), ("year", 52, 7 * 24 * 60 * 60)):
+            levels = self.recorder.levels(KEY, name)
+            self.assertEqual((levels["version"], levels["key"], levels["range"]), (1, KEY, name))
+            ends = [slot[0] for slot in levels["slots"]]
+            self.assertEqual((len(ends), ends[-1], ends[1] - ends[0]), (count, self.clock.now, seconds), name)
+
+    def testTheWeekIsTheHistorysRecentSlots(self):
+        self.clock.now = START + 8 * 24 * 60 * 60
+        self.addReadingRow(0, percent=90)
+        self.addReadingRow(7 * 24 * 60 * 60 + 600, percent=70)
+        self.assertEqual(self.recorder.levels(KEY, "week")["slots"], self.recorder.summary(KEY)["recent"])
+
+    def testTheDayHasHalfHourLevelBars(self):
+        self.clock.now = START + 24 * 60 * 60
+        self.addReadingRow(10, percent=80)
+        self.addReadingRow(45 * 60, percent=78)
+        slots = self.recorder.levels(KEY, "day")["slots"]
+        self.assertEqual([slot[1] for slot in slots[:3]], [80, 78, 78])
+
+    def testALongSlotSpansItsLowestToHighest(self):
+        self.clock.now = START + 30 * 24 * 60 * 60
+        self.addReadingRow(60, percent=90)
+        self.addReadingRow(3 * 60 * 60, percent=70)
+        self.addReadingRow(6 * 60 * 60, percent=60)
+        slots = self.recorder.levels(KEY, "month")["slots"]
+        # the second slot holds no reading, so it carries the last level as a flat bar
+        self.assertEqual([slot[1:3] for slot in slots[:2]], [[60, 90], [60, 60]])
+
+    def testALongSlotStartsFromTheLevelCarriedIntoIt(self):
+        self.clock.now = START + 30 * 24 * 60 * 60
+        self.addReadingRow(60, percent=90)
+        self.addReadingRow(13 * 60 * 60, percent=80)
+        slots = self.recorder.levels(KEY, "month")["slots"]
+        self.assertEqual(slots[1][1:3], [80, 90])
+
+    def testALongSlotCountsTheChargesStartedInIt(self):
+        self.clock.now = START + 30 * 24 * 60 * 60
+        self.addReadingRow(60, percent=30)
+        self.addSession(history.CHARGE, 2 * 60 * 60, 3 * 60 * 60, 30, 80)
+        self.addSession(history.CHARGE, 5 * 60 * 60, 6 * 60 * 60, 70, 90)
+        slots = self.recorder.levels(KEY, "month")["slots"]
+        self.assertEqual([slot[3] for slot in slots[:2]], [2, 0])
+
+    def testALongSlotAfterAGapIsEmptyUntilTheNextReading(self):
+        self.clock.now = START + 30 * 24 * 60 * 60
+        self.addReadingRow(60, percent=90)
+        self.addReadingRow(6 * 60 * 60, origin=history.ORIGIN_GAP)
+        self.addReadingRow(37 * 60 * 60, percent=85)
+        slots = self.recorder.levels(KEY, "month")["slots"]
+        self.assertEqual([slot[1:3] for slot in slots[:4]], [[90, 90], [None, None], [None, None], [85, 85]])
+
+    def testAllHasOneSlotPerLocalMonthSinceTheMouseWasFirstSeen(self):
+        self.clock.now = START + 70 * 24 * 60 * 60
+        self.addReadingRow(60, percent=90)
+        slots = self.recorder.levels(KEY, "all")["slots"]
+        first = time.localtime(START)
+        last = time.localtime(self.clock.now)
+        months = (last.tm_year - first.tm_year) * 12 + last.tm_mon - first.tm_mon + 1
+        self.assertEqual(len(slots), months)
+        self.assertEqual(slots[0][0], time.mktime((first.tm_year + first.tm_mon // 12, first.tm_mon % 12 + 1, 1, 0, 0, 0, 0, 0, -1)))
+        self.assertEqual((slots[-1][0], slots[0][1:3]), (self.clock.now, [90, 90]))
+
+    def testAllKeepsTheLastHundredTwentyMonths(self):
+        self.clock.now = START + 11 * 366 * 24 * 60 * 60
+        self.assertEqual(len(self.recorder.levels(KEY, "all")["slots"]), 120)
+
+    def testRoughLevelsAndMillivoltsBecomeHeights(self):
+        self.clock.now = START + 30 * 24 * 60 * 60
+        self.addRoughRow(60, level="good")
+        self.addRoughRow(13 * 60 * 60, millivolts=3850)
+        slots = self.recorder.levels(KEY, "month")["slots"]
+        self.assertEqual([slot[1:3] for slot in slots[:2]], [[hidpp.LEVEL_HEIGHTS["good"], hidpp.LEVEL_HEIGHTS["good"]], [hidpp.LEVEL_HEIGHTS["good"], 3850]])
+
+    def testAnUnknownRangeIsRefusedAndAnUnknownKeyIsEmpty(self):
+        with self.assertRaises(ValueError):
+            self.recorder.levels(KEY, "decade")
+        self.assertEqual(self.recorder.levels("ffffffff", "year")["slots"], [])
+        with self.assertRaises(history.HistoryUnavailable):
+            history.Recorder(None, self.clock, timers=False).levels(KEY, "year")
 
 if (__name__ == "__main__"):
     unittest.main()

@@ -97,7 +97,7 @@ SERVICE_FILES = [
     ("packaging/dbus/io.github.kymotsujason.LogitechMouseBattery.service", "/usr/share/dbus-1/system-services/io.github.kymotsujason.LogitechMouseBattery.service"),
     ("packaging/sysusers/logitech-mouse-battery.conf", "/usr/lib/sysusers.d/logitech-mouse-battery.conf"),
 ]
-ALLOWED_CALLS = {(serviceState.INTERFACE, "GetState"), (serviceState.INTERFACE, "ReadAll"), (serviceState.INTERFACE, "ReadSilent"), (serviceState.INTERFACE, "GetHistory"), ("org.freedesktop.DBus.Introspectable", "Introspect"), ("org.freedesktop.DBus.Peer", "Ping"), ("org.freedesktop.DBus.Peer", "GetMachineId")}
+ALLOWED_CALLS = {(serviceState.INTERFACE, "GetState"), (serviceState.INTERFACE, "ReadAll"), (serviceState.INTERFACE, "ReadSilent"), (serviceState.INTERFACE, "GetHistory"), (serviceState.INTERFACE, "GetLevels"), ("org.freedesktop.DBus.Introspectable", "Introspect"), ("org.freedesktop.DBus.Peer", "Ping"), ("org.freedesktop.DBus.Peer", "GetMachineId")}
 
 
 def iniSections(path):

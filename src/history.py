@@ -54,6 +54,13 @@ SESSION_DAYS = 90
 SESSION_LIMIT = 500
 SLOTS = 84
 SLOT_SECONDS = 2 * 60 * 60
+# each range's slot count and length, where None is a calendar month
+LEVEL_RANGES = {"day": (48, 30 * 60), "week": (SLOTS, SLOT_SECONDS), "month": (60, 12 * 60 * 60), "halfYear": (26, 7 * 24 * 60 * 60), "year": (52, 7 * 24 * 60 * 60), "all": (120, None)}
+# a long slot's level at its end says little, so these hold the lowest and highest level in each slot
+SPAN_RANGES = ("month", "halfYear", "year", "all")
+LEVELS_VERSION = 1
+# a reading's height on the chart, which is its percent, or its rough level's height, or its millivolts for a mouse that reports only voltage
+VALUE_SQL = "coalesce(percent, case level " + " ".join("when '" + name + "' then " + str(height) for name, height in hidpp.LEVEL_HEIGHTS.items()) + " end, millivolts)"
 SESSION_COLUMNS = ("kind", "startAt", "endAt", "startPercent", "endPercent", "power", "readingCount", "slowCount", "errorCount", "inferred")
 
 SCHEMA = (
@@ -599,6 +606,20 @@ class Recorder(QObject):
                 self.store.say("Couldn't read the history: " + describe(error))
             raise HistoryUnavailable() from error
 
+    def levels(self, key, rangeName):
+        if (rangeName not in LEVEL_RANGES):
+            raise ValueError("unknown range " + repr(rangeName))
+        if (self.store is None or not self.store.ensureOpen()):
+            raise HistoryUnavailable()
+        try:
+            return readLevels(self.store.db, key, rangeName, self.clock())
+        except sqlite3.Error as error:
+            if (isCorruption(error)):
+                self.store.markCorrupt(error)
+            else:
+                self.store.say("Couldn't read the history: " + describe(error))
+            raise HistoryUnavailable() from error
+
     def claim(self, entry, source):
         # one mouse never gets two histories, so UPower's rows for a mouse read over HID++ are left out
         if (source == SOURCE_HIDPP):
@@ -959,17 +980,66 @@ def monthlySummary(db, mouseId):
     return result
 
 
-def recentSlots(db, mouseId, now):
-    start = now - SLOTS * SLOT_SECONDS
+def readLevels(db, key, rangeName, now):
+    levels = {"version": LEVELS_VERSION, "key": key, "range": rangeName, "slots": []}
+    found = db.execute("select id, firstSeen from mice where key = ?", (key,)).fetchone()
+    if (found is None):
+        return levels
+    mouseId, firstSeen = found
+    count, seconds = LEVEL_RANGES[rangeName]
+    now = int(now)
+    if (rangeName not in SPAN_RANGES):
+        levels["slots"] = recentSlots(db, mouseId, now, count, seconds)
+    elif (seconds is None):
+        levels["slots"] = spanSlots(db, mouseId, monthEdges(firstSeen, now)[-count:])
+    else:
+        levels["slots"] = spanSlots(db, mouseId, [(now - (count - slot) * seconds, now - (count - slot - 1) * seconds) for slot in range(count)])
+    return levels
+
+
+def monthEdges(firstSeen, now):
+    # local months, since the window labels them in local time, with the current one ending now
+    moment = time.localtime(min(firstSeen, now))
+    year, month = moment.tm_year, moment.tm_mon
+    edges = []
+    start = time.mktime((year, month, 1, 0, 0, 0, 0, 0, -1))
+    while (start <= now):
+        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+        end = time.mktime((year, month, 1, 0, 0, 0, 0, 0, -1))
+        edges.append((int(start), min(int(end), now)))
+        start = end
+    return edges
+
+
+def spanSlots(db, mouseId, edges):
+    if (not edges):
+        return []
+    before = db.execute("select origin, " + VALUE_SQL + " from readings where mouseId = ? and at < ? and origin in (0, 1, 4, 5) order by at desc, seq desc limit 1", (mouseId, edges[0][0])).fetchone()
+    carried = None if before is None or before[0] == ORIGIN_GAP else before[1]
+    slots = []
+    for start, end in edges:
+        # each slot is a range scan on the primary key, so ten years of readings cost a few hundred indexed queries
+        low, high = db.execute("select min(" + VALUE_SQL + "), max(" + VALUE_SQL + ") from readings where mouseId = ? and at >= ? and at < ? and origin in (0, 1, 5)", (mouseId, start, end)).fetchone()
+        last = db.execute("select origin, " + VALUE_SQL + " from readings where mouseId = ? and at >= ? and at < ? and origin in (0, 1, 4, 5) order by at desc, seq desc limit 1", (mouseId, start, end)).fetchone()
+        charges = db.execute("select count(*) from sessions where mouseId = ? and kind = ? and startAt >= ? and startAt < ?", (mouseId, CHARGE, start, end)).fetchone()[0]
+        values = [value for value in (low, high, carried) if value is not None]
+        slots.append([end, min(values), max(values), charges] if values else [end, None, None, charges])
+        if (last is not None):
+            carried = None if last[0] == ORIGIN_GAP else last[1]
+    return slots
+
+
+def recentSlots(db, mouseId, now, count=SLOTS, seconds=SLOT_SECONDS):
+    start = now - count * seconds
     before = db.execute("select percent, level, millivolts from readings where mouseId = ? and at < ? and origin in (0, 1, 5) order by at desc, seq desc limit 1", (mouseId, start)).fetchone()
     rows = db.execute("select at, origin, percent, level, millivolts from readings where mouseId = ? and at >= ? and at <= ? order by at, seq", (mouseId, start, now)).fetchall()
     charges = db.execute("select startAt, coalesce(endAt, ?) from sessions where mouseId = ? and kind = 1 and coalesce(endAt, ?) >= ?", (now, mouseId, now, start)).fetchall()
     level = before
     slots = []
     index = 0
-    for slot in range(SLOTS):
-        slotStart = start + slot * SLOT_SECONDS
-        slotEnd = slotStart + SLOT_SECONDS
+    for slot in range(count):
+        slotStart = start + slot * seconds
+        slotEnd = slotStart + seconds
         while (index < len(rows) and rows[index][0] < slotEnd):
             at, origin, percent, levelName, millivolts = rows[index]
             if (origin == ORIGIN_GAP):

@@ -16,6 +16,10 @@ UNKNOWN_METHOD = "org.freedesktop.DBus.Error.UnknownMethod"
 ACCESS_DENIED = "org.freedesktop.DBus.Error.AccessDenied"
 # an account whose reads ran out has one again after this long, which the tray waits before asking again
 READ_ALL_REFILL_SECONDS = 30
+# a person tapping through the six ranges spends a call on each, so GetLevels gets a larger burst that refills faster
+LEVELS_BURST = 10
+LEVELS_REFILL_SECONDS = 5
+INVALID_ARGS = "org.freedesktop.DBus.Error.InvalidArgs"
 STATE_VERSION = 1
 STATE_KEYS = ("version", "busy", "searching", "nodes", "deniedPaths", "mice")
 ENTRY_KEYS = ("key", "pathKey", "name", "source", "percent", "charging", "millivolts", "level", "asleep", "lastRead", "wokeAt")

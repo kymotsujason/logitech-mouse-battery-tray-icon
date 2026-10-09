@@ -172,6 +172,7 @@ check "the upgrade gave the service its state folder" "$(sudo stat -c '%U %a' /v
 rows=$(waitForRows 2)
 check "the service saved the fake mouse's readings" "$( [ "$rows" -ge 2 ] 2>/dev/null && echo saved || echo "$rows rows")" "saved"
 check "GetHistory answers for the fake mouse" "$(busctl --system --timeout=5 call "$service" "$objectPath" "$interface" GetHistory s 02bc524c 2>&1 | grep -c '\\"key\\": \\"02bc524c\\"')" "1"
+check "GetLevels answers a range for the fake mouse" "$(busctl --system --timeout=5 call "$service" "$objectPath" "$interface" GetLevels ss 02bc524c year 2>&1 | grep -c '\\"range\\": \\"year\\"')" "1"
 sudo systemctl restart "$unit"
 after=$(waitForRows "$rows")
 check "the history survived a service restart" "$( [ "$after" -ge "$rows" ] 2>/dev/null && echo kept || echo "$after rows")" "kept"

@@ -289,6 +289,34 @@ class ServiceWatcherTests(unittest.TestCase):
         self.assertTrue(waitUntil(lambda: answers))
         self.assertEqual(answers, [(None, serviceClient.UNDECODABLE)])
 
+    def askLevels(self, text, rangeName="year"):
+        self.privateBus = PrivateBus()
+        if (text is not None):
+            with open(self.stateFile + ".levels", "w") as f:
+                f.write(text)
+        self.startFake()
+        self.startWatcher()
+        answers = []
+        self.watcher.getLevels("02bc524c", rangeName, lambda levels, error: answers.append((levels, error)))
+        self.assertTrue(waitUntil(lambda: answers))
+        return answers
+
+    def testGetLevelsHandsOverTheDecodedSlots(self):
+        answers = self.askLevels('{"version": 1, "key": "02bc524c", "range": "year", "slots": [[1, 20, 90, 2]]}')
+        self.assertEqual(answers, [({"version": 1, "key": "02bc524c", "range": "year", "slots": [[1, 20, 90, 2]]}, None)])
+
+    def testGetLevelsHandsOverTheErrorName(self):
+        self.assertEqual(self.askLevels(None), [(None, serviceState.HISTORY_UNAVAILABLE)])
+
+    def testLevelsForAnotherRangeDontDecode(self):
+        self.assertEqual(self.askLevels('{"version": 1, "key": "02bc524c", "range": "all", "slots": []}'), [(None, serviceClient.UNDECODABLE)])
+
+    def testLevelsForAnotherKeyDontDecode(self):
+        self.assertEqual(self.askLevels('{"version": 1, "key": "ffffffff", "range": "year", "slots": []}'), [(None, serviceClient.UNDECODABLE)])
+
+    def testLevelsWithoutASlotListDontDecode(self):
+        self.assertEqual(self.askLevels('{"version": 1, "key": "02bc524c", "range": "year", "slots": 4}'), [(None, serviceClient.UNDECODABLE)])
+
     def testANewOwnerSaysTheServiceRestarted(self):
         self.privateBus = PrivateBus()
         self.startFake()

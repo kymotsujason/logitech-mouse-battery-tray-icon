@@ -38,6 +38,7 @@ class BatteryService(QDBusAbstractAdaptor):
         self.callerBudgets = OrderedDict()
         # GetHistory has a budget of its own, so an open window never costs anyone a read
         self.historyBudgets = OrderedDict()
+        self.levelBudgets = OrderedDict()
         self.setAutoRelaySignals(True)
         self.broadcastTimer = QTimer(self)
         self.broadcastTimer.setSingleShot(True)
@@ -99,6 +100,25 @@ class BatteryService(QDBusAbstractAdaptor):
             return ""
         return json.dumps(summary, sort_keys=True)
 
+    @pyqtSlot(str, str, QDBusMessage, result=str)
+    def GetLevels(self, key, rangeName, message):
+        caller = self.callerOf(message)
+        if (caller is None):
+            self.refuse(message, CALLER_UNKNOWN, "Couldn't tell which account asked for the levels.")
+            return ""
+        if (rangeName not in history.LEVEL_RANGES):
+            self.refuse(message, serviceState.INVALID_ARGS, "The range is one of " + ", ".join(history.LEVEL_RANGES) + ".")
+            return ""
+        if (not self.takeFrom(self.levelBudgets, caller, serviceState.LEVELS_BURST, serviceState.LEVELS_REFILL_SECONDS)):
+            self.refuse(message, READ_ALL_LIMITED, "Each account gets " + str(serviceState.LEVELS_BURST) + " level reads at once and then one every " + str(serviceState.LEVELS_REFILL_SECONDS) + " seconds.")
+            return ""
+        try:
+            levels = self.receiverList.recorder.levels(key, rangeName)
+        except history.HistoryUnavailable:
+            self.refuse(message, serviceState.HISTORY_UNAVAILABLE, "The history isn't available right now.")
+            return ""
+        return json.dumps(levels, sort_keys=True)
+
     def refuse(self, message, name, text):
         # an empty reply would look like a read that ran, so a caller couldn't tell its readings may be old
         message.setDelayedReply(True)
@@ -112,17 +132,19 @@ class BatteryService(QDBusAbstractAdaptor):
     def takeRead(self, caller):
         return self.takeFrom(self.callerBudgets, caller)
 
-    def takeFrom(self, budgets, caller):
+    def takeFrom(self, budgets, caller, burst=None, refillSeconds=None):
+        burst = READ_ALL_BURST if burst is None else burst
+        refillSeconds = READ_ALL_REFILL_SECONDS if refillSeconds is None else refillSeconds
         now = time.monotonic()
         # a full budget is what an unseen account starts with, so dropping it changes nothing while the map stays as small as the accounts calling lately
         # every update moves its budget to the end, so the front is the oldest and the prune stops at the first one still refilling instead of walking every account
         while (budgets):
             other, (reads, since) = next(iter(budgets.items()))
-            if (reads + (now - since) / READ_ALL_REFILL_SECONDS < READ_ALL_BURST):
+            if (reads + (now - since) / refillSeconds < burst):
                 break
             del budgets[other]
-        reads, since = budgets.pop(caller, (READ_ALL_BURST, now))
-        reads = min(READ_ALL_BURST, reads + (now - since) / READ_ALL_REFILL_SECONDS)
+        reads, since = budgets.pop(caller, (burst, now))
+        reads = min(burst, reads + (now - since) / refillSeconds)
         if (reads < 1):
             budgets[caller] = (reads, now)
             return False

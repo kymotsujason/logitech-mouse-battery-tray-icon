@@ -33,6 +33,13 @@ def historyFrom(reply, key):
     return summary
 
 
+def levelsFrom(reply, key, rangeName):
+    levels = historyFrom(reply, key)
+    if (levels is None or levels.get("range") != rangeName or not isinstance(levels.get("slots"), list)):
+        return None
+    return levels
+
+
 def stateFrom(message):
     arguments = message.arguments()
     if (not arguments or not isinstance(arguments[0], str)):
@@ -133,6 +140,22 @@ class ServiceWatcher(QObject):
                 return
             summary = historyFrom(reply, key)
             onAnswer(summary, None if summary is not None else UNDECODABLE)
+
+        dbusCalls.callLater(self.bus, message, onReply, self, HISTORY_TIMEOUT_MS)
+
+    def getLevels(self, key, rangeName, onAnswer):
+        # onAnswer gets the levels and None, or None and the error name, from the event loop
+        message = QDBusMessage.createMethodCall(serviceState.SERVICE_NAME, serviceState.OBJECT_PATH, serviceState.INTERFACE, "GetLevels")
+        message.setArguments([key, rangeName])
+        message.setAutoStartService(False)
+
+        def onReply(reply):
+            error = dbusCalls.failure(reply)
+            if (error is not None):
+                onAnswer(None, error)
+                return
+            levels = levelsFrom(reply, key, rangeName)
+            onAnswer(levels, None if levels is not None else UNDECODABLE)
 
         dbusCalls.callLater(self.bus, message, onReply, self, HISTORY_TIMEOUT_MS)
 

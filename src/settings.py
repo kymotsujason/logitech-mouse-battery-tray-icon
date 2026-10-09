@@ -4,6 +4,9 @@ from PyQt6.QtCore import QSettings
 
 SLEEP_CHECK_KEY = "sleepCheckSeconds"
 SLEEP_CHECK_CHOICES = (0, 30, 60, 300)
+LEVEL_RANGE_KEY = "levelRange"
+LEVEL_RANGE_CHOICES = ("day", "week", "month", "halfYear", "year", "all")
+LEVEL_RANGE_DEFAULT = "week"
 
 
 def settingsPath(configHome):
@@ -23,5 +26,17 @@ def loadSleepCheck(configHome):
 def saveSleepCheck(configHome, seconds):
     settings = QSettings(settingsPath(configHome), QSettings.Format.IniFormat)
     settings.setValue(SLEEP_CHECK_KEY, seconds)
+    settings.sync()
+    return settings.status() == QSettings.Status.NoError
+
+
+def loadLevelRange(configHome):
+    value = QSettings(settingsPath(configHome), QSettings.Format.IniFormat).value(LEVEL_RANGE_KEY, LEVEL_RANGE_DEFAULT)
+    return value if value in LEVEL_RANGE_CHOICES else LEVEL_RANGE_DEFAULT
+
+
+def saveLevelRange(configHome, rangeName):
+    settings = QSettings(settingsPath(configHome), QSettings.Format.IniFormat)
+    settings.setValue(LEVEL_RANGE_KEY, rangeName)
     settings.sync()
     return settings.status() == QSettings.Status.NoError

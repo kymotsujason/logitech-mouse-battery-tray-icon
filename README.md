@@ -50,7 +50,7 @@ Opening the menu takes a fresh reading from each mouse it reads over HID++, whil
 
 ## Battery health
 
-Click the tray icon, or pick "Battery Health" from its menu, to open the battery window. It shows the mouse, its level, a health line, a chart of the last 7 days, how many hours a charge lasts and how fast it charges month by month, and the number of charge cycles. With two or more mice a sidebar lists them all.
+Click the tray icon, or pick "Battery Health" from its menu, to open the battery window. It shows the mouse, its level, a health line, a level chart over the last 24 hours, 7 days, 30 days, 6 months, or year, or the mouse's whole history, how many hours a charge lasts and how fast it charges month by month, and the number of charge cycles. The chart keeps the range you picked the next time it opens. With two or more mice a sidebar lists them all.
 
 The battery service saves each mouse's charges and discharges in `/var/lib/logitech-mouse-battery/history.sqlite3`, about 20 MB after 10 years of heavy use. It saves a row only when a reading changes, and never asks the mouse for more readings than before. The health line compares how fast the battery drains and charges now with how it did when tracking began, stretch by stretch of the battery, and says when a charge lasts 15% less or charging takes 15% longer than it used to. That needs about 42 discharges first, so the window says "Still learning" for the first months. A mouse that doesn't give a serial number gets no history, and one that reports only a rough level or a voltage gets no drain or charge figures.
 

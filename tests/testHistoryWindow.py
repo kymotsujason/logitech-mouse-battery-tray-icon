@@ -38,6 +38,10 @@ def reply(key):
     return summary
 
 
+def levelsReply(key, rangeName):
+    return {"version": 1, "key": key, "range": rangeName, "slots": [[NOW - (25 - index) * 7 * 24 * 60 * 60, 30, 90, 1] for index in range(26)]}
+
+
 class FakeWatcher(QObject):
     serviceRestarted = pyqtSignal()
 
@@ -47,6 +51,16 @@ class FakeWatcher(QObject):
         self.answers = {}
         self.hold = False
         self.waiting = []
+        self.levelAsks = []
+        self.levelAnswers = {}
+        self.holdLevels = False
+
+    def getLevels(self, key, rangeName, onAnswer):
+        self.levelAsks.append((key, rangeName))
+        if (self.holdLevels):
+            return
+        levels, error = self.levelAnswers.get((key, rangeName), (levelsReply(key, rangeName), None))
+        onAnswer(levels, error)
 
     def getHistory(self, key, onAnswer):
         self.asked.append(key)
@@ -237,6 +251,78 @@ class WindowTests(WindowCase):
         window.showChart(2)
         window.pick("02bc524c")
         self.assertEqual((window.chartFade.isEnabled(), window.paneFade.isEnabled()), (False, False))
+
+    def testTheRangeControlShowsOnlyWithTheLevelChart(self):
+        window = self.opened(entry())
+        self.assertTrue(window.rangeControl.isVisibleTo(window))
+        window.segments.choose(1, animate=False)
+        self.assertFalse(window.rangeControl.isVisibleTo(window))
+        window.segments.choose(0, animate=False)
+        self.assertTrue(window.rangeControl.isVisibleTo(window))
+
+    def testTheRangeControlSitsInTheChartBoxsTopRightCorner(self):
+        window = self.opened(entry())
+        control = window.rangeControl.geometry()
+        chart = window.chartRect
+        self.assertTrue(chart.contains(QRectF(control)))
+        self.assertLess(chart.right() - control.right(), 24)
+        self.assertLess(control.top() - chart.top(), 12)
+
+    def testTheWeekIsDrawnFromTheHistoryWithoutACall(self):
+        window = self.opened(entry())
+        self.assertEqual(self.watcher.levelAsks, [])
+        self.assertEqual(window.levelChart.slots, reply("02bc524c")["recent"])
+
+    def testPickingARangeAsksForItOnceAndSavesTheChoice(self):
+        window = self.opened(entry())
+        saved = []
+        window.levelRangeChanged.connect(saved.append)
+        window.pickRange("year")
+        self.assertEqual((self.watcher.levelAsks, saved, window.levelChart.title), ([("02bc524c", "year")], ["year"], "Battery Level, Last Year"))
+        self.assertEqual(window.levelChart.slots, levelsReply("02bc524c", "year")["slots"])
+        window.pickRange("week")
+        window.pickRange("year")
+        self.assertEqual(len(self.watcher.levelAsks), 1)
+        self.assertEqual(window.rangeControl.index, historyWindow.RANGE_NAMES.index("year"))
+
+    def testANewHistoryAsksForTheRangeAgain(self):
+        window = self.opened(entry())
+        window.pickRange("month")
+        window.lastFetch.clear()
+        self.state(entry(revision=2))
+        self.assertEqual(self.watcher.levelAsks, [("02bc524c", "month")] * 2)
+
+    def testALoadingRangeSaysSo(self):
+        window = self.opened(entry())
+        self.watcher.holdLevels = True
+        window.pickRange("all")
+        self.assertEqual((window.levelChart.title, window.levelChart.emptyText()), ("Battery Level, All Time", historyWindow.LOADING_TEXT))
+
+    def testAnOldServiceSaysToRestartForTheRange(self):
+        self.watcher.levelAnswers[("02bc524c", "year")] = (None, serviceState.UNKNOWN_METHOD)
+        window = self.opened(entry())
+        window.pickRange("year")
+        self.assertEqual(window.levelChart.emptyText(), historyWindow.RANGE_RESTART_TEXT)
+
+    def testARefusedRangeIsAskedAgainSoon(self):
+        self.watcher.levelAnswers[("02bc524c", "year")] = (None, serviceState.READ_ALL_LIMITED)
+        window = self.opened(entry())
+        window.pickRange("year")
+        self.assertTrue(window.levelRetryTimer.isActive())
+        self.assertEqual(window.levelChart.emptyText(), historyWindow.LOADING_TEXT)
+        del self.watcher.levelAnswers[("02bc524c", "year")]
+        window.levelRetryTimer.timeout.emit()
+        self.assertEqual(window.levelChart.slots, levelsReply("02bc524c", "year")["slots"])
+
+    def testTheWindowOpensOnTheSavedRange(self):
+        window = historyWindow.HistoryWindow(self.mouseList, self.watcher, self.upower, self.folder, None, tray.mouseLine, tray.iconStateFor, levelRange="halfYear")
+        try:
+            self.state(entry())
+            window.open()
+            self.assertEqual((window.rangeControl.index, self.watcher.levelAsks), (historyWindow.RANGE_NAMES.index("halfYear"), [("02bc524c", "halfYear")]))
+        finally:
+            window.close()
+            sip.delete(window)
 
     def testTheSettingButtonSendsTheChoiceAndShowsItShort(self):
         window = self.opened(entry())

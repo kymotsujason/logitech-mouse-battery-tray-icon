@@ -79,6 +79,96 @@ class LevelChartTests(ChartCase):
         self.assertEqual(chart.scale()[:2], (3800, 3883))
 
 
+    def spans(self, count, seconds, low=20, high=90, charges=0):
+        return [[NOW - (count - 1 - index) * seconds, low, high, charges] for index in range(count)]
+
+    def testEachRangeTitlesItsChartAndSaysWhenItsEmpty(self):
+        chart = self.make(charts.LevelChart())
+        for rangeName, title, empty in (("day", "Battery Level, Last 24 Hours", "No readings in the last 24 hours"), ("halfYear", "Battery Level, Last 6 Months", "No readings in the last 6 months"), ("all", "Battery Level, All Time", "No readings yet")):
+            chart.setSlots([], rangeName=rangeName)
+            self.assertEqual((chart.title, chart.emptyText()), (title, empty), rangeName)
+            rendered(chart)
+
+    def testASpanBarRunsFromItsLowestToItsHighest(self):
+        chart = self.make(charts.LevelChart())
+        chart.setSlots(self.spans(60, 12 * 60 * 60), rangeName="month")
+        rendered(chart)
+        area = chart.area()
+        bar = chart.barRect(10)
+        self.assertAlmostEqual(bar.top(), area.bottom() - area.height() * 0.9, delta=0.5)
+        self.assertAlmostEqual(bar.bottom(), area.bottom() - area.height() * 0.2, delta=0.5)
+
+    def testAFlatSpanStillShows(self):
+        chart = self.make(charts.LevelChart())
+        chart.setSlots(self.spans(60, 12 * 60 * 60, 50, 50), rangeName="month")
+        rendered(chart)
+        self.assertGreaterEqual(chart.barRect(0).height(), 3)
+
+    def testAFewMonthsKeepTheirBarsNarrow(self):
+        chart = self.make(charts.LevelChart())
+        chart.setSlots(self.spans(2, 30 * 24 * 60 * 60), rangeName="all")
+        rendered(chart)
+        self.assertLessEqual(chart.barRect(0).width(), charts.MAX_BAR_WIDTH)
+
+    def testTheDaysLabelsFallOnSixHourMarks(self):
+        chart = self.make(charts.LevelChart())
+        chart.setSlots([[NOW - (47 - index) * 1800, 60, None, None, False] for index in range(48)], rangeName="day")
+        rendered(chart)
+        texts = [text for index, text in chart.axisLabels()]
+        self.assertTrue(texts)
+        self.assertTrue(all(text in ("00:00", "06:00", "12:00", "18:00") for text in texts), texts)
+
+    def testLongRangesLabelMonths(self):
+        chart = self.make(charts.LevelChart())
+        chart.setSlots(self.spans(52, 7 * 24 * 60 * 60), rangeName="year")
+        rendered(chart)
+        names = [time.strftime("%b", time.strptime(str(month), "%m")) for month in range(1, 13)]
+        labels = chart.axisLabels()
+        self.assertTrue(all(text in names or text.isdigit() for index, text in labels), labels)
+        self.assertGreaterEqual(len(labels), 6)
+
+    def monthSlots(self, count):
+        ends = []
+        year, month = 2025, 9
+        for index in range(count):
+            year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+            ends.append(time.mktime((year, month, 1, 0, 0, 0, 0, 0, -1)))
+        return [[end, 20, 90, 1] for end in ends]
+
+    def testAllNamesEveryMonthUnderItsOwnBar(self):
+        chart = self.make(charts.LevelChart())
+        chart.setSlots(self.monthSlots(14), rangeName="all")
+        rendered(chart)
+        labels = chart.axisLabels()
+        self.assertEqual([index for index, text in labels], list(range(14)))
+        # the month after December is named by its year, so two Octobers can be told apart
+        self.assertEqual([text for index, text in labels][:5], ["Sep", "Oct", "Nov", "Dec", "2026"])
+        self.assertAlmostEqual(chart.labelCenter(3), chart.barRect(3).center().x(), delta=0.5)
+
+    def testTheLongerRangesNameJanuaryByItsYear(self):
+        chart = self.make(charts.LevelChart())
+        chart.setSlots([[time.mktime((2026, 3, 1, 0, 0, 0, 0, 0, -1)) - (51 - index) * 7 * 24 * 60 * 60, 20, 90, 0] for index in range(52)], rangeName="year")
+        rendered(chart)
+        self.assertIn("2026", [text for index, text in chart.axisLabels()])
+
+    def testHoveringASpanSaysItsLevelsAndCharges(self):
+        chart = self.make(charts.LevelChart())
+        chart.setSlots(self.spans(26, 7 * 24 * 60 * 60, charges=2), rangeName="halfYear")
+        text = chart.hoverText(3)
+        self.assertIn("20% to 90%", text)
+        self.assertIn("charged 2 times", text)
+        chart.setSlots(self.spans(26, 7 * 24 * 60 * 60, 3700, 3900, 1), voltage=True, rangeName="halfYear")
+        self.assertIn("3700 mV to 3900 mV, charged", chart.hoverText(0))
+
+    def testARoughLevelSpanIsNamed(self):
+        chart = self.make(charts.LevelChart())
+        chart.setSlots(self.spans(26, 7 * 24 * 60 * 60, charts.LEVEL_HEIGHTS["low"], charts.LEVEL_HEIGHTS["good"]), rangeName="halfYear", rough=True)
+        self.assertIn("low to good", chart.hoverText(0))
+
+    def testTheMonthlyChartsSayTheyCoverAllTime(self):
+        chart = self.make(charts.LineChart("Hours per Charge", "h", charts.HOURS_EMPTY, charts.HOURS_CAPTION))
+        self.assertEqual(chart.title, "Hours per Charge, All Time")
+
 class LineChartTests(ChartCase):
     def testAnEmptySeriesSaysSo(self):
         chart = self.make(charts.LineChart("Hours per Charge", "h", charts.HOURS_EMPTY, charts.HOURS_CAPTION))

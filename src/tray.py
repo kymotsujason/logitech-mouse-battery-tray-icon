@@ -225,14 +225,19 @@ class MouseBatteryApp(QObject):
     def showHistory(self):
         # one window, raised again by a second click instead of opening another
         if (self.historyWindow is None):
-            self.historyWindow = historyWindow.HistoryWindow(self.mouseList, self.serviceWatcher, self.upower, self.configHome, self.sessionBus, mouseLine, iconStateFor, self.mouseList.sleepCheckSeconds)
+            self.historyWindow = historyWindow.HistoryWindow(self.mouseList, self.serviceWatcher, self.upower, self.configHome, self.sessionBus, mouseLine, iconStateFor, self.mouseList.sleepCheckSeconds, settings.loadLevelRange(self.configHome))
             self.historyWindow.sleepCheckChanged.connect(self.onSleepCheckChanged)
+            self.historyWindow.levelRangeChanged.connect(self.onLevelRangeChanged)
         self.historyWindow.open()
 
     def onSleepCheckChanged(self, seconds):
         if (not settings.saveSleepCheck(self.configHome, seconds)):
             printLine("Couldn't save the sleep check setting to " + settings.settingsPath(self.configHome))
         self.mouseList.setSleepCheck(seconds)
+
+    def onLevelRangeChanged(self, rangeName):
+        if (not settings.saveLevelRange(self.configHome, rangeName)):
+            printLine("Couldn't save the chart's range to " + settings.settingsPath(self.configHome))
 
     def onLoginToggled(self, checked):
         enabled, error = self.setOpenAtLogin(checked)

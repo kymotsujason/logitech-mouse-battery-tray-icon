@@ -58,6 +58,14 @@ NO_SERVICE_TEXT = "Can't reach the battery service."
 NO_SERIAL_TEXT = "This mouse doesn't give a serial number, so its history can't be kept."
 UNAVAILABLE_TEXT = "Its history isn't available right now."
 RESTART_TEXT = "Restart Mouse Battery to see its history."
+RANGE_RESTART_TEXT = "Restart Mouse Battery to see this range."
+RANGE_ERROR_TEXT = "Couldn't load this range."
+RANGE_NAMES = ("day", "week", "month", "halfYear", "year", "all")
+RANGE_LABELS = ("D", "W", "M", "6M", "Y", "All")
+RANGE_WIDTHS = (30, 30, 30, 34, 30, 36)
+RANGE_HEIGHT = 22
+# a refused range waits out the refill of its budget before it's asked for again
+LEVEL_RETRY_MS = serviceState.LEVELS_REFILL_SECONDS * 1000
 NOT_REFRESHED_TEXT = "Couldn't refresh the history."
 
 
@@ -202,18 +210,24 @@ class MouseIcon(QWidget):
 class SegmentedControl(QWidget):
     chosen = pyqtSignal(int)
 
-    def __init__(self, window):
+    def __init__(self, window, names=SEGMENTS, widths=SEGMENT_WIDTHS, height=SEGMENT_HEIGHT, fontSize=12, track=False, index=0):
         super().__init__(window)
         self.owner = window
-        self.index = 0
-        self.thumbX = 4.0
+        self.names = names
+        self.widths = widths
+        self.fontSize = fontSize
+        # a control inside a panel draws its own track, while the main one sits on a panel the window paints
+        self.track = track
+        self.inset = 4.0 if height >= 28 else 2.0
+        self.index = index
+        self.thumbX = self.segmentX(index)
         self.animation = QVariantAnimation(self)
         self.animation.setEasingCurve(QEasingCurve.Type.OutCubic)
         self.animation.valueChanged.connect(self.onSlide)
-        self.setFixedSize(sum(SEGMENT_WIDTHS) + 8, SEGMENT_HEIGHT)
+        self.setFixedSize(int(sum(widths) + 2 * self.inset), height)
 
     def segmentX(self, index):
-        return 4.0 + sum(SEGMENT_WIDTHS[:index])
+        return self.inset + sum(self.widths[:index])
 
     def choose(self, index, animate=True):
         if (index == self.index):
@@ -237,7 +251,7 @@ class SegmentedControl(QWidget):
 
     def mousePressEvent(self, event):
         x = event.position().x()
-        for index in range(len(SEGMENTS)):
+        for index in range(len(self.names)):
             if (self.segmentX(index) <= x < self.segmentX(index + 1)):
                 self.choose(index)
                 return
@@ -247,13 +261,17 @@ class SegmentedControl(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         theme = self.owner.theme
         frost = self.owner.frost()
+        if (self.track):
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(glass.rgba(theme.grid))
+            painter.drawRoundedRect(QRectF(self.rect()), self.height() / 2, self.height() / 2)
         if (frost is not None):
-            thumb = QRectF(self.thumbX, 4, SEGMENT_WIDTHS[self.index], SEGMENT_HEIGHT - 8)
+            thumb = QRectF(self.thumbX, self.inset, self.widths[self.index], self.height() - 2 * self.inset)
             glass.paintPanel(painter, thumb, thumb.height() / 2, frost, theme, strong=True, offset=QPointF(self.mapTo(self.owner, self.rect().topLeft())))
-        for index, name in enumerate(SEGMENTS):
-            painter.setFont(font(12, QFont.Weight.DemiBold if index == self.index else QFont.Weight.Normal))
+        for index, name in enumerate(self.names):
+            painter.setFont(font(self.fontSize, QFont.Weight.DemiBold if index == self.index else QFont.Weight.Normal))
             painter.setPen(QColor(theme.text))
-            painter.drawText(QRectF(self.segmentX(index), 0, SEGMENT_WIDTHS[index], SEGMENT_HEIGHT), int(Qt.AlignmentFlag.AlignCenter), name)
+            painter.drawText(QRectF(self.segmentX(index), 0, self.widths[index], self.height()), int(Qt.AlignmentFlag.AlignCenter), name)
 
 
 class ChoiceMenu(QWidget):
@@ -454,8 +472,9 @@ class Sidebar(QWidget):
 
 class HistoryWindow(QWidget):
     sleepCheckChanged = pyqtSignal(int)
+    levelRangeChanged = pyqtSignal(str)
 
-    def __init__(self, mouseList, serviceWatcher, upowerWatcher, configHome, sessionBus, lineFor, iconStateFor, sleepCheckSeconds=0):
+    def __init__(self, mouseList, serviceWatcher, upowerWatcher, configHome, sessionBus, lineFor, iconStateFor, sleepCheckSeconds=0, levelRange="week"):
         super().__init__()
         self.mouseList = mouseList
         self.serviceWatcher = serviceWatcher
@@ -479,6 +498,11 @@ class HistoryWindow(QWidget):
         self.notRefreshed = set()
         self.pending = set()
         self.lastFetch = {}
+        self.levelRange = levelRange if levelRange in RANGE_NAMES else "week"
+        # each mouse's slots per range, dropped with its history reply, since a new reply means new readings
+        self.levels = {}
+        self.levelErrors = {}
+        self.pendingLevels = set()
         self.selected = None
         self.wanted = None
         self.health = None
@@ -486,6 +510,7 @@ class HistoryWindow(QWidget):
         self.makeParts(sleepCheckSeconds)
         self.fetchTimer = mice.singleShotTimer(self, 1000, self.fetchSelected)
         self.retryTimer = mice.singleShotTimer(self, RETRY_MS, self.fetchSelected)
+        self.levelRetryTimer = mice.singleShotTimer(self, LEVEL_RETRY_MS, self.retryLevels)
         self.blurTimer = mice.singleShotTimer(self, BLUR_CHECK_MS, self.checkBlur)
         self.ageTimer = mice.singleShotTimer(self, 1000, self.fetchSelected)
         self.glowAnimation = QVariantAnimation(self)
@@ -530,6 +555,10 @@ class HistoryWindow(QWidget):
         self.hoursChart = charts.LineChart("Hours per Charge", "h", charts.HOURS_EMPTY, charts.HOURS_CAPTION, self.pane)
         self.chargingChart = charts.LineChart("Charging Speed", "min per 10%", charts.CHARGING_EMPTY, None, self.pane)
         self.charts = [self.levelChart, self.hoursChart, self.chargingChart]
+        # made after the charts, so it sits above the level chart's corner
+        self.rangeControl = SegmentedControl(self, RANGE_LABELS, RANGE_WIDTHS, RANGE_HEIGHT, 11, track=True, index=RANGE_NAMES.index(self.levelRange))
+        self.rangeControl.setParent(self.pane)
+        self.rangeControl.chosen.connect(lambda index: self.pickRange(RANGE_NAMES[index]))
         self.chartFade = QGraphicsOpacityEffect(self.levelChart)
         self.chartAnimation = QVariantAnimation(self)
         self.chartAnimation.setEasingCurve(QEasingCurve.Type.OutCubic)
@@ -627,6 +656,7 @@ class HistoryWindow(QWidget):
         self.replies.clear()
         self.errors.clear()
         self.notRefreshed.clear()
+        self.forgetLevels()
         self.refresh()
 
     def onUPowerMouse(self, upowerMouse):
@@ -653,7 +683,51 @@ class HistoryWindow(QWidget):
             self.paneFade.setEnabled(False)
         self.refresh()
 
+    def pickRange(self, rangeName):
+        if (rangeName == self.levelRange):
+            return
+        self.levelRange = rangeName
+        self.rangeControl.choose(RANGE_NAMES.index(rangeName))
+        self.levelRangeChanged.emit(rangeName)
+        self.refresh()
+
+    def fetchLevels(self, key, rangeName):
+        if ((key, rangeName) in self.pendingLevels or not self.isVisible()):
+            return
+        self.pendingLevels.add((key, rangeName))
+        self.serviceWatcher.getLevels(key, rangeName, lambda levels, error: self.onLevels(key, rangeName, levels, error))
+
+    def onLevels(self, key, rangeName, levels, error):
+        self.pendingLevels.discard((key, rangeName))
+        # an answer that lands after the window closed would leave slots no new reply ever replaces
+        if (not self.isVisible()):
+            return
+        if (levels is not None):
+            self.levels.setdefault(key, {})[rangeName] = levels["slots"]
+            self.levelErrors.pop((key, rangeName), None)
+        else:
+            self.levelErrors[(key, rangeName)] = error
+            if (error not in (serviceState.UNKNOWN_METHOD, serviceState.ACCESS_DENIED)):
+                self.levelRetryTimer.start(LEVEL_RETRY_MS if error == serviceState.READ_ALL_LIMITED else RETRY_MS)
+        self.refresh()
+
+    def retryLevels(self):
+        for item, error in list(self.levelErrors.items()):
+            if (error not in (serviceState.UNKNOWN_METHOD, serviceState.ACCESS_DENIED)):
+                del self.levelErrors[item]
+        self.refresh()
+
+    def forgetLevels(self, key=None):
+        if (key is None):
+            self.levels.clear()
+            self.levelErrors.clear()
+            return
+        self.levels.pop(key, None)
+        for item in [item for item in self.levelErrors if item[0] == key]:
+            del self.levelErrors[item]
+
     def showChart(self, index):
+        self.rangeControl.setVisible(index == 0)
         chart = self.charts[index]
         for other in self.charts:
             if (other is not chart):
@@ -677,8 +751,10 @@ class HistoryWindow(QWidget):
         self.replies.clear()
         self.errors.clear()
         self.notRefreshed.clear()
+        self.forgetLevels()
+        self.pendingLevels.clear()
         self.choiceMenu.hide()
-        for timer in (self.fetchTimer, self.retryTimer, self.ageTimer, self.blurTimer):
+        for timer in (self.fetchTimer, self.retryTimer, self.ageTimer, self.blurTimer, self.levelRetryTimer):
             timer.stop()
         event.accept()
 
@@ -754,6 +830,7 @@ class HistoryWindow(QWidget):
         self.pending.discard(key)
         if (summary is not None):
             self.replies[key] = Reply(summary, revision)
+            self.forgetLevels(key)
             self.errors.pop(key, None)
             self.notRefreshed.discard(key)
         elif (key in self.replies):
@@ -843,7 +920,7 @@ class HistoryWindow(QWidget):
         else:
             self.showParts(summary=True, history=True, paneMessage=False)
             self.fillHealth(theme)
-            self.fillCharts(reply.summary, mouse.reading)
+            self.fillCharts(reply.summary, mouse.reading, mouse.key)
             self.fillForm(self.health)
             self.refreshLabel.setText(NOT_REFRESHED_TEXT if mouse.key in self.notRefreshed else "")
         warning = self.health is not None and self.health.symbol == health.SYMBOL_WARNING
@@ -856,6 +933,7 @@ class HistoryWindow(QWidget):
             widget.setVisible(history)
         for index, chart in enumerate(self.charts):
             chart.setVisible(history and index == self.segments.index)
+        self.rangeControl.setVisible(history and self.segments.index == 0)
         self.message.setVisible(summary and not history)
         for widget in self.formLabels + self.formValues + [self.popup]:
             widget.setVisible(summary)
@@ -874,11 +952,32 @@ class HistoryWindow(QWidget):
             widget.setVisible(index < len(lines))
         self.symbol.setSymbol(self.health.symbol, theme)
 
-    def fillCharts(self, summary, reading):
+    def fillCharts(self, summary, reading, key):
         voltage = reading is not None and reading.percent is None and reading.level is None and reading.millivolts is not None
-        self.levelChart.setSlots(summary.get("recent") or [], voltage)
+        rough = reading is not None and reading.percent is None and reading.level is not None
+        self.fillLevels(summary, key, voltage, rough)
         self.hoursChart.setSeries({"hours": self.health.hoursPerCharge})
         self.chargingChart.setSeries(self.health.chargingByPower)
+
+    def fillLevels(self, summary, key, voltage, rough):
+        rangeName = self.levelRange
+        if (rangeName == "week"):
+            # the history reply already holds the week, so the default range costs no call
+            self.levelChart.setSlots(summary.get("recent") or [], voltage, rangeName, rough=rough)
+            return
+        slots = self.levels.get(key, {}).get(rangeName)
+        error = self.levelErrors.get((key, rangeName))
+        if (slots is not None):
+            self.levelChart.setSlots(slots, voltage, rangeName, rough=rough)
+        elif (error in (serviceState.UNKNOWN_METHOD, serviceState.ACCESS_DENIED)):
+            self.levelChart.setSlots([], voltage, rangeName, message=RANGE_RESTART_TEXT)
+        elif (error is not None and error != serviceState.READ_ALL_LIMITED):
+            self.levelChart.setSlots([], voltage, rangeName, message=RANGE_ERROR_TEXT)
+        else:
+            # set before the call, since a reply can come back inside it and fill the chart
+            self.levelChart.setSlots([], voltage, rangeName, message=LOADING_TEXT)
+            if (error is None):
+                self.fetchLevels(key, rangeName)
 
     def fillForm(self, result):
         values = ("-", "-", "-") if result is None else (str(result.cycles), result.lastCharged or "-", result.chargingSpeed or "-")
@@ -912,7 +1011,7 @@ class HistoryWindow(QWidget):
         self.frostClock.start()
         self.backdrop = None
         self.update()
-        for child in (self.segments, self.popup, self.sidebar, self.choiceMenu):
+        for child in (self.segments, self.rangeControl, self.popup, self.sidebar, self.choiceMenu):
             child.update()
 
     def paneRect(self):
@@ -972,6 +1071,7 @@ class HistoryWindow(QWidget):
         self.chartRect = QRectF(MARGIN, chartY, width - 2 * MARGIN, chartHeight)
         for chart in self.charts:
             chart.setGeometry(self.chartRect.toRect())
+        self.rangeControl.move(int(self.chartRect.right() - 12 - self.rangeControl.width()), int(self.chartRect.y() + 6))
         self.message.setGeometry(MARGIN, MARGIN + TOP_ROW + 20, width - 2 * MARGIN, chartY + chartHeight - MARGIN - TOP_ROW - 20)
         formY = chartY + chartHeight + 16
         self.formRect = QRectF(MARGIN, formY, width - 2 * MARGIN, FORM_HEIGHT)

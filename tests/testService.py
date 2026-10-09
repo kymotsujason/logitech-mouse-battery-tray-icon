@@ -514,6 +514,28 @@ class HistoryServiceTests(unittest.TestCase):
         self.assertTrue(all(isinstance(answer, dict) for answer in answers[:-1]))
         self.assertEqual(self.caller.call("ReadAll"), [])
 
+    def levels(self, key="02bc524c", rangeName="year"):
+        answer = self.caller.call("GetLevels", arguments=[key, rangeName])
+        return json.loads(answer[0]) if isinstance(answer, list) else answer
+
+    def testGetLevelsAnswersTheRangesSlots(self):
+        levels = self.levels("ffffffff", "halfYear")
+        self.assertEqual((levels["key"], levels["range"], levels["slots"]), ("ffffffff", "halfYear", []))
+
+    def testAnUnknownRangeAnswersInvalidArgs(self):
+        self.assertEqual(self.levels(rangeName="decade"), "org.freedesktop.DBus.Error.InvalidArgs")
+
+    def testWithoutAFolderGetLevelsAnswersHistoryUnavailable(self):
+        self.receiverList.recorder = history.Recorder(None)
+        self.assertEqual(self.levels(), serviceState.HISTORY_UNAVAILABLE)
+
+    def testGetLevelsHasABudgetOfItsOwn(self):
+        # a person tapping through the six ranges spends six calls, so the burst is larger than the history's
+        answers = [self.levels("ffffffff") for i in range(serviceState.LEVELS_BURST + 1)]
+        self.assertEqual(answers[-1], serviceState.READ_ALL_LIMITED)
+        self.assertTrue(all(isinstance(answer, dict) for answer in answers[:-1]))
+        self.assertIsInstance(self.history("ffffffff"), dict)
+
     def testReadSilentReadsOnlyMiceThatDontReportOnTheirOwn(self):
         device = self.startWithMouse()
         before = batteryReads(device)

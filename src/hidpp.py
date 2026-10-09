@@ -522,6 +522,10 @@ def chargingName(code):
     return "status " + str(code)
 
 
+# a rough level has no percent, so charts draw it at a fixed height
+LEVEL_HEIGHTS = {"full": 100, "high": 85, "good": 70, "normal": 55, "low": 25, "critical": 10}
+
+
 def levelText(reading):
     if (reading.percent is not None):
         return str(reading.percent) + "%"
