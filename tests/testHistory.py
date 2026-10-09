@@ -32,6 +32,12 @@ def battery(percent, charging=0, power=0, level=None, millivolts=None):
     return hidpp.BatteryReading(percent, charging, millivolts, level, power)
 
 
+def corruption():
+    error = sqlite3.DatabaseError("database disk image is malformed")
+    error.sqlite_errorcode = sqlite3.SQLITE_CORRUPT
+    return error
+
+
 class RecorderCase(unittest.TestCase):
     def setUp(self):
         self.folder = tempfile.mkdtemp()
@@ -73,6 +79,31 @@ class RecorderCase(unittest.TestCase):
                 raise error
             return real()
         return mock.patch.object(self.recorder.store, "transaction", failingOnce)
+
+    def failQuery(self, error, match=""):
+        # only the first statement that matches fails, so a store that didn't stop would take the next write
+        self.assertTrue(self.recorder.available())
+        real = self.recorder.store.db
+        failed = []
+
+        class FailingDb:
+            def execute(self, sql, *args):
+                if (match in sql and not failed):
+                    failed.append(sql)
+                    raise error
+                return real.execute(sql, *args)
+
+            def close(self):
+                real.close()
+        self.recorder.store.db = FailingDb()
+        return real
+
+    def assertStoppedForCorruption(self, seconds):
+        self.assertFalse(self.recorder.available())
+        self.assertTrue(os.path.exists(os.path.join(self.folder, history.INTEGRITY_FLAG)))
+        saved = self.rows()
+        self.event(seconds, 40)
+        self.assertEqual(self.rows(), saved)
 
     def rows(self):
         with self.db() as db:
@@ -177,6 +208,41 @@ class StoreTests(RecorderCase):
             self.assertTrue(again.available())
         self.assertFalse(os.path.exists(os.path.join(self.folder, history.INTEGRITY_FLAG)))
         again.stop()
+
+    def testCorruptionFoundByASummaryStopsTheHistory(self):
+        self.event(0, 50)
+        self.failQuery(corruption(), "from steps")
+        with self.assertRaises(history.HistoryUnavailable):
+            self.recorder.summary(KEY)
+        self.assertStoppedForCorruption(1800)
+        with self.assertRaises(history.HistoryUnavailable):
+            self.recorder.summary(KEY)
+
+    def testCorruptionFoundByALevelsReadStopsTheHistory(self):
+        self.event(0, 50)
+        self.failQuery(corruption(), "from readings")
+        with self.assertRaises(history.HistoryUnavailable):
+            self.recorder.levels(KEY, "week")
+        self.assertStoppedForCorruption(1800)
+        with self.assertRaises(history.HistoryUnavailable):
+            self.recorder.levels(KEY, "week")
+
+    def testCorruptionFoundByAWriteDropsTheRowAndStopsTheHistory(self):
+        self.event(0, 50)
+        self.failQuery(corruption(), "insert into readings")
+        self.event(1800, 49)
+        self.assertEqual([row[:3] for row in self.rows()], [(0, 0, 50)])
+        self.assertFalse(self.recorder.entries[KEY].loaded)
+        self.assertStoppedForCorruption(3600)
+
+    def testCorruptionFoundLoadingAMouseStopsTheHistory(self):
+        self.event(0, 50)
+        self.recorder.stop()
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False)
+        self.failQuery(corruption(), "from mice")
+        self.event(1800, 49)
+        self.assertEqual([row[:3] for row in self.rows()], [(0, 0, 50)])
+        self.assertStoppedForCorruption(3600)
 
     def testAnErrorWithoutACodeIsntCorruption(self):
         db = sqlite3.connect(":memory:")
@@ -716,21 +782,8 @@ class RecorderTests(RecorderCase):
         self.assertEqual([(s[0], s[1], s[2]) for s in self.sessions()], [(1, 0, 600), (0, 1200, None)])
         self.assertEqual([row[1] for row in self.rows()][-2:], [4, 0])
 
-    def failLookups(self, error):
-        self.assertTrue(self.recorder.available())
-        real = self.recorder.store.db
-
-        class FailingDb:
-            def execute(self, *args):
-                raise error
-
-            def close(self):
-                real.close()
-        self.recorder.store.db = FailingDb()
-        return real
-
     def testAFailedHidppLookupForAUPowerReadingDropsItAndAsksAgain(self):
-        real = self.failLookups(sqlite3.OperationalError("disk I/O error"))
+        real = self.failQuery(sqlite3.OperationalError("disk I/O error"))
         self.recorder.addReading("9a1b2c3d", battery(70), history.ORIGIN_UPOWER, source=history.SOURCE_UPOWER, at=START)
         entry = self.recorder.entries["9a1b2c3d"]
         self.assertEqual((entry.source, entry.pending), (None, []))
@@ -740,9 +793,7 @@ class RecorderTests(RecorderCase):
         self.assertEqual((entry.source, len(entry.pending)), (history.SOURCE_UPOWER, 1))
 
     def testACorruptHidppLookupForAUPowerReadingMarksTheHistoryCorrupt(self):
-        error = sqlite3.DatabaseError("database disk image is malformed")
-        error.sqlite_errorcode = sqlite3.SQLITE_CORRUPT
-        self.failLookups(error)
+        self.failQuery(corruption())
         self.recorder.addReading("9a1b2c3d", battery(70), history.ORIGIN_UPOWER, source=history.SOURCE_UPOWER, at=START)
         self.assertTrue(self.recorder.store.brokenThisRun)
         self.assertFalse(self.recorder.available())

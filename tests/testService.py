@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import signal
+import sqlite3
 import sys
 import tempfile
 import time
@@ -507,6 +508,24 @@ class HistoryServiceTests(unittest.TestCase):
     def testWithoutAFolderGetHistoryAnswersHistoryUnavailable(self):
         self.receiverList.recorder = history.Recorder(None)
         self.assertEqual(self.history(), serviceState.HISTORY_UNAVAILABLE)
+
+    def failQueries(self):
+        self.assertTrue(self.recorder.available())
+        error = sqlite3.DatabaseError("database disk image is malformed")
+        error.sqlite_errorcode = sqlite3.SQLITE_CORRUPT
+        self.recorder.store.db = mock.Mock(execute=mock.Mock(side_effect=error), close=self.recorder.store.db.close)
+
+    def testACorruptQueryAnswersHistoryUnavailable(self):
+        self.failQueries()
+        self.assertEqual(self.history(), serviceState.HISTORY_UNAVAILABLE)
+        self.assertTrue(os.path.exists(os.path.join(self.folder, history.INTEGRITY_FLAG)))
+        self.assertEqual(self.history(), serviceState.HISTORY_UNAVAILABLE)
+
+    def testACorruptQueryAnswersLevelsUnavailable(self):
+        self.failQueries()
+        self.assertEqual(self.levels(), serviceState.HISTORY_UNAVAILABLE)
+        self.assertTrue(os.path.exists(os.path.join(self.folder, history.INTEGRITY_FLAG)))
+        self.assertEqual(self.levels(), serviceState.HISTORY_UNAVAILABLE)
 
     def testGetHistoryHasABudgetOfItsOwn(self):
         answers = [self.history("ffffffff") for i in range(service.READ_ALL_BURST + 1)]
