@@ -928,6 +928,18 @@ class SummaryTests(RecorderCase):
             self.addStep(session, history.DISCHARGE, j + 1, minutes, 95 - j, 94 - j)
         self.assertEqual(self.recorder.summary(KEY)["open"], {"kind": history.DISCHARGE, "startAt": START, "startPercent": 80, "median": 30.0, "count": 3})
 
+    def testNoQueryForASummaryOrALevelsReadScansATable(self):
+        self.addSession(history.DISCHARGE, 0)
+        statements = []
+        self.database.set_trace_callback(statements.append)
+        self.recorder.summary(KEY)
+        for name in history.LEVEL_RANGES:
+            self.recorder.levels(KEY, name)
+        self.database.set_trace_callback(None)
+        self.assertTrue(any("from steps" in sql for sql in statements))
+        scans = [sql for sql in dict.fromkeys(statements) if any(row[3].startswith("SCAN") for row in self.database.execute("explain query plan " + sql))]
+        self.assertEqual(scans, [])
+
     def testLastChargeAndLastError(self):
         self.addSession(history.CHARGE, 0, 500, 20, 80, power=2, readingCount=6, slowCount=4)
         self.addSession(history.DISCHARGE, 500)
