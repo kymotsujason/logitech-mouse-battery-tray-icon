@@ -486,6 +486,17 @@ class AppTests(unittest.TestCase):
         self.assertIn("Mouse Battery " + tray.VERSION, first.text())
         first.close()
 
+    def testAboutOpenedAgainBringsBackAMinimizedBox(self):
+        mouseApp = self.makeApp(True)
+        mouseApp.showAbout()
+        first = mouseApp.aboutBox
+        first.showMinimized()
+        self.assertTrue(first.isMinimized())
+        mouseApp.showAbout()
+        self.assertIs(mouseApp.aboutBox, first)
+        self.assertEqual((first.isMinimized(), first.isVisible()), (False, True))
+        first.close()
+
     def testAboutOpenedAgainAfterOkIsANewBox(self):
         mouseApp = self.makeApp(True)
         mouseApp.showAbout()

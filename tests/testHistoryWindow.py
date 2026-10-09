@@ -371,6 +371,13 @@ class WindowTests(WindowCase):
         self.state(*two)
         self.assertEqual(window.width(), historyWindow.PANE_WIDTH + historyWindow.SIDEBAR_WIDTH)
 
+    def testOpeningAMinimizedWindowBringsItBack(self):
+        window = self.opened(entry())
+        window.showMinimized()
+        self.assertTrue(window.isMinimized())
+        window.open()
+        self.assertEqual((window.isMinimized(), window.isVisible()), (False, True))
+
     def testAReopenedWindowStartsOnTheTraysMouse(self):
         window = self.opened(entry(), entry(key="11111111", name="MX Master 3S", reading=hidpp.BatteryReading(18, 0)))
         shown = self.mouseList.shownMouse().key

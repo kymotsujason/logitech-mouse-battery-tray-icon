@@ -299,6 +299,8 @@ class MouseBatteryApp(QObject):
             if (hasattr(QMessageBox, "Option")):
                 self.aboutBox.setOption(QMessageBox.Option.DontUseNativeDialog)
         self.aboutBox.show()
+        # a minimized box still counts as visible, so it's the one reused, and neither show nor raise_ brings it back
+        self.aboutBox.setWindowState(self.aboutBox.windowState() & ~Qt.WindowState.WindowMinimized)
         self.aboutBox.raise_()
         self.aboutBox.activateWindow()
 

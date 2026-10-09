@@ -654,6 +654,8 @@ class HistoryWindow(QWidget):
         else:
             self.show()
         self.refresh()
+        # a minimized window still counts as visible, and neither show, raise_, nor activateWindow brings it back
+        self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized)
         self.raise_()
         self.activateWindow()
 
