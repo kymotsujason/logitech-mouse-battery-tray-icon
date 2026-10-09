@@ -187,6 +187,8 @@ class ServiceFileTests(unittest.TestCase):
 
 SVG = "{http://www.w3.org/2000/svg}"
 METAINFO = "io.github.kymotsujason.LogitechMouseBattery.metainfo.xml"
+APP_ICON_FILL = "#F5F5F7"
+APP_ICON_OUTLINE = "#636366"
 RAW_MAIN = "https://raw.githubusercontent.com/kymotsujason/logitech-mouse-battery-tray-icon/main/"
 
 
@@ -199,9 +201,15 @@ class AppIconTests(unittest.TestCase):
         bodies = [rect for rect in self.root.iter(SVG + "rect") if (rect.get("x"), rect.get("y"), rect.get("width"), rect.get("height"), rect.get("rx")) == ("4", "1", "14", "20", "7")]
         self.assertEqual(len(bodies), 1)
 
-    def testTheFillIsTheTrayGreen(self):
-        fills = [element for element in self.root.iter() if element.get("fill") == icon.GREEN]
-        self.assertEqual(len(fills), 1)
+    def testTheIconCarriesNoBatteryStateColor(self):
+        colors = [element.get(name) for element in self.root.iter() for name in ("fill", "stroke")]
+        for stateColor in (icon.GREEN, icon.RED):
+            self.assertNotIn(stateColor, colors)
+
+    def testTheFillIsLightWithADarkOutline(self):
+        fills = [element for element in self.root.iter() if element.get("fill") == APP_ICON_FILL]
+        outlines = [rect for rect in self.root.iter(SVG + "rect") if rect.get("stroke") == APP_ICON_OUTLINE]
+        self.assertEqual((len(fills), len(outlines)), (1, 1))
 
     def testTheIconUsesNoClipOrMask(self):
         # Qt's SVG renderer ignores clipPath and mask
@@ -214,8 +222,10 @@ class AppIconTests(unittest.TestCase):
         if (b"svg" not in formats):
             self.skipTest("this Qt has no SVG plugin")
         image = QIcon(os.path.join(PACKAGING, "logitech-mouse-battery.svg")).pixmap(220, 220).toImage()
-        self.assertNotEqual(image.pixelColor(70, 40), QColor(icon.GREEN))
-        self.assertEqual(image.pixelColor(110, 150), QColor(icon.GREEN))
+        self.assertNotEqual(image.pixelColor(70, 40), QColor(APP_ICON_FILL))
+        self.assertEqual(image.pixelColor(110, 150), QColor(APP_ICON_FILL))
+        # the outline's stroke runs from 4.0 to 4.7 units, so 43 px at this size sits inside it
+        self.assertEqual(image.pixelColor(43, 110), QColor(APP_ICON_OUTLINE))
 
 
 class MetainfoTests(unittest.TestCase):
