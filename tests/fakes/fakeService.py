@@ -81,7 +81,7 @@ def onCall(conn, sender, path, interface, method, params, invocation):
         invocation.return_value(GLib.Variant("(s)", (readState(),)))
         return
     if (method in ("GetHistory", "GetLevels")):
-        # a test writes the reply to this file, or an error name to the answer file to have it refused
+        # a test writes the reply to this file, or an "error: NAME" line in the method's own file to have it refused
         historyAnswer = historyText(".history" if method == "GetHistory" else ".levels")
         if (historyAnswer.startswith("error:")):
             invocation.return_dbus_error(historyAnswer[len("error:"):].strip(), "refused by the fake")

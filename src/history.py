@@ -666,7 +666,7 @@ class Recorder(QObject):
             return False
         if (entry.source is None):
             hidppKey = self.isHidppKey(entry)
-            # a lookup that failed drops this reading and leaves the next one to ask again
+            # a lookup that failed, or a history that isn't open yet, drops this reading and leaves the next one to ask again
             if (hidppKey is None):
                 return False
             if (hidppKey):
@@ -946,7 +946,7 @@ class Recorder(QObject):
                         track.applyMarker(Row(row.at, ORIGIN_GAP), writer)
                     self.apply(track, row, writer)
             except sqlite3.Error as error:
-                # the rollback undid the database, and the track in memory never took the change, so the two still agree
+                # the rollback undid the database, and the track in memory never took the change, so the rows and sessions still agree while any flag in pendingFlags waits for the next transaction that succeeds
                 self.writeFailed(entry, error)
                 return
             entry.needsGap = False

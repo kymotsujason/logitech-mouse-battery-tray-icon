@@ -192,7 +192,7 @@ class ReceiverMouse:
         self.batteryEventAt = None
         self.wakeTimer = None
         self.errorRetries = 0
-        # the wireless status feature's index from the latest identify, which makes its events wakes
+        # the wireless status feature's index from the last lookup that answered, which makes its events wakes
         self.wakeIndex = None
         # a lookup answered, so a wakeIndex of None means the mouse has no such feature
         self.wakeAnswered = False

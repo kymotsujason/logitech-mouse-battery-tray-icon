@@ -27,7 +27,7 @@ def readVersion(folder):
 
 
 class InstallWatcher(QObject):
-    # every later version takes over from the one installed before it through this watch, so the app folder keeps tray.py and a version.py with a VERSION line
+    # every later version takes over from the one installed before it through this watch, so the app folder keeps tray.py and a version.py with a VERSION line, and the tray accepts or ignores the --open-window argument
     removed = pyqtSignal()
 
     def __init__(self, extraArguments=None):
