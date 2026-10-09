@@ -44,7 +44,12 @@ def reply(key):
 
 
 def levelsReply(key, rangeName):
-    return {"version": 1, "key": key, "range": rangeName, "slots": [[NOW - (25 - index) * 7 * 24 * 60 * 60, 30, 90, 1] for index in range(26)]}
+    # a span range's slots hold a low, a high, and a charge count, and the others hold a percent, a level, a voltage, and a charge flag
+    if (rangeName in history.SPAN_RANGES):
+        slots = [[NOW - (25 - index) * 7 * 24 * 60 * 60, 30, 90, 1] for index in range(26)]
+    else:
+        slots = [[NOW - (47 - index) * 30 * 60, 40 + index, None, None, index % 2 == 0] for index in range(48)]
+    return {"version": 1, "key": key, "range": rangeName, "slots": slots}
 
 
 class FakeWatcher(QObject):
@@ -611,6 +616,16 @@ class WindowTests(WindowCase):
         window.pickRange("year")
         self.assertEqual(len(self.watcher.levelAsks), 1)
         self.assertEqual(window.rangeControl.index, historyWindow.RANGE_NAMES.index("year"))
+
+    def testPickingTheDayShowsItsPercentBars(self):
+        window = self.opened(entry())
+        window.pickRange("day")
+        self.assertEqual((self.watcher.levelAsks, window.levelChart.title, window.levelChart.isSpan()), ([("02bc524c", "day")], "Battery Level, Last 24 Hours", False))
+        self.assertEqual(window.levelChart.slots, levelsReply("02bc524c", "day")["slots"])
+        self.assertTrue(all(window.levelChart.barRect(index) is not None for index in range(48)))
+        window.levelChart.hover = 47
+        self.assertTrue(window.levelChart.hoverText(47).endswith(", 87%"))
+        window.levelChart.grab()
 
     def testANewHistoryAsksForTheRangeAgain(self):
         window = self.opened(entry())
