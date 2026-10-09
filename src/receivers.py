@@ -144,6 +144,8 @@ class NodeWorker(threading.Thread):
             return ("read", self, item[1], hidpp.readBattery(self.node, item[2]), item[3])
         if (kind == "identify"):
             return ("identified", self, item[1], hidpp.identifySlot(self.node, item[1]), item[2])
+        if (kind == "wake"):
+            return ("wakeFound", self, item[1], hidpp.findWakeIndex(self.node, item[1]))
         raise ValueError("unknown work item " + repr(kind))
 
 
@@ -182,6 +184,8 @@ class ReceiverMouse:
         self.errorRetries = 0
         # the wireless status feature's index from the latest identify, which makes its events wakes
         self.wakeIndex = None
+        # a unit id's mouse whose lookup didn't answer, so its next read or battery event asks again
+        self.wakeLookupDue = False
         self.reportsItself = False
         self.historyRevision = 0
 
@@ -208,6 +212,7 @@ class NodeState:
         self.readAgain = set()
         self.pendingIdentifies = set()
         self.identifyAgain = set()
+        self.pendingWakeLookups = set()
 
 
 class ReceiverList(QObject):
@@ -546,6 +551,8 @@ class ReceiverList(QObject):
             self.onRead(state, message[2], message[3], message[4])
         elif (kind == "identified"):
             self.onIdentified(state, message[2], message[3], message[4])
+        elif (kind == "wakeFound"):
+            self.onWakeFound(state, message[2], message[3])
         elif (kind == "failed"):
             self.onFailed(state, message[2], message[3] if len(message) > 3 else None)
         elif (kind == "lost"):
@@ -596,6 +603,10 @@ class ReceiverList(QObject):
             # a first search that raises would otherwise leave the menu saying it's looking until something else redraws it
             self.changed.emit()
             return
+        if (kind == "wake"):
+            # the lookup stays due, so the mouse's next read or battery event asks again
+            state.pendingWakeLookups.discard(item[1])
+            return
         if (kind == "read"):
             self.settleRead(state, item[1])
         elif (kind == "identify"):
@@ -645,7 +656,15 @@ class ReceiverList(QObject):
         # a unit id's feature index doesn't change, so a lookup that didn't answer keeps the one it had, while a slot key may now hold another device
         if (found.wakeAnswered or not found.unitId):
             mouse.wakeIndex = found.wakeIndex
-        self.recorder.setWakeSupport(key, mouse.wakeIndex is not None, pathKey=mouse.pathKey)
+            mouse.wakeLookupDue = False
+            supported = mouse.wakeIndex is not None
+        elif (mouse.wakeIndex is not None):
+            supported = True
+        else:
+            # nothing says the mouse lacks the feature, so its saved flag stands until a lookup answers
+            mouse.wakeLookupDue = True
+            supported = None
+        self.recorder.setWakeSupport(key, supported, pathKey=mouse.pathKey)
         # the service may have missed something before a mouse it hadn't seen, one that moved, or one whose link came back
         if (isNew or moved or linkUp):
             self.recorder.addMarker(key, history.ORIGIN_GAP, pathKey=mouse.pathKey)
@@ -654,6 +673,9 @@ class ReceiverList(QObject):
             # a battery event the worker read after this reading has already reached the mouse, so the older reading doesn't replace it
             reading = mouse.reading
         self.applyOutcome(mouse, found.outcome, reading, queuedAt, woke=(moved or linkUp))
+        if (mouse.wakeLookupDue and found.outcome == hidpp.ANSWER):
+            # the mouse answered its battery read, so the read this brings asks for the index again instead of leaving it until the next link up
+            self.retryLater(mouse)
 
     def mouseFor(self, key, pathKey=False):
         for mouse in self.mice:
@@ -730,12 +752,30 @@ class ReceiverList(QObject):
         state = self.nodes.get(mouse.nodePath)
         if (state is None):
             return
+        self.lookUpWake(state, mouse)
         if (mouse.slot in state.pendingReads):
             # one more read after the pending one is enough for any burst of requests
             state.readAgain.add(mouse.slot)
             return
         state.pendingReads.add(mouse.slot)
         state.worker.queueWork(("read", mouse.slot, mouse.feature, time.monotonic()))
+
+    def lookUpWake(self, state, mouse):
+        if (not mouse.wakeLookupDue or mouse.slot in state.pendingWakeLookups):
+            return
+        state.pendingWakeLookups.add(mouse.slot)
+        state.worker.queueWork(("wake", mouse.slot))
+
+    def onWakeFound(self, state, slot, result):
+        state.pendingWakeLookups.discard(slot)
+        mouse = self.findByNode(state.path, slot)
+        answered, wakeIndex = result
+        # an identify that answered since this was queued already set the index
+        if (mouse is None or not mouse.wakeLookupDue or not answered):
+            return
+        mouse.wakeIndex = wakeIndex
+        mouse.wakeLookupDue = False
+        self.recorder.setWakeSupport(mouse.key, wakeIndex is not None, pathKey=mouse.pathKey)
 
     def settleRead(self, state, slot):
         state.pendingReads.discard(slot)
@@ -868,6 +908,8 @@ class ReceiverList(QObject):
         if (kind == hidpp.EVENT_BATTERY):
             mouse.batteryEventAt = receivedAt
             self.applyReading(mouse, reading, origin=history.ORIGIN_EVENT)
+            # a mouse the tray's silent reads skip still sends these, and it's awake to answer
+            self.lookUpWake(state, mouse)
         elif (kind == hidpp.EVENT_LINK_DOWN):
             self.markAsleep(mouse)
         elif (kind == hidpp.EVENT_LINK_UP):

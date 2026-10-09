@@ -586,6 +586,17 @@ class StepTests(RecorderCase):
         self.event(1200, 32, charging=1, power=2)
         self.assertEqual([(s[3], s[4], s[6]) for s in self.steps()], [(30, 31, 0), (31, 32, 1)])
 
+    def testNoDropIsUnbrokenWhileTheReceiverCantSeeWakes(self):
+        self.recorder.setWakeSupport(KEY, None)
+        self.drops((0, 80), (1800, 79), (3600, 78))
+        self.assertEqual((self.recorder.reportsItself(KEY), self.recorder.summary(KEY)["wakeSupport"]), (False, True))
+        # the step in progress when the index comes back may hold a sleep nothing saw
+        self.recorder.setWakeSupport(KEY, True)
+        self.drops((5400, 77), (7200, 76))
+        self.assertEqual([(s[3], s[4], s[6]) for s in self.steps()], [(80, 79, 0), (79, 78, 0), (78, 77, 0), (77, 76, 1)])
+        with self.db() as db:
+            self.assertEqual(db.execute("select wakeSupport from mice").fetchone()[0], 1)
+
     def testAMultiPointStepIsMinutesPerPoint(self):
         self.drops((0, 80), (1800, 79), (3600, 76))
         self.assertEqual(self.steps()[-1][2:5], (10.0, 79, 76))

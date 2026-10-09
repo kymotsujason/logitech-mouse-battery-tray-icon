@@ -380,6 +380,8 @@ class Track:
     def __init__(self, wakeSupport=False, reportsItselfSince=None):
         self.wakeSupport = wakeSupport
         self.reportsItselfSince = reportsItselfSince
+        # the receiver doesn't know the wireless status index yet, so it can't see a wake, whatever the saved flag says
+        self.wakesUnseen = False
         # the last saved row that holds a reading, which every rule compares against
         self.last = None
         # a wake, asleep, or gap row came after it
@@ -451,13 +453,16 @@ class Track:
         self.last = row
         self.boundary = False
 
+    def seesWakes(self):
+        return self.wakeSupport and not self.wakesUnseen
+
     def risesToCharge(self, rise):
         if (rise is None):
             self.rises = 0
             return False
         # without wake rows a rebound after a rest can't be told from a charge, so those mice need more
-        needed = 2 if self.wakeSupport else 5
-        inARow = 2 if self.wakeSupport else 3
+        needed = 2 if self.seesWakes() else 5
+        inARow = 2 if self.seesWakes() else 3
         if (rise >= needed):
             self.rises = 0
             return True
@@ -543,7 +548,7 @@ class Track:
         whole = step.live and not step.broken
         if (moved < 0):
             newLow = step.lowestBefore is None or step.startPercent < step.lowestBefore
-            unbroken = whole and self.wakeSupport and newLow and not step.power
+            unbroken = whole and self.seesWakes() and newLow and not step.power
             kind = DISCHARGE
         else:
             unbroken = whole
@@ -551,7 +556,7 @@ class Track:
         writer.insertStep(kind, row.at, minutes / abs(moved), step.startPercent, row.percent, step.power, unbroken, session.id)
 
     def updateReportsItself(self, row, previous, writer):
-        if (self.reportsItselfSince is not None or row.origin != ORIGIN_EVENT or not self.wakeSupport):
+        if (self.reportsItselfSince is not None or row.origin != ORIGIN_EVENT or not self.seesWakes()):
             return
         if (self.session is None or self.session.kind != DISCHARGE):
             return
@@ -686,8 +691,17 @@ class Recorder(QObject):
             entry.loaded = False
 
     def setWakeSupport(self, key, supported, pathKey=False):
+        # None is a lookup that didn't answer, which leaves the saved flag as it is and counts wakes as unseen until one answers
         entry = self.entryFor(key, pathKey)
         self.claim(entry, SOURCE_HIDPP)
+        if (supported is None):
+            entry.track.wakesUnseen = True
+            self.ensureLoaded(entry)
+            return
+        if (entry.track.wakesUnseen and entry.track.step is not None):
+            # the step in progress began while a sleep could pass unseen
+            entry.track.step.broken = True
+        entry.track.wakesUnseen = False
         entry.track.wakeSupport = supported
         entry.pendingFlags["wakeSupport"] = supported
         self.saveFlags(entry)
@@ -883,6 +897,7 @@ class Recorder(QObject):
             # what happened while nothing was watching is unknown, so the first row after loading follows a gap row
             entry.needsGap = True
         track.boundary = True
+        track.wakesUnseen = entry.track.wakesUnseen
         entry.track = track
         entry.loaded = True
         entry.pendingFlags = {}

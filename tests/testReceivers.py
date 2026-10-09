@@ -1656,6 +1656,10 @@ WAKE_REPORT = bytes([0x11, 1, 23, 0x00, 1, 1, 1]).ljust(20, b"\x00")
 LINK_DOWN = bytes([0x10, 1, 0x41, 0x10, 0x40, 0x00, 0x00])
 
 
+def isWakeLookup(request):
+    return request[2] == 0 and (request[3] >> 4) == 0 and ((request[4] << 8) | request[5]) == hidpp.FEATURE_WIRELESS_STATUS
+
+
 class ReceiverHistoryTests(unittest.TestCase):
     def setUp(self):
         self.nodes = FakeNodes()
@@ -1724,7 +1728,7 @@ class ReceiverHistoryTests(unittest.TestCase):
         answer = mouseHandler(features=WIRELESS_FEATURES)
 
         def handle(request):
-            if (request[2] == 0 and (request[3] >> 4) == 0 and ((request[4] << 8) | request[5]) == hidpp.FEATURE_WIRELESS_STATUS):
+            if (isWakeLookup(request)):
                 return lookupReplies(request)
             return answer(request)
         lookups = sum(1 for sent in receiver.requests if sent[2] == 0 and sent[4:6] == b"\x1d\x4b")
@@ -1754,6 +1758,42 @@ class ReceiverHistoryTests(unittest.TestCase):
         with mock.patch.object(self.mice, "retryLater"):
             self.mice.registerFound(state, found)
         self.assertEqual((self.mouse().wakeIndex, self.recorder.entries[self.mouse().key].track.wakeSupport, self.savedWakeSupport()), (23, True, 1))
+
+    def testAFirstLookupThatFailsKeepsTheSavedWakeSupportAndTheNextReadAsksAgain(self):
+        earlier = history.Recorder(self.folder, timers=False)
+        earlier.setWakeSupport("02bc524c", True)
+        earlier.stop()
+        answer = mouseHandler(features=WIRELESS_FEATURES)
+        answering = []
+
+        def handle(request):
+            if (isWakeLookup(request) and not answering):
+                return [deviceError(request)]
+            return answer(request)
+        self.start(handle)
+        entry = self.recorder.entries[self.mouse().key]
+        self.assertEqual((self.mouse().wakeIndex, entry.track.wakeSupport, self.savedWakeSupport()), (None, True, 1))
+        self.assertTrue(entry.track.wakesUnseen)
+        answering.append(True)
+        self.mice.readAll()
+        self.assertTrue(waitUntil(lambda: self.mouse().wakeIndex == 23))
+        self.assertEqual((entry.track.wakeSupport, entry.track.wakesUnseen, self.savedWakeSupport()), (True, False, 1))
+
+    def testABatteryEventAsksForAnIndexStillDue(self):
+        answer = mouseHandler(features=WIRELESS_FEATURES)
+        answering = []
+
+        def handle(request):
+            if (isWakeLookup(request) and not answering):
+                return [deviceError(request)]
+            return answer(request)
+        receiver = self.start(handle)
+        self.mouse().wakeTimer.stop()
+        self.assertTrue(self.mouse().wakeLookupDue)
+        answering.append(True)
+        receiver.send(bytes([0x11, 1, 5, 0x00, 64, 0x04, 0, 0]).ljust(20, b"\x00"))
+        self.assertTrue(waitUntil(lambda: self.mouse().wakeIndex == 23))
+        self.assertFalse(self.mouse().wakeLookupDue)
 
     def testAMouseWithoutAUnitIdTakesTheLookupAsItCame(self):
         self.start(mouseHandler(features={0x0005: 2, 0x1004: 5, 0x1D4B: 23}))
