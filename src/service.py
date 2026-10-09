@@ -13,7 +13,7 @@ from PyQt6.QtDBus import QDBusAbstractAdaptor, QDBusConnection, QDBusMessage
 import history
 import serviceState
 from exceptionHooks import installExceptionHooks, printLine
-from receivers import ReceiverList
+from receivers import ReceiverList, printTraceback
 from upower import UPowerWatcher
 from version import VERSION
 
@@ -101,6 +101,11 @@ class BatteryService(QDBusAbstractAdaptor):
         except history.HistoryUnavailable:
             self.refuse(message, serviceState.HISTORY_UNAVAILABLE, "The history isn't available right now.")
             return ""
+        except Exception:
+            # a slot that raises answers an empty string, which a caller would read as a history
+            printTraceback("Error reading the history:")
+            self.refuse(message, serviceState.HISTORY_UNAVAILABLE, "The history isn't available right now.")
+            return ""
         return json.dumps(summary, sort_keys=True)
 
     @pyqtSlot(str, str, QDBusMessage, result=str)
@@ -121,6 +126,10 @@ class BatteryService(QDBusAbstractAdaptor):
         try:
             levels = self.receiverList.recorder.levels(key, rangeName)
         except history.HistoryUnavailable:
+            self.refuse(message, serviceState.HISTORY_UNAVAILABLE, "The history isn't available right now.")
+            return ""
+        except Exception:
+            printTraceback("Error reading the levels:")
             self.refuse(message, serviceState.HISTORY_UNAVAILABLE, "The history isn't available right now.")
             return ""
         return json.dumps(levels, sort_keys=True)

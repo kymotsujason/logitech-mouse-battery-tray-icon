@@ -535,6 +535,26 @@ class HistoryServiceTests(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(self.folder, history.INTEGRITY_FLAG)))
         self.assertEqual(self.levels(), serviceState.HISTORY_UNAVAILABLE)
 
+    def callWhileRaising(self, method, call):
+        # PyQt6 hands a slot's exception to sys.excepthook, so a slot that let one through shows up in hooked
+        hooked = []
+        errors = io.StringIO()
+        with mock.patch.object(self.recorder, method, side_effect=RuntimeError("not sqlite")), mock.patch.object(sys, "excepthook", lambda *info: hooked.append(info[1])), mock.patch.object(sys, "stderr", errors):
+            answer = call()
+        return (answer, hooked, errors.getvalue())
+
+    def testAnErrorThatIsntSqliteAnswersHistoryUnavailable(self):
+        answer, hooked, printed = self.callWhileRaising("summary", self.history)
+        self.assertEqual((answer, hooked), (serviceState.HISTORY_UNAVAILABLE, []))
+        self.assertIn("RuntimeError: not sqlite", printed)
+        self.assertIn("Traceback", printed)
+
+    def testAnErrorThatIsntSqliteAnswersLevelsUnavailable(self):
+        answer, hooked, printed = self.callWhileRaising("levels", self.levels)
+        self.assertEqual((answer, hooked), (serviceState.HISTORY_UNAVAILABLE, []))
+        self.assertIn("RuntimeError: not sqlite", printed)
+        self.assertIn("Traceback", printed)
+
     def testGetHistoryHasABudgetOfItsOwn(self):
         answers = [self.history("ffffffff") for i in range(service.READ_ALL_BURST + 1)]
         self.assertEqual(answers[-1], serviceState.READ_ALL_LIMITED)
