@@ -10,13 +10,14 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 from PyQt6 import sip
 from PyQt6.QtCore import QAbstractAnimation, QObject, QPoint, QPointF, QRectF, QSizeF, Qt, pyqtSignal
 from PyQt6.QtDBus import QDBusPendingCall, QDBusVariant
-from PyQt6.QtGui import QColor, QPalette
+from PyQt6.QtGui import QColor, QIcon, QPalette
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QMenu, QWidget
 
 import glass
 import health
 import hidpp
+import icon
 import historyWindow
 import history
 import mice
@@ -31,6 +32,7 @@ from tests.fakes.recordingBus import RecordingBus
 
 app = QApplication.instance() or QApplication([])
 NOW = time.time()
+PACKAGING = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "packaging")
 
 
 def entry(key="02bc524c", name="PRO X3 SUPERSTRIKE", reading=hidpp.BatteryReading(62, 0), asleep=False, pathKey=False, revision=1, lastRead=NOW):
@@ -104,6 +106,10 @@ class PortalBus(RecordingBus):
 
 class WindowCase(unittest.TestCase):
     def setUp(self):
+        # the state icons are found only in packaging/, so the icons installed on the machine running the tests don't count
+        self.themePaths = QIcon.themeSearchPaths()
+        QIcon.setThemeSearchPaths([])
+        QIcon.setFallbackSearchPaths([PACKAGING])
         self.folder = tempfile.mkdtemp()
         self.watcher = FakeWatcher()
         self.upower = FakeUPower()
@@ -112,6 +118,8 @@ class WindowCase(unittest.TestCase):
 
     def tearDown(self):
         self.window.close()
+        QIcon.setFallbackSearchPaths([])
+        QIcon.setThemeSearchPaths(self.themePaths)
         # freed here instead of by the cyclic GC, which would free them all in one pass at an unknown moment
         sip.delete(self.window)
         self.mouseList.stop()
@@ -186,6 +194,32 @@ class WindowTests(WindowCase):
         # built now, since NOW is from when the suite loaded and a suite that crosses local midnight would put it on another day
         self.state(entry(asleep=True, lastRead=time.time()))
         self.assertTrue(window.statusLabel.text().startswith("Asleep, read at "))
+
+    def testTheWindowIconFollowsTheShownMouse(self):
+        window = self.opened(entry())
+        self.assertEqual(window.windowIcon().name(), icon.APP_ICON)
+        self.state(entry(reading=hidpp.BatteryReading(45, hidpp.CHARGING_CHARGING)))
+        self.assertEqual(window.windowIcon().name(), icon.APP_ICON + "-charging")
+        self.state(entry(reading=hidpp.BatteryReading(icon.RED_PERCENT, 0)))
+        self.assertEqual(window.windowIcon().name(), icon.APP_ICON + "-low")
+        self.state(entry(asleep=True, lastRead=time.time()))
+        self.assertEqual(window.windowIcon().name(), icon.APP_ICON + "-asleep")
+        self.state(entry(reading=None))
+        self.assertEqual(window.windowIcon().name(), icon.APP_ICON + "-empty")
+
+    def testWithNoMouseTheWindowKeepsTheAppIcon(self):
+        window = self.opened()
+        self.assertFalse(window.testAttribute(Qt.WidgetAttribute.WA_SetWindowIcon))
+        self.state(entry(reading=hidpp.BatteryReading(45, hidpp.CHARGING_CHARGING)))
+        self.assertTrue(window.testAttribute(Qt.WidgetAttribute.WA_SetWindowIcon))
+        self.state()
+        self.assertFalse(window.testAttribute(Qt.WidgetAttribute.WA_SetWindowIcon))
+
+    def testAThemeWithoutTheStateIconsLeavesTheAppIcon(self):
+        # an install older than these icons has none of them in the theme
+        QIcon.setFallbackSearchPaths([])
+        window = self.opened(entry(reading=hidpp.BatteryReading(45, hidpp.CHARGING_CHARGING)))
+        self.assertFalse(window.testAttribute(Qt.WidgetAttribute.WA_SetWindowIcon))
 
     def testTheSidebarComesWithTwoMiceAndGoesWithOne(self):
         window = self.opened(entry())

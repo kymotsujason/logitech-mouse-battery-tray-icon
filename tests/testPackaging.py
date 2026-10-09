@@ -189,6 +189,8 @@ SVG = "{http://www.w3.org/2000/svg}"
 METAINFO = "io.github.kymotsujason.LogitechMouseBattery.metainfo.xml"
 APP_ICON_FILL = "#F5F5F7"
 APP_ICON_OUTLINE = "#636366"
+# each state's fill color and where its fill starts at 220 px, with no fill for a mouse that has no reading
+STATE_ICONS = {"charging": (icon.GREEN, 60), "low": (icon.RED, 150), "asleep": (icon.GRAY, 60), "empty": (None, None)}
 RAW_MAIN = "https://raw.githubusercontent.com/kymotsujason/logitech-mouse-battery-tray-icon/main/"
 
 
@@ -226,6 +228,45 @@ class AppIconTests(unittest.TestCase):
         self.assertEqual(image.pixelColor(110, 150), QColor(APP_ICON_FILL))
         # the outline's stroke runs from 4.0 to 4.7 units, so 43 px at this size sits inside it
         self.assertEqual(image.pixelColor(43, 110), QColor(APP_ICON_OUTLINE))
+
+
+class StateIconTests(unittest.TestCase):
+    def path(self, suffix):
+        return os.path.join(PACKAGING, icon.APP_ICON + "-" + suffix + ".svg")
+
+    def testEachStateIconIsInstalledByEveryPackage(self):
+        nfpm = readText("packaging", "nfpm.yaml")
+        pkgbuild = readText("packaging", "aur", "PKGBUILD")
+        checkPackage = readText("tests", "containers", "checkPackage.sh")
+        for suffix in STATE_ICONS:
+            name = icon.APP_ICON + "-" + suffix + ".svg"
+            self.assertIn("  - src: packaging/" + name + "\n    dst: /usr/share/icons/hicolor/scalable/apps/" + name + "\n", nfpm)
+            self.assertIn('    install -Dm644 packaging/' + name + ' "$pkgdir/usr/share/icons/hicolor/scalable/apps/' + name + '"\n', pkgbuild)
+            self.assertIn(" /usr/share/icons/hicolor/scalable/apps/$name-" + suffix + ".svg ", checkPackage)
+
+    def testEachStateIconSharesTheAppIconsShape(self):
+        for suffix in STATE_ICONS:
+            root = ElementTree.parse(self.path(suffix)).getroot()
+            self.assertEqual(root.get("viewBox"), "0 0 22 22", suffix)
+            outlines = [rect for rect in root.iter(SVG + "rect") if rect.get("stroke") == APP_ICON_OUTLINE]
+            self.assertEqual(len(outlines), 1, suffix)
+            tags = [element.tag for element in root.iter()]
+            self.assertNotIn(SVG + "clipPath", tags)
+            self.assertNotIn(SVG + "mask", tags)
+
+    def testQtDrawsEachStateInItsColor(self):
+        formats = [bytes(f) for f in QImageReader.supportedImageFormats()]
+        if (b"svg" not in formats):
+            self.skipTest("this Qt has no SVG plugin")
+        for suffix, (color, fillTop) in STATE_ICONS.items():
+            image = QIcon(self.path(suffix)).pixmap(220, 220).toImage()
+            if (color is None):
+                self.assertLess(image.pixelColor(110, 180).alpha(), 255, suffix)
+                continue
+            self.assertEqual(image.pixelColor(110, 200), QColor(color), suffix)
+            # just above and below where the fill starts, left of the hole the fill leaves around the wheel
+            self.assertNotEqual(image.pixelColor(60, fillTop - 4), QColor(color), suffix)
+            self.assertEqual(image.pixelColor(60, fillTop + 4), QColor(color), suffix)
 
 
 class MetainfoTests(unittest.TestCase):

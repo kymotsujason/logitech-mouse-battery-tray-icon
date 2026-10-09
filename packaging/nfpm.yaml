@@ -152,6 +152,14 @@ contents:
     dst: /usr/lib/udev/rules.d/70-logitech-mouse-battery.rules
   - src: packaging/logitech-mouse-battery.svg
     dst: /usr/share/icons/hicolor/scalable/apps/logitech-mouse-battery.svg
+  - src: packaging/logitech-mouse-battery-charging.svg
+    dst: /usr/share/icons/hicolor/scalable/apps/logitech-mouse-battery-charging.svg
+  - src: packaging/logitech-mouse-battery-low.svg
+    dst: /usr/share/icons/hicolor/scalable/apps/logitech-mouse-battery-low.svg
+  - src: packaging/logitech-mouse-battery-asleep.svg
+    dst: /usr/share/icons/hicolor/scalable/apps/logitech-mouse-battery-asleep.svg
+  - src: packaging/logitech-mouse-battery-empty.svg
+    dst: /usr/share/icons/hicolor/scalable/apps/logitech-mouse-battery-empty.svg
   - src: packaging/io.github.kymotsujason.LogitechMouseBattery.metainfo.xml
     dst: /usr/share/metainfo/io.github.kymotsujason.LogitechMouseBattery.metainfo.xml
   - dst: /usr/share/doc/logitech-mouse-battery

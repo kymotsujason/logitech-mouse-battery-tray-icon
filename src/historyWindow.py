@@ -5,7 +5,7 @@ import time
 from PyQt6 import sip
 from PyQt6.QtCore import QAbstractAnimation, QElapsedTimer, QPoint, QPointF, QRectF, QSizeF, Qt, QTimer, QVariantAnimation, QEasingCurve, pyqtSignal, pyqtSlot
 from PyQt6.QtDBus import QDBusMessage
-from PyQt6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPen, QRegion
+from PyQt6.QtGui import QColor, QFont, QFontMetricsF, QIcon, QPainter, QPen, QRegion
 from PyQt6.QtWidgets import QApplication, QGraphicsOpacityEffect, QLabel, QWidget
 
 import charts
@@ -557,6 +557,7 @@ class HistoryWindow(QWidget):
         self.selected = None
         self.wanted = None
         self.health = None
+        self.stateIconName = None
         self.panels = []
         self.makeParts(sleepCheckSeconds)
         self.fetchTimer = mice.singleShotTimer(self, 1000, self.fetchSelected)
@@ -1017,11 +1018,14 @@ class HistoryWindow(QWidget):
             self.paneMessage.setText(mice.STATUS_TEXT[self.mouseList.status()])
             self.showParts(summary=False, history=False, paneMessage=True)
             self.setGlow(None)
+            self.setStateIcon(None)
             return
         name = self.mouseList.displayNames()[mouse.key]
         reply = self.replies.get(mouse.key)
         self.health = health.assess(reply.summary, mouse.reading) if reply is not None else None
-        self.mouseIcon.setState(self.iconStateFor(mouse), theme)
+        state = self.iconStateFor(mouse)
+        self.mouseIcon.setState(state, theme)
+        self.setStateIcon(state)
         self.nameLabel.setText(name.upper())
         self.levelLabel.setText(capitalized(hidpp.levelText(mouse.reading)) if mouse.reading is not None else "")
         self.statusLabel.setText(statusWords(mouse) + (health.statusSuffix(self.health) if self.health is not None else ""))
@@ -1038,6 +1042,14 @@ class HistoryWindow(QWidget):
             self.refreshLabel.setText(NOT_REFRESHED_TEXT if mouse.key in self.notRefreshed else "")
         warning = self.health is not None and self.health.symbol == health.SYMBOL_WARNING
         self.setGlow(glass.stateColor(theme, mouse, warning))
+
+    def setStateIcon(self, state):
+        name = None if state is None else icon.stateIconName(state)
+        if (name == self.stateIconName):
+            return
+        self.stateIconName = name
+        # a named theme icon, since on Plasma 6.7 with Qt 6.12 a window icon sent as pixels comes out wrong wherever a pixel is partly see through, and a null icon (no mouse, or an older install without these icons) gives the window back the app's own icon
+        self.setWindowIcon(QIcon() if name is None else QIcon.fromTheme(name))
 
     def showParts(self, summary, history, paneMessage):
         for widget in (self.mouseIcon, self.nameLabel, self.levelLabel, self.statusLabel):

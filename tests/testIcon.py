@@ -225,5 +225,17 @@ class WithoutNumberTests(unittest.TestCase):
         self.assertEqual(renderImage(IconState(percent=62), 22, WHITE), renderImage(IconState(percent=62), 22, WHITE, number=True))
 
 
+
+class StateIconNameTests(unittest.TestCase):
+    def testEachStateHasTheTraysColorRule(self):
+        self.assertEqual(icon.stateIconName(IconState(percent=62)), icon.APP_ICON)
+        self.assertEqual(icon.stateIconName(IconState(percent=None)), icon.APP_ICON)
+        self.assertEqual(icon.stateIconName(IconState(percent=icon.RED_PERCENT)), icon.APP_ICON + "-low")
+        self.assertEqual(icon.stateIconName(IconState(percent=icon.RED_PERCENT + 1)), icon.APP_ICON)
+        self.assertEqual(icon.stateIconName(IconState(percent=5, charging=True)), icon.APP_ICON + "-charging")
+        self.assertEqual(icon.stateIconName(IconState(percent=5, charging=True, asleep=True)), icon.APP_ICON + "-asleep")
+        self.assertEqual(icon.stateIconName(IconState(empty=True, asleep=True)), icon.APP_ICON + "-empty")
+
+
 if (__name__ == "__main__"):
     unittest.main()

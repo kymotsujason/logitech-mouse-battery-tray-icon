@@ -8,6 +8,7 @@ ICON_SIZES = [16, 22, 24, 32, 44, 48, 64]
 # below this size the digits don't read, so the icon keeps its fill and drops the number
 NUMBER_MIN_SIZE = 22
 RED_PERCENT = 20
+APP_ICON = "logitech-mouse-battery"
 GREEN = "#30D158"
 RED = "#FF453A"
 GRAY = "#8E8E93"
@@ -37,6 +38,18 @@ class IconState:
     charging: bool = False
     asleep: bool = False
     empty: bool = False
+
+
+def stateIconName(state):
+    if (state.empty):
+        return APP_ICON + "-empty"
+    if (state.asleep):
+        return APP_ICON + "-asleep"
+    if (state.charging):
+        return APP_ICON + "-charging"
+    if (state.percent is not None and state.percent <= RED_PERCENT):
+        return APP_ICON + "-low"
+    return APP_ICON
 
 
 def fillColor(state, baseColor):
