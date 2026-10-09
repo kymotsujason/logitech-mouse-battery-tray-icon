@@ -132,6 +132,12 @@ class RecorderCase(unittest.TestCase):
         self.recorder.store.db = FailingDb()
         return real
 
+    def failOpening(self):
+        def failing(*args, **kwargs):
+            raise sqlite3.OperationalError("disk I/O error")
+        self.recorder.store.closeQuietly()
+        return mock.patch.object(sqlite3, "connect", failing)
+
     def assertStoppedForCorruption(self, seconds):
         self.assertFalse(self.recorder.available())
         self.assertTrue(os.path.exists(os.path.join(self.folder, history.INTEGRITY_FLAG)))
@@ -727,12 +733,6 @@ class ReportsItselfTests(RecorderCase):
         with self.db() as db:
             return db.execute("select reportsItselfSince, wakeSupport from mice").fetchone()
 
-    def failOpening(self):
-        def failing(*args, **kwargs):
-            raise sqlite3.OperationalError("disk I/O error")
-        self.recorder.store.closeQuietly()
-        return mock.patch.object(sqlite3, "connect", failing)
-
     def testAClearThatFailsToSaveIsSavedByTheNextWrite(self):
         self.event(0, 60)
         self.event(1000, 59)
@@ -947,6 +947,29 @@ class RecorderTests(RecorderCase):
         # the code still says charging, so only the reloaded power going to 0 can end the charge
         self.event(1200, 61, charging=1, power=0)
         self.assertEqual([(s[0], s[1], s[2]) for s in self.sessions()], [(1, 0, 600), (0, 1200, None)])
+
+    def testASummaryAfterARestartKeepsTheSavedFlagsOfAMouseNotLoadedYet(self):
+        self.recorder.setWakeSupport(KEY, True)
+        self.event(0, 60)
+        self.event(1000, 59)
+        self.recorder.stop()
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic)
+        # UPower names the key before the HID++ search does, which makes an entry without loading it
+        self.recorder.addReading(KEY, battery(58), history.ORIGIN_UPOWER, source=history.SOURCE_UPOWER, at=START + 1200)
+        summary = self.recorder.summary(KEY)
+        self.assertEqual((summary["wakeSupport"], summary["reportsItself"]), (True, True))
+
+    def testASummaryShowsAFlagChangeTheHistoryHasntSavedYet(self):
+        self.recorder.setWakeSupport(KEY, True)
+        self.event(0, 60)
+        self.recorder.stop()
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic)
+        self.clock.now = START + 100
+        with self.failOpening():
+            self.recorder.setWakeSupport(KEY, False)
+        self.clock.now = START + 100 + history.OPEN_RETRY_SECONDS
+        self.assertFalse(self.recorder.entries[KEY].loaded)
+        self.assertFalse(self.recorder.summary(KEY)["wakeSupport"])
 
     def testAFailedHidppLookupForAUPowerReadingDropsItAndAsksAgain(self):
         real = self.failQuery(sqlite3.OperationalError("disk I/O error"))

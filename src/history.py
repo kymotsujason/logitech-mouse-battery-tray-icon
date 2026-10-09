@@ -1033,10 +1033,16 @@ def readSummary(db, entry, key, now):
     mouseId, name, source, firstSeen, reportsItselfSince, wakeSupport = found
     summary = emptyHistory(key)
     summary.update({"name": name, "source": source, "firstSeen": firstSeen, "reportsItself": reportsItselfSince is not None, "wakeSupport": bool(wakeSupport)})
-    if (entry is not None):
+    if (entry is not None and entry.loaded):
         # a flag change that couldn't be saved yet is in memory, and the next transaction that succeeds saves it
         summary["reportsItself"] = entry.track.reportsItselfSince is not None
         summary["wakeSupport"] = entry.track.wakeSupport
+    elif (entry is not None):
+        # a track that was never loaded holds defaults, so only the changes waiting to be saved go over the saved row
+        if ("reportsItselfSince" in entry.pendingFlags):
+            summary["reportsItself"] = entry.pendingFlags["reportsItselfSince"] is not None
+        if ("wakeSupport" in entry.pendingFlags):
+            summary["wakeSupport"] = bool(entry.pendingFlags["wakeSupport"])
     summary["open"] = openSummary(db, mouseId)
     drops = db.execute("select session, fromPercent, minutesPerPercent from steps where mouseId = ? and kind = 0 and unbroken = 1 and fromPercent <= 80 and toPercent >= 20 order by at, seq", (mouseId,)).fetchall()
     sizes = [moved for (moved,) in db.execute("select fromPercent - toPercent from steps where mouseId = ? and kind = 0 order by at desc, seq desc limit ?", (mouseId, LARGE_STEP_COUNT))]
