@@ -10,6 +10,10 @@ INTERFACE = "io.github.kymotsujason.LogitechMouseBattery1"
 # the errors a ReadAll gets when its account's budget is spent, and when the bus can't say which account sent it
 READ_ALL_LIMITED = "org.freedesktop.DBus.Error.LimitsExceeded"
 CALLER_UNKNOWN = "io.github.kymotsujason.LogitechMouseBattery1.Error.UnknownCaller"
+HISTORY_UNAVAILABLE = "io.github.kymotsujason.LogitechMouseBattery1.Error.HistoryUnavailable"
+# a 1.1.1 service answers a method it doesn't have with the first, and a bus still on the 1.1.1 policy turns it away with the second
+UNKNOWN_METHOD = "org.freedesktop.DBus.Error.UnknownMethod"
+ACCESS_DENIED = "org.freedesktop.DBus.Error.AccessDenied"
 # an account whose reads ran out has one again after this long, which the tray waits before asking again
 READ_ALL_REFILL_SECONDS = 30
 STATE_VERSION = 1
@@ -27,6 +31,10 @@ class ServiceEntry:
     asleep: bool
     lastRead: float | None
     wokeAt: float | None
+    # these came in 1.2.0, so a state from a 1.1.1 service leaves them at these defaults
+    reportsItself: bool = False
+    wakeSupport: bool = False
+    historyRevision: int = 0
 
 
 @dataclass(frozen=True)
@@ -57,6 +65,10 @@ def entryFields(mouse):
         "asleep": mouse.asleep,
         "lastRead": wholeSeconds(mouse.lastRead),
         "wokeAt": wholeSeconds(mouse.wokeAt),
+        "power": None if reading is None else reading.power,
+        "reportsItself": mouse.reportsItself,
+        "wakeSupport": mouse.wakeIndex is not None,
+        "historyRevision": mouse.historyRevision,
     }
 
 
@@ -111,8 +123,10 @@ def decodeEntry(fields):
     if (fields["charging"] is not None):
         if (not isReading(fields)):
             return None
-        reading = hidpp.BatteryReading(fields["percent"], fields["charging"], fields["millivolts"], fields["level"])
-    return ServiceEntry(fields["key"], fields["pathKey"], fields["name"], fields["source"], reading, fields["asleep"], fields["lastRead"], fields["wokeAt"])
+        power = fields.get("power")
+        reading = hidpp.BatteryReading(fields["percent"], fields["charging"], fields["millivolts"], fields["level"], power if isCount(power) else None)
+    revision = fields.get("historyRevision")
+    return ServiceEntry(fields["key"], fields["pathKey"], fields["name"], fields["source"], reading, fields["asleep"], fields["lastRead"], fields["wokeAt"], fields.get("reportsItself") is True, fields.get("wakeSupport") is True, revision if isCount(revision) else 0)
 
 
 def decodeState(text):

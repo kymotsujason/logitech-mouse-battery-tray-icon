@@ -19,6 +19,9 @@ class FakeMouse:
         self.asleep = asleep
         self.lastRead = lastRead
         self.wokeAt = wokeAt
+        self.reportsItself = False
+        self.wakeIndex = None
+        self.historyRevision = 0
 
 
 class FakeList:
@@ -129,3 +132,27 @@ class StateTests(unittest.TestCase):
 
 if (__name__ == "__main__"):
     unittest.main()
+
+
+class NewFieldTests(unittest.TestCase):
+    def testTheNewFieldsRoundTrip(self):
+        mouse = FakeMouse("02bc524c", "/dev/hidraw4", hidpp.BatteryReading(22, 1, power=2), lastRead=1790000000.0)
+        mouse.reportsItself = True
+        mouse.wakeIndex = 23
+        mouse.historyRevision = 7
+        entry = serviceState.decodeState(serviceState.encodeState(FakeList([mouse], ["/dev/hidraw4"], []))).mice[0]
+        self.assertEqual((entry.reading, entry.reportsItself, entry.wakeSupport, entry.historyRevision), (hidpp.BatteryReading(22, 1, power=2), True, True, 7))
+
+    def testAStateFromA111ServiceGetsTheDefaults(self):
+        entry = serviceState.decodeState(EXAMPLE).mice[0]
+        self.assertEqual((entry.reading.power, entry.reportsItself, entry.wakeSupport, entry.historyRevision), (None, False, False, 0))
+
+    def testANewFieldOfTheWrongTypeReadsAsItsDefault(self):
+        def change(fields):
+            fields["mice"][0].update({"power": "2", "reportsItself": 1, "wakeSupport": "yes", "historyRevision": True})
+        entry = serviceState.decodeState(exampleWith(change)).mice[0]
+        self.assertEqual((entry.reading.power, entry.reportsItself, entry.wakeSupport, entry.historyRevision), (None, False, False, 0))
+
+    def testTheNewFieldsStayOutOfTheRequiredKeys(self):
+        # a 1.1.1 tray checks every required key, so a 1.2.0 field there would make it turn every state away
+        self.assertEqual(serviceState.ENTRY_KEYS, ("key", "pathKey", "name", "source", "percent", "charging", "millivolts", "level", "asleep", "lastRead", "wokeAt"))

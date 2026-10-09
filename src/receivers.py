@@ -179,6 +179,10 @@ class ReceiverMouse:
         self.batteryEventAt = None
         self.wakeTimer = None
         self.errorRetries = 0
+        # the wireless status feature's index from the latest identify, which makes its events wakes
+        self.wakeIndex = None
+        self.reportsItself = False
+        self.historyRevision = 0
 
 
 class NodeState:
