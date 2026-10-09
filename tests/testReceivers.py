@@ -1768,6 +1768,13 @@ class ReceiverHistoryTests(unittest.TestCase):
         self.identifyAgainWith(receiver, lambda request: [reply(request, [0])])
         self.assertEqual((self.mouse().wakeIndex, self.recorder.entries[self.mouse().key].track.wakeSupport, self.savedWakeSupport()), (None, False, 0))
 
+    def testALookupThatFoundNoFeatureStandsWhenALaterOneFails(self):
+        receiver = self.start(mouseHandler())
+        entry = self.recorder.entries[self.mouse().key]
+        self.assertEqual((self.mouse().wakeIndex, self.mouse().wakeLookupDue), (None, False))
+        self.identifyAgainWith(receiver, lambda request: [deviceError(request)])
+        self.assertEqual((self.mouse().wakeIndex, self.mouse().wakeLookupDue, entry.track.wakesUnseen, self.savedWakeSupport()), (None, False, False, 0))
+
     def testAnIdentifyOutOfBudgetKeepsTheKnownIndex(self):
         self.start()
         state = self.mice.nodes[RECEIVER]

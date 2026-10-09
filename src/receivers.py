@@ -184,6 +184,8 @@ class ReceiverMouse:
         self.errorRetries = 0
         # the wireless status feature's index from the latest identify, which makes its events wakes
         self.wakeIndex = None
+        # a lookup answered, so a wakeIndex of None means the mouse has no such feature
+        self.wakeAnswered = False
         # a unit id's mouse whose lookup didn't answer, so its next read or battery event asks again
         self.wakeLookupDue = False
         self.reportsItself = False
@@ -658,13 +660,14 @@ class ReceiverList(QObject):
         mouse.nodePath = path
         mouse.slot = found.slot
         mouse.feature = found.feature
-        # a unit id's feature index doesn't change, so a lookup that didn't answer keeps the one it had, while a slot key may now hold another device
+        # a unit id's feature index doesn't change, so a lookup that didn't answer keeps what the last one that answered found, while a slot key may now hold another device
         if (found.wakeAnswered or not found.unitId):
             mouse.wakeIndex = found.wakeIndex
+            mouse.wakeAnswered = found.wakeAnswered
             mouse.wakeLookupDue = False
             supported = mouse.wakeIndex is not None
-        elif (mouse.wakeIndex is not None):
-            supported = True
+        elif (mouse.wakeAnswered):
+            supported = mouse.wakeIndex is not None
         else:
             # nothing says the mouse lacks the feature, so its saved flag stands until a lookup answers
             mouse.wakeLookupDue = True
@@ -781,6 +784,7 @@ class ReceiverList(QObject):
         if (mouse is None or not mouse.wakeLookupDue or not answered):
             return
         mouse.wakeIndex = wakeIndex
+        mouse.wakeAnswered = True
         mouse.wakeLookupDue = False
         self.recorder.setWakeSupport(mouse.key, wakeIndex is not None, pathKey=mouse.pathKey)
 
