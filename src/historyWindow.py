@@ -316,9 +316,8 @@ class ChoiceMenu(QWidget):
         top = min(max(top, CHOICE_MARGIN), self.height() - CHOICE_MARGIN - height)
         left = min(max(anchor.right() - width, CHOICE_MARGIN), self.width() - CHOICE_MARGIN - width)
         self.panel = QRectF(left, top, width, height)
-        under = self.rowAt(anchor.center())
-        if (under is not None and under != self.marked):
-            # kept inside the window the panel put another choice under the button, where a second click would pick it, so it opens above the button instead
+        if (any(index != self.marked and self.rowRect(index).intersects(anchor) for index in range(len(choices)))):
+            # kept inside the window the panel put another choice under part of the button, where a second click would pick it, so it opens above the button instead
             self.panel.moveBottom(max(anchor.top() - CHOICE_GAP, CHOICE_MARGIN + height))
         self.show()
         self.raise_()

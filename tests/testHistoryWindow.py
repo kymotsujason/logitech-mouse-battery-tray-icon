@@ -8,7 +8,7 @@ from unittest import mock
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 from PyQt6 import sip
-from PyQt6.QtCore import QAbstractAnimation, QObject, QPoint, QPointF, QRectF, Qt, pyqtSignal
+from PyQt6.QtCore import QAbstractAnimation, QObject, QPoint, QPointF, QRectF, QSizeF, Qt, pyqtSignal
 from PyQt6.QtDBus import QDBusVariant
 from PyQt6.QtGui import QColor, QPalette
 from PyQt6.QtTest import QTest
@@ -806,8 +806,14 @@ class WindowTests(WindowCase):
     def testOnlyTheMarkedChoiceEverSitsUnderTheButton(self):
         for seconds, name in historyWindow.SLEEP_CHOICES:
             window, menu = self.openMenu(seconds)
-            under = menu.rowAt(QPointF(menu.mapFrom(window, self.buttonCenter(window))))
-            self.assertIn(under, (None, menu.marked), name)
+            button = QRectF(QPointF(window.popup.mapTo(window, QPoint(0, 0))), QSizeF(window.popup.size()))
+            x = button.center().x()
+            for y in (button.top() + 0.5, button.center().y(), button.bottom() - 0.5):
+                under = menu.rowAt(QPointF(menu.mapFrom(window, QPointF(x, y).toPoint())))
+                self.assertIn(under, (None, menu.marked), (name, y))
+            for index in range(len(menu.choices)):
+                if (index != menu.marked):
+                    self.assertFalse(menu.rowRect(index).intersects(button), (name, index))
             self.assertTrue(QRectF(menu.rect()).contains(menu.panel), name)
             QTest.keyClick(menu, Qt.Key.Key_Escape)
 
