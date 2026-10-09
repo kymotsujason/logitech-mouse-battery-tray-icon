@@ -23,7 +23,7 @@ import mice
 import serviceClient
 import serviceState
 import version
-from tests import testHistory
+from tests import testHistory, testReplay
 from tests.fakes.privateBus import FAKES, PrivateBus, requireTools
 
 app = QApplication.instance() or QApplication([])
@@ -682,6 +682,22 @@ class DecodeTests(testHistory.RecorderCase):
         self.assertIsNotNone(decoded)
         self.assertEqual(decoded["version"], history.HISTORY_VERSION)
         self.assertTrue(health.assess(decoded, hidpp.BatteryReading(60, 0), testHistory.START + 3600).lines)
+
+    def testADecodedSummaryWithSessionsIsAssessedLikeTheRawOne(self):
+        folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, folder)
+        with mock.patch.object(sys, "stderr", io.StringIO()):
+            raw = testReplay.Replay(folder).run(14)
+        self.assertGreater(len(raw["monthly"]), 0)
+        decoded = serviceClient.historyFrom(self.replyOf(raw), testReplay.KEY)
+        self.assertIsNotNone(decoded)
+        now = testReplay.START + 14 * testReplay.DAY
+        reading = hidpp.BatteryReading(60, 0)
+        want = health.assess(raw, reading, now)
+        got = health.assess(decoded, reading, now)
+        self.assertGreater(want.cycles, 0)
+        self.assertTrue(want.hoursPerCharge)
+        self.assertEqual(got, want)
 
     def testAnotherHistoryVersionDoesntDecode(self):
         self.event(0, 62)
