@@ -23,6 +23,7 @@ import autostart
 import dbusCalls
 import exceptionHooks
 import hidpp
+import historyWindow
 import installWatch
 import lowBattery
 import mice
@@ -714,6 +715,24 @@ class AppTests(unittest.TestCase):
         again = self.makeApp(True)
         again.showHistory()
         self.assertEqual(again.historyWindow.levelRange, "year")
+
+    def testAFailedSleepCheckSaveSaysSoAndStillAppliesTheChoice(self):
+        mouseApp = self.makeApp(True)
+        mouseApp.showHistory()
+        errors = io.StringIO()
+        with mock.patch.object(settings, "saveSleepCheck", return_value=False), contextlib.redirect_stderr(errors):
+            mouseApp.historyWindow.popup.pick(60)
+        self.assertEqual(errors.getvalue(), "Couldn't save the sleep check setting to " + settings.settingsPath(self.temp.name) + "\n")
+        self.assertEqual((mouseApp.mouseList.sleepCheckSeconds, mouseApp.historyWindow.popup.seconds), (60, 60))
+
+    def testAFailedRangeSaveSaysSoAndKeepsThePickedRange(self):
+        mouseApp = self.makeApp(True)
+        mouseApp.showHistory()
+        errors = io.StringIO()
+        with mock.patch.object(settings, "saveLevelRange", return_value=False), contextlib.redirect_stderr(errors):
+            mouseApp.historyWindow.pickRange("year")
+        self.assertEqual(errors.getvalue(), "Couldn't save the chart's range to " + settings.settingsPath(self.temp.name) + "\n")
+        self.assertEqual((mouseApp.historyWindow.levelRange, mouseApp.historyWindow.rangeControl.index), ("year", historyWindow.RANGE_NAMES.index("year")))
 
     def testAnUpdateKeepsAnOpenWindowOpen(self):
         mouseApp = self.makeApp(True)
