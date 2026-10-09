@@ -9,6 +9,7 @@ import traceback
 from PyQt6.QtCore import QFileSystemWatcher, QObject, QTimer, pyqtSignal
 
 import hidpp
+import history
 from exceptionHooks import printLine
 
 WAKE_RETRY_MS = 6 * 1000
@@ -213,8 +214,11 @@ class ReceiverList(QObject):
     changed = pyqtSignal()
     message = pyqtSignal(object)
 
-    def __init__(self):
+    def __init__(self, recorder=None):
         super().__init__()
+        # with no history folder the recorder still keeps its rules in memory, which is where reports on its own comes from
+        self.recorder = recorder if recorder is not None else history.Recorder(None)
+        self.recorder.changed.connect(self.onHistoryChanged)
         self.nodes = {}
         self.denied = set()
         self.deniedSignatures = {}
@@ -236,6 +240,9 @@ class ReceiverList(QObject):
         self.settleSince = None
         self.readAllTimer = singleShotTimer(self, READ_ALL_GAP_MS, self.runReadAll)
         self.lastReadAll = None
+        # a silent read has its own queue, so a full read asked for while one waits still runs in full
+        self.readSilentTimer = singleShotTimer(self, READ_ALL_GAP_MS, self.runReadSilent)
+        self.lastReadSilent = None
         self.lastReadAllSearch = None
         self.devWatcher = QFileSystemWatcher(["/dev"], self)
         self.devWatcher.directoryChanged.connect(self.onDevChanged)
@@ -245,7 +252,7 @@ class ReceiverList(QObject):
 
     def stop(self):
         self.stopped = True
-        for timer in (self.deniedTimer, self.settleTimer, self.readAllTimer):
+        for timer in (self.deniedTimer, self.settleTimer, self.readAllTimer, self.readSilentTimer):
             timer.stop()
         self.closeNodes(list(self.nodes))
 
@@ -277,6 +284,26 @@ class ReceiverList(QObject):
         self.lastReadAll = time.monotonic()
         self.readAll()
         self.searchNodesWithoutMice()
+
+    def isReadSilentQueued(self):
+        return self.readSilentTimer.isActive()
+
+    def requestReadSilent(self):
+        if (self.isReadSilentQueued()):
+            return
+        gap = READ_ALL_GAP_MS / 1000
+        now = time.monotonic()
+        if (self.lastReadSilent is not None and now - self.lastReadSilent < gap):
+            self.readSilentTimer.start(max(1, int((self.lastReadSilent + gap - now) * 1000)))
+            return
+        self.runReadSilent()
+
+    def runReadSilent(self):
+        self.lastReadSilent = time.monotonic()
+        # a mouse that reports each step on its own needs no timed read
+        for mouse in self.mice:
+            if (mouse.nodePath is not None and not self.recorder.reportsItself(mouse.key)):
+                self.readMouse(mouse)
 
     def searchNodesWithoutMice(self):
         now = time.monotonic()
@@ -605,6 +632,7 @@ class ReceiverList(QObject):
                 self.removeMouse(other)
         # a slot that turns out to hold a mouse can't stay skipped
         state.skipped.discard(found.slot)
+        isNew = all(other.key != key for other in self.mice)
         mouse = self.mouseFor(key, pathKey=not found.unitId)
         moved = (mouse.nodePath != path or mouse.slot != found.slot)
         if (moved):
@@ -614,6 +642,11 @@ class ReceiverList(QObject):
         mouse.nodePath = path
         mouse.slot = found.slot
         mouse.feature = found.feature
+        mouse.wakeIndex = found.wakeIndex
+        self.recorder.setWakeSupport(key, found.wakeIndex is not None, pathKey=mouse.pathKey)
+        # the service may have missed something before a mouse it hadn't seen, one that moved, or one whose link came back
+        if (isNew or moved or linkUp):
+            self.recorder.addMarker(key, history.ORIGIN_GAP, pathKey=mouse.pathKey)
         reading = found.reading
         if (found.outcome == hidpp.ANSWER and found.readAt is not None and mouse.batteryEventAt is not None and mouse.batteryEventAt > found.readAt and mouse.reading is not None):
             # a battery event the worker read after this reading has already reached the mouse, so the older reading doesn't replace it
@@ -635,6 +668,8 @@ class ReceiverList(QObject):
         return None
 
     def removeMouse(self, mouse):
+        if (mouse in self.mice):
+            self.recorder.addMarker(mouse.key, history.ORIGIN_GAP, pathKey=mouse.pathKey)
         if (mouse.wakeTimer is not None):
             mouse.wakeTimer.stop()
             mouse.wakeTimer.deleteLater()
@@ -642,17 +677,38 @@ class ReceiverList(QObject):
         if (mouse in self.mice):
             self.mice.remove(mouse)
 
-    def applyReading(self, mouse, reading, woke=False):
+    def applyReading(self, mouse, reading, woke=False, origin=history.ORIGIN_READ):
         now = time.time()
         mouse.errorRetries = 0
         if (reading is None):
-            mouse.asleep = True
+            self.markAsleep(mouse)
             return
         if (woke or mouse.asleep or mouse.reading is None):
             mouse.wokeAt = now
         mouse.reading = reading
         mouse.asleep = False
         mouse.lastRead = now
+        self.recorder.addReading(mouse.key, reading, origin, name=mouse.name, pathKey=mouse.pathKey)
+        mouse.reportsItself = self.recorder.reportsItself(mouse.key)
+
+    def markAsleep(self, mouse):
+        # a mouse already marked asleep adds no more rows, so a switched off mouse under timed reads adds nothing
+        if (not mouse.asleep):
+            self.recorder.addMarker(mouse.key, history.ORIGIN_ASLEEP, pathKey=mouse.pathKey)
+        mouse.asleep = True
+
+    def markWake(self, mouse):
+        self.recorder.addMarker(mouse.key, history.ORIGIN_WAKE, pathKey=mouse.pathKey)
+        mouse.wokeAt = time.time()
+
+    def onHistoryChanged(self, key):
+        for mouse in self.mice:
+            if (mouse.key == key):
+                before = (mouse.historyRevision, mouse.reportsItself)
+                mouse.historyRevision = self.recorder.revision(key)
+                mouse.reportsItself = self.recorder.reportsItself(key)
+                if ((mouse.historyRevision, mouse.reportsItself) != before):
+                    self.changed.emit()
 
     def applyOutcome(self, mouse, outcome, reading, queuedAt, woke=False):
         if (outcome == hidpp.ANSWER):
@@ -805,17 +861,26 @@ class ReceiverList(QObject):
 
     def onMouseReport(self, state, mouse, report, receivedAt):
         mouse.errorRetries = 0
-        kind, reading = hidpp.parseEvent(report, mouse.feature)
-        before = (mouse.reading, mouse.asleep, mouse.lastRead)
+        kind, reading = hidpp.parseEvent(report, mouse.feature, mouse.wakeIndex)
+        before = (mouse.reading, mouse.asleep, mouse.lastRead, mouse.wokeAt)
         if (kind == hidpp.EVENT_BATTERY):
             mouse.batteryEventAt = receivedAt
-            self.applyReading(mouse, reading)
+            self.applyReading(mouse, reading, origin=history.ORIGIN_EVENT)
         elif (kind == hidpp.EVENT_LINK_DOWN):
-            mouse.asleep = True
+            self.markAsleep(mouse)
         elif (kind == hidpp.EVENT_LINK_UP):
+            self.markWake(mouse)
             self.requestIdentify(state, mouse.slot)
+        elif (kind == hidpp.EVENT_WAKE):
+            # the wireless status event is a wake whatever the service thought, and the battery event in the same wake set carries the level, so only a mouse marked asleep is read
+            self.markWake(mouse)
+            if (mouse.asleep):
+                self.onWake(mouse)
         elif (kind == hidpp.EVENT_OTHER and mouse.asleep):
+            # a mouse without the wireless status feature keeps the old rule, where any report while asleep is a wake
+            if (mouse.wakeIndex is None):
+                self.markWake(mouse)
             self.onWake(mouse)
         # most reports from an awake mouse change nothing, while a battery report that repeats its reading still moves lastRead, which the tray needs to tell which path read last
-        if ((mouse.reading, mouse.asleep, mouse.lastRead) != before):
+        if ((mouse.reading, mouse.asleep, mouse.lastRead, mouse.wokeAt) != before):
             self.changed.emit()

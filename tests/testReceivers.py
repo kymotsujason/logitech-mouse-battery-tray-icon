@@ -3,6 +3,7 @@ import io
 import os
 import queue
 import shutil
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -18,6 +19,7 @@ from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
 
 import hidpp
+import history
 import receivers
 from tests.fakes.fakeDevice import NAME, FakeDevice, FakeNodes, mouseHandler, reply
 
@@ -1650,3 +1652,162 @@ class ReceiverListTests(unittest.TestCase):
 
 if (__name__ == "__main__"):
     unittest.main()
+
+
+WIRELESS_FEATURES = {0x0003: 3, 0x0005: 2, 0x1004: 5, 0x1D4B: 23}
+WAKE_REPORT = bytes([0x11, 1, 23, 0x00, 1, 1, 1]).ljust(20, b"\x00")
+LINK_DOWN = bytes([0x10, 1, 0x41, 0x10, 0x40, 0x00, 0x00])
+
+
+class ReceiverHistoryTests(unittest.TestCase):
+    def setUp(self):
+        self.nodes = FakeNodes()
+        self.errors = io.StringIO()
+        self.folder = tempfile.mkdtemp()
+        self.patches = [
+            mock.patch.object(hidpp, "findHidppNodes", self.nodes.find),
+            mock.patch.object(hidpp.HidppNode, "open", self.nodes.open),
+            mock.patch.object(receivers, "nodeSignature", self.nodes.signature),
+            mock.patch.object(hidpp, "PING_TIMEOUT", 0.2),
+            mock.patch.object(hidpp, "REQUEST_TIMEOUT", 0.1),
+            mock.patch.object(receivers, "WAKE_RETRY_MS", 300),
+            mock.patch.object(receivers, "SETTLE_MS", 10),
+            mock.patch.object(receivers, "READ_ALL_GAP_MS", 300),
+            mock.patch.object(sys, "stderr", self.errors),
+        ]
+        for patch in self.patches:
+            patch.start()
+        self.recorder = history.Recorder(self.folder, timers=False)
+        self.mice = receivers.ReceiverList(self.recorder)
+
+    def tearDown(self):
+        self.mice.stop()
+        self.recorder.stop()
+        for patch in self.patches:
+            patch.stop()
+        self.nodes.closeAll()
+        sip.delete(self.mice)
+        shutil.rmtree(self.folder)
+
+    def mouse(self):
+        return self.mice.mice[0] if self.mice.mice else None
+
+    def origins(self):
+        # stop writes every reading still waiting out the wake set and the hold, so the rows are all there
+        self.recorder.stop()
+        with sqlite3.connect(os.path.join(self.folder, history.FILE_NAME)) as db:
+            return [origin for (origin,) in db.execute("select origin from readings order by at, seq")]
+
+    def start(self, handler=None):
+        receiver = self.nodes.add(RECEIVER, handler or mouseHandler(features=WIRELESS_FEATURES))
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: self.mouse() is not None and not self.mice.isBusy()))
+        return receiver
+
+    def settle(self):
+        # a reading within 2 s of a wake counts as part of its wake set, so the first reading is let through before a test sends one
+        shift = history.WAKE_SET_SECONDS + 1 + (self.recorder.clock() - time.time())
+        self.recorder.clock = lambda: time.time() + shift
+        self.recorder.tick()
+
+    def testTheFirstRegistrationWritesAGapBeforeItsReading(self):
+        self.start()
+        self.assertEqual(self.origins(), [history.ORIGIN_GAP, history.ORIGIN_READ])
+
+    def testTheWirelessStatusIndexReachesTheMouseAndTheRecorder(self):
+        self.start()
+        self.assertEqual(self.mouse().wakeIndex, 23)
+        self.assertTrue(self.recorder.entries[self.mouse().key].track.wakeSupport)
+
+    def testAWirelessStatusEventIsAWakeWhileAwakeWithoutARead(self):
+        receiver = self.start()
+        self.settle()
+        before = batteryReads(receiver)
+        receiver.send(WAKE_REPORT)
+        QTest.qWait(300)
+        self.assertEqual(batteryReads(receiver), before)
+        self.assertEqual(self.origins()[-1], history.ORIGIN_WAKE)
+
+    def testAWirelessStatusEventReadsAMouseMarkedAsleep(self):
+        receiver = self.start()
+        self.mouse().asleep = True
+        before = batteryReads(receiver)
+        receiver.send(WAKE_REPORT)
+        self.assertTrue(waitUntil(lambda: batteryReads(receiver) > before))
+
+    def testAMouseWithoutTheFeatureKeepsTheOldWakeRule(self):
+        receiver = self.start(mouseHandler())
+        self.assertIsNone(self.mouse().wakeIndex)
+        self.mouse().asleep = True
+        before = batteryReads(receiver)
+        receiver.send(OTHER_REPORT)
+        self.assertTrue(waitUntil(lambda: batteryReads(receiver) > before))
+        self.assertIn(history.ORIGIN_WAKE, self.origins())
+
+    def testALinkUpWritesItsWakeThenTheIdentifysGap(self):
+        receiver = self.start()
+        self.settle()
+        receiver.send(LINK_UP)
+        self.assertTrue(waitUntil(lambda: not self.mice.isBusy() and self.mice.nodes[RECEIVER].identifiedAt))
+        QTest.qWait(200)
+        origins = self.origins()
+        self.assertEqual(origins[2:4], [history.ORIGIN_WAKE, history.ORIGIN_GAP])
+
+    def testALinkDownMarksTheMouseAsleepOnce(self):
+        receiver = self.start()
+        receiver.send(LINK_DOWN)
+        receiver.send(LINK_DOWN)
+        self.assertTrue(waitUntil(lambda: self.mouse().asleep))
+        QTest.qWait(200)
+        self.assertEqual(self.origins().count(history.ORIGIN_ASLEEP), 1)
+
+    def testAReadWithNoAnswerMarksTheMouseAsleepOnce(self):
+        receiver = self.start()
+        receiver.handler = silent
+        self.mice.readAll()
+        self.assertTrue(waitUntil(lambda: self.mouse().asleep))
+        self.mice.readAll()
+        QTest.qWait(400)
+        self.assertEqual(self.origins().count(history.ORIGIN_ASLEEP), 1)
+
+    def testABatteryEventIsSavedAsAnEvent(self):
+        receiver = self.start()
+        receiver.send(bytes([0x11, 1, 5, 0x00, 64, 0x04, 0, 0]).ljust(20, b"\x00"))
+        self.assertTrue(waitUntil(lambda: self.mouse().reading.percent == 64))
+        self.assertEqual(self.origins()[-1], history.ORIGIN_EVENT)
+
+    def testUnpluggingTheReceiverWritesAGap(self):
+        self.start()
+        self.nodes.remove(RECEIVER)
+        self.assertTrue(waitUntil(lambda: not self.mice.mice))
+        self.assertEqual(self.origins()[-1], history.ORIGIN_GAP)
+
+    def testASavedRowMovesTheMousesRevision(self):
+        self.start()
+        changes = []
+        self.mice.changed.connect(lambda: changes.append(1))
+        self.recorder.tick()
+        self.recorder.clock = lambda: time.time() + 60
+        self.recorder.tick()
+        self.assertTrue(waitUntil(lambda: self.mouse().historyRevision >= 2))
+        self.assertTrue(changes)
+
+    def testReadSilentSkipsAMouseThatReportsItself(self):
+        receiver = self.start()
+        before = batteryReads(receiver)
+        with mock.patch.object(self.recorder, "reportsItself", lambda key: True):
+            self.mice.requestReadSilent()
+            QTest.qWait(300)
+        self.assertEqual(batteryReads(receiver), before)
+        self.mice.requestReadSilent()
+        self.assertTrue(waitUntil(lambda: batteryReads(receiver) > before))
+
+    def testAReadAllWhileAReadSilentWaitsStillRunsInFull(self):
+        receiver = self.start()
+        self.mice.requestReadSilent()
+        self.mice.requestReadSilent()
+        self.assertTrue(self.mice.isReadSilentQueued())
+        with mock.patch.object(self.mice, "searchNodesWithoutMice") as search:
+            self.mice.lastReadAll = None
+            self.mice.requestReadAll()
+            search.assert_called_once()
