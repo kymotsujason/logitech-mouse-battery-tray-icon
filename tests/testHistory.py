@@ -166,6 +166,7 @@ class StoreTests(RecorderCase):
             tables = {name for (name,) in db.execute("select name from sqlite_master where type = 'table'")}
         self.assertEqual(tables, {"mice", "readings", "steps", "sessions"})
 
+    @unittest.skipUnless(sys.version_info >= (3, 13), "sqlite3 warns about unclosed connections only from Python 3.13")
     def testTheHelpersCloseTheirConnections(self):
         self.event(0, 50)
         with warnings.catch_warnings(record=True) as caught:

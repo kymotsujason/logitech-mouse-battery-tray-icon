@@ -132,6 +132,7 @@ class ReplayTests(unittest.TestCase):
     def lines(self, summary):
         return [line.kind for line in health.assess(summary, hidpp.BatteryReading(100, 0), START + 130 * DAY).lines]
 
+    @unittest.skipUnless(sys.version_info >= (3, 13), "sqlite3 warns about unclosed connections only from Python 3.13")
     def testAReplayLeavesNoDatabaseConnectionOpen(self):
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
