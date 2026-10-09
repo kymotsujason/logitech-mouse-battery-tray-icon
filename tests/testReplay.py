@@ -32,18 +32,32 @@ def minutesAt(percent):
 
 
 class Clock:
+    # the wall clock the replay sets, and a monotonic one that moves forward with it
     def __init__(self):
-        self.now = START
+        self.wall = START
+        self.steady = 0.0
+
+    @property
+    def now(self):
+        return self.wall
+
+    @now.setter
+    def now(self, value):
+        self.steady += max(0, value - self.wall)
+        self.wall = value
 
     def __call__(self):
-        return self.now
+        return self.wall
+
+    def monotonic(self):
+        return self.steady
 
 
 class Replay:
     # a mouse used in three hour blocks with a rest long enough to sleep every 25 minutes, charged on a pad from 10% to full
     def __init__(self, folder, rate=lambda day, session: 1.0):
         self.clock = Clock()
-        self.recorder = history.Recorder(folder, self.clock, timers=False)
+        self.recorder = history.Recorder(folder, self.clock, timers=False, monotonic=self.clock.monotonic)
         self.recorder.setWakeSupport(KEY, True)
         self.rate = rate
         self.percent = 100

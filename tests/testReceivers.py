@@ -1708,7 +1708,9 @@ class ReceiverHistoryTests(unittest.TestCase):
     def settle(self):
         # a reading within 2 s of a wake counts as part of its wake set, so the first reading is let through before a test sends one
         shift = history.WAKE_SET_SECONDS + 1 + (self.recorder.clock() - time.time())
+        steadyShift = history.WAKE_SET_SECONDS + 1 + (self.recorder.monotonic() - time.monotonic())
         self.recorder.clock = lambda: time.time() + shift
+        self.recorder.monotonic = lambda: time.monotonic() + steadyShift
         self.recorder.tick()
 
     def testTheFirstRegistrationWritesAGapBeforeItsReading(self):
@@ -1873,6 +1875,7 @@ class ReceiverHistoryTests(unittest.TestCase):
         self.mice.changed.connect(lambda: changes.append(1))
         self.recorder.tick()
         self.recorder.clock = lambda: time.time() + 60
+        self.recorder.monotonic = lambda: time.monotonic() + 60
         self.recorder.tick()
         self.assertTrue(waitUntil(lambda: self.mouse().historyRevision >= 2))
         self.assertTrue(changes)

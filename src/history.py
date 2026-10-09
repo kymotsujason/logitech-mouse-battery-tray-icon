@@ -18,8 +18,6 @@ INTEGRITY_FLAG = "history.check-integrity"
 SCHEMA_VERSION = 1
 OPEN_RETRY_SECONDS = 600
 HOLD_SECONDS = 10
-# a clock that stepped back would otherwise make a wait no timer can hold, so the timer looks again at least this often
-LONGEST_WAIT_SECONDS = 2 * 60 * 60
 # the probe saw a wake's battery event come with or after its wireless status event, but only on two wakes, so a reading this close before a wake counts as part of it
 WAKE_SET_SECONDS = 2
 MILLIVOLT_STEP = 20
@@ -104,12 +102,12 @@ class Row:
     charging: int | None = None
     power: int | None = None
     millivolts: int | None = None
-    # the moment a reading came in, which the wake set's 2 s are counted from, while at is cut to whole seconds for the table
+    # the monotonic moment a row came in, which the wake set and the hold count from, so a wall clock that steps back can't hold them up
     arrived: float | None = field(default=None, compare=False)
 
 
-def readingRow(reading, origin, at):
-    return Row(int(at), origin, reading.percent, reading.level, reading.charging, reading.power, reading.millivolts, at)
+def readingRow(reading, origin, at, arrived):
+    return Row(int(at), origin, reading.percent, reading.level, reading.charging, reading.power, reading.millivolts, arrived)
 
 
 def differs(row, saved):
@@ -132,9 +130,10 @@ def changesCodeOrPower(row, saved):
 
 
 class Store:
-    def __init__(self, folder, clock=time.time):
+    def __init__(self, folder, clock=time.time, monotonic=time.monotonic):
         self.folder = folder
         self.clock = clock
+        self.monotonic = monotonic
         self.db = None
         self.tooNew = False
         # corruption found during a run serves no history until the next start, when the full check runs
@@ -173,7 +172,7 @@ class Store:
             return True
         if (self.neverOpens()):
             return False
-        now = self.clock()
+        now = self.monotonic()
         if (self.lastAttempt is not None and now - self.lastAttempt < OPEN_RETRY_SECONDS):
             return False
         self.lastAttempt = now
@@ -594,10 +593,12 @@ class MouseEntry:
 class Recorder(QObject):
     changed = pyqtSignal(str)
 
-    def __init__(self, folder=None, clock=time.time, timers=True):
+    def __init__(self, folder=None, clock=time.time, timers=True, monotonic=time.monotonic):
         super().__init__()
-        self.store = Store(folder, clock) if folder is not None else None
+        self.store = Store(folder, clock, monotonic) if folder is not None else None
+        # the wall clock dates the rows, while every wait runs on the monotonic one
         self.clock = clock
+        self.monotonic = monotonic
         self.entries = {}
         self.timer = None
         if (timers):
@@ -731,7 +732,7 @@ class Recorder(QObject):
         if (name and name != entry.name):
             entry.name = name
             entry.nameChanged = True
-        row = readingRow(reading, origin, at)
+        row = readingRow(reading, origin, at, self.monotonic())
         if (origin == ORIGIN_READ):
             self.checkMissedStep(entry, row)
         entry.latest = row
@@ -770,12 +771,12 @@ class Recorder(QObject):
         self.saveFlags(entry)
 
     def addMarker(self, key, origin, source=SOURCE_HIDPP, pathKey=False, at=None):
-        arrived = self.clock() if at is None else at
-        at = int(arrived)
+        at = int(self.clock() if at is None else at)
+        arrived = self.monotonic()
         entry = self.entryFor(key, pathKey)
         if (not self.claim(entry, source)):
             return
-        marker = Row(at, origin)
+        marker = Row(at, origin, arrived=arrived)
         if (origin == ORIGIN_WAKE):
             early = [row for row in entry.pending if row.arrived < arrived - WAKE_SET_SECONDS]
             late = [row for row in entry.pending if row.arrived >= arrived - WAKE_SET_SECONDS]
@@ -789,12 +790,12 @@ class Recorder(QObject):
         self.write(entry, marker)
         # a reading this close before the wake belongs to the wake set, so it goes in after the wake row and at its time
         for row in late:
-            self.process(entry, Row(at, row.origin, row.percent, row.level, row.charging, row.power, row.millivolts))
+            self.process(entry, Row(at, row.origin, row.percent, row.level, row.charging, row.power, row.millivolts, row.arrived))
         entry.latestBroken = True
         self.schedule()
 
     def tick(self):
-        now = self.clock()
+        now = self.monotonic()
         for entry in list(self.entries.values()):
             while (entry.pending and entry.pending[0].arrived <= now - WAKE_SET_SECONDS):
                 self.process(entry, entry.pending.pop(0))
@@ -814,7 +815,7 @@ class Recorder(QObject):
         if (not due):
             self.timer.stop()
             return
-        wait = min(min(due) - self.clock(), LONGEST_WAIT_SECONDS)
+        wait = min(due) - self.monotonic()
         self.timer.start(max(1, int(wait * 1000) + 1))
 
     def stop(self):
@@ -848,7 +849,7 @@ class Recorder(QObject):
             return
         if (not differs(row, saved)):
             return
-        if (changesCodeOrPower(row, saved) or entry.lastWriteAt is None or row.at - entry.lastWriteAt >= HOLD_SECONDS):
+        if (changesCodeOrPower(row, saved) or entry.lastWriteAt is None or row.arrived - entry.lastWriteAt >= HOLD_SECONDS):
             self.write(entry, row)
             return
         entry.held = row
@@ -951,7 +952,7 @@ class Recorder(QObject):
             entry.pendingFlags = {}
             entry.track = track
             entry.revision += 1
-            entry.lastWriteAt = row.at
+            entry.lastWriteAt = row.arrived
             self.changed.emit(entry.key)
             return
         if (entry.persist and entry.loaded):
@@ -964,7 +965,7 @@ class Recorder(QObject):
         if (flagChanged and entry.persist):
             entry.pendingFlags["reportsItselfSince"] = track.reportsItselfSince
         entry.track = track
-        entry.lastWriteAt = row.at
+        entry.lastWriteAt = row.arrived
         # nothing was saved, so the revision stays, but the service still has to pick up the new flag
         if (flagChanged):
             self.changed.emit(entry.key)

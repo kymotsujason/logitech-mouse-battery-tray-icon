@@ -22,11 +22,25 @@ START = 1800000000
 
 
 class Clock:
+    # the wall clock a test sets, and a monotonic one that moves forward with it but stays put when it steps back
     def __init__(self, now=START):
-        self.now = now
+        self.wall = now
+        self.steady = 0.0
+
+    @property
+    def now(self):
+        return self.wall
+
+    @now.setter
+    def now(self, value):
+        self.steady += max(0, value - self.wall)
+        self.wall = value
 
     def __call__(self):
-        return self.now
+        return self.wall
+
+    def monotonic(self):
+        return self.steady
 
 
 def battery(percent, charging=0, power=0, level=None, millivolts=None):
@@ -55,7 +69,7 @@ class RecorderCase(unittest.TestCase):
         self.errors = io.StringIO()
         self.patch = mock.patch.object(sys, "stderr", self.errors)
         self.patch.start()
-        self.recorder = history.Recorder(self.folder, self.clock, timers=False)
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic)
 
     def tearDown(self):
         self.recorder.stop()
@@ -144,7 +158,7 @@ class StoreTests(RecorderCase):
     def testADatabaseWrittenByThisCodeOpensAgain(self):
         self.event(0, 50)
         self.recorder.stop()
-        again = history.Recorder(self.folder, self.clock, timers=False)
+        again = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic)
         self.assertTrue(again.available())
         again.stop()
         self.assertEqual([name for name in os.listdir(self.folder) if ".broken-" in name], [])
@@ -215,14 +229,14 @@ class StoreTests(RecorderCase):
         self.assertFalse(self.recorder.available())
         self.assertTrue(os.path.exists(os.path.join(self.folder, history.INTEGRITY_FLAG)))
         self.recorder.stop()
-        again = history.Recorder(self.folder, self.clock, timers=False)
+        again = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic)
         self.assertEqual(self.checksOpening(again), ["pragma integrity_check"])
         self.assertFalse(os.path.exists(os.path.join(self.folder, history.INTEGRITY_FLAG)))
         again.stop()
         self.assertEqual([name for name in os.listdir(self.folder) if ".broken-" in name], [])
         self.assertEqual([row[:3] for row in self.rows()], [(0, 0, 50)])
         # the flag is gone, so the start after that goes back to the quick check
-        last = history.Recorder(self.folder, self.clock, timers=False)
+        last = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic)
         self.assertEqual(self.checksOpening(last), ["pragma quick_check"])
         last.stop()
 
@@ -267,7 +281,7 @@ class StoreTests(RecorderCase):
     def testCorruptionFoundLoadingAMouseStopsTheHistory(self):
         self.event(0, 50)
         self.recorder.stop()
-        self.recorder = history.Recorder(self.folder, self.clock, timers=False)
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic)
         self.failQuery(corruption(), "from mice")
         self.event(1800, 49)
         self.assertEqual([row[:3] for row in self.rows()], [(0, 0, 50)])
@@ -361,7 +375,8 @@ class TraceTests(RecorderCase):
         self.assertEqual([row[:3] for row in self.rows()], [(102, 2, None), (102, 0, 57)])
 
     def testAWakeLooksBackTwoSecondsFromItsOwnArrival(self):
-        self.recorder.addReading(KEY, battery(57), history.ORIGIN_EVENT, at=START + 100.1)
+        self.clock.now = START + 100.1
+        self.recorder.addReading(KEY, battery(57), history.ORIGIN_EVENT)
         self.clock.now = START + 102.9
         self.recorder.addMarker(KEY, history.ORIGIN_WAKE)
         self.assertEqual([row[:3] for row in self.rows()], [(100, 0, 57), (102, 2, None)])
@@ -608,21 +623,39 @@ class StepTests(RecorderCase):
         self.assertIn((100, 0, 78), [row[:3] for row in self.rows()])
         self.assertEqual([(s[3], s[4]) for s in self.steps()], [(80, 79)])
 
-    def testAClockThatSteppedBackWaitsNoLongerThanTwoHours(self):
-        later = 40 * 24 * 60 * 60
-        recorder = history.Recorder(None, self.clock)
-        recorder.addReading(KEY, battery(50), history.ORIGIN_EVENT, at=START + later)
-        self.clock.now = START + later + 2
-        recorder.tick()
-        recorder.addReading(KEY, battery(49), history.ORIGIN_EVENT, at=START + later + 3)
-        self.clock.now = START + later + 5
-        recorder.tick()
-        self.assertIsNotNone(recorder.entries[KEY].held)
+
+class ClockStepTests(RecorderCase):
+    def testAHeldRowIsWrittenOnTimeAfterTheWallClockStepsBack(self):
+        self.event(0, 50)
+        self.clock.now = START + 3
+        self.recorder.addReading(KEY, battery(49), history.ORIGIN_EVENT)
+        self.at(5)
+        self.assertIsNotNone(self.recorder.entries[KEY].held)
+        self.clock.now = START - 2 * 60 * 60
+        self.clock.now += history.HOLD_SECONDS
+        self.recorder.tick()
+        self.assertEqual([row[2] for row in self.rows()], [50, 49])
+
+    def testAReadingWaitingWhenTheWallClockStepsBackIsWrittenOnTime(self):
+        self.assertTrue(self.recorder.available())
+        self.clock.now = START + 2 * 60 * 60
+        self.recorder.addReading(KEY, battery(60), history.ORIGIN_EVENT)
         self.clock.now = START
-        recorder.tick()
-        self.assertTrue(recorder.timer.isActive())
-        self.assertLessEqual(recorder.timer.interval(), 2 * 60 * 60 * 1000 + 1)
-        recorder.stop()
+        self.recorder.addReading(KEY, battery(59), history.ORIGIN_EVENT)
+        self.clock.now += history.WAKE_SET_SECONDS + 1
+        self.recorder.tick()
+        self.assertEqual((len(self.rows()), self.recorder.entries[KEY].pending), (1, []))
+
+    def testAnOpenRetryWaitsOnlyItsGapAfterTheWallClockStepsBack(self):
+        def failing(*args, **kwargs):
+            raise sqlite3.OperationalError("disk I/O error")
+        self.clock.now = START + 2 * 60 * 60
+        with mock.patch.object(sqlite3, "connect", failing):
+            self.assertFalse(self.recorder.available())
+        self.clock.now = START
+        self.assertFalse(self.recorder.available())
+        self.clock.now += history.OPEN_RETRY_SECONDS
+        self.assertTrue(self.recorder.available())
 
 
 class ReportsItselfTests(RecorderCase):
@@ -699,7 +732,7 @@ class ReportsItselfTests(RecorderCase):
     def testAWakeSupportSetWhileTheHistoryIsntOpenIsSavedWhenItOpens(self):
         self.event(0, 60)
         self.recorder.stop()
-        self.recorder = history.Recorder(self.folder, self.clock, timers=False)
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic)
         self.clock.now = START + 100
         with self.failOpening():
             self.recorder.setWakeSupport(KEY, False)
@@ -742,7 +775,7 @@ class ReportsItselfTests(RecorderCase):
         self.event(0, 60)
         self.event(1000, 59)
         self.recorder.stop()
-        self.recorder = history.Recorder(self.folder, self.clock, timers=False)
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic)
         self.recorder.setWakeSupport(KEY, True)
         self.assertTrue(self.recorder.reportsItself(KEY))
 
@@ -779,7 +812,7 @@ class RecorderTests(RecorderCase):
     def testUPowerRowsForAKeyTheSavedHistoryCallsHidppAreLeftOut(self):
         self.event(0, 50)
         self.recorder.stop()
-        self.recorder = history.Recorder(self.folder, self.clock, timers=False)
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic)
         self.recorder.addReading(KEY, battery(49), history.ORIGIN_UPOWER, source=history.SOURCE_UPOWER, at=START + 600)
         self.at(700)
         self.assertEqual([row[2] for row in self.rows()], [50])
@@ -800,7 +833,7 @@ class RecorderTests(RecorderCase):
         with self.db() as db:
             self.assertEqual(db.execute("select source from mice").fetchone()[0], history.SOURCE_HIDPP)
         self.recorder.stop()
-        self.recorder = history.Recorder(self.folder, self.clock, timers=False)
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic)
         self.recorder.addReading(KEY, battery(48), history.ORIGIN_UPOWER, source=history.SOURCE_UPOWER, at=START + 600)
         self.at(700)
         self.assertEqual([row[2] for row in self.rows()], [49])
@@ -877,7 +910,7 @@ class RecorderTests(RecorderCase):
         self.event(0, 60, charging=1, power=2)
         self.event(600, 61, charging=1, power=2)
         self.recorder.stop()
-        self.recorder = history.Recorder(self.folder, self.clock, timers=False)
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic)
         # a report without the power byte, so only the reloaded charge's charging code can end it
         self.event(1200, 61, charging=0, power=None)
         self.assertEqual([(s[0], s[1], s[2]) for s in self.sessions()], [(1, 0, 600), (0, 1200, None)])
@@ -888,7 +921,7 @@ class RecorderTests(RecorderCase):
         self.event(0, 60, charging=1, power=2)
         self.event(600, 61, charging=1, power=2)
         self.recorder.stop()
-        self.recorder = history.Recorder(self.folder, self.clock, timers=False)
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic)
         # the code still says charging, so only the reloaded power going to 0 can end the charge
         self.event(1200, 61, charging=1, power=0)
         self.assertEqual([(s[0], s[1], s[2]) for s in self.sessions()], [(1, 0, 600), (0, 1200, None)])
@@ -906,7 +939,7 @@ class RecorderTests(RecorderCase):
     def testAHistoryThatCantOpenYetLeavesASavedHidppKeyToHidpp(self):
         self.event(0, 50)
         self.recorder.stop()
-        self.recorder = history.Recorder(self.folder, self.clock, timers=False)
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic)
 
         def failing(*args, **kwargs):
             raise sqlite3.OperationalError("disk I/O error")
@@ -928,7 +961,7 @@ class RecorderTests(RecorderCase):
     def testAUPowerRowWaitingWhenLoadFindsAHidppKeyIsLeftOut(self):
         self.event(0, 50)
         self.recorder.stop()
-        self.recorder = history.Recorder(self.folder, self.clock, timers=False)
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic)
         with mock.patch.object(self.recorder, "isHidppKey", return_value=False):
             self.recorder.addReading(KEY, battery(49), history.ORIGIN_UPOWER, source=history.SOURCE_UPOWER, at=START + 600)
         self.at(700)
@@ -944,12 +977,12 @@ class RecorderTests(RecorderCase):
         self.event(0, None, power=None, millivolts=3900)
         self.event(400, None, power=None, millivolts=3850)
         self.recorder.stop()
-        self.recorder = history.Recorder(self.folder, self.clock, timers=False)
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic)
         self.event(1200, None, charging=1, power=None, millivolts=4000)
         self.assertEqual([(s[0], s[1], s[2]) for s in self.sessions()], [(0, 0, 400), (1, 1200, None)])
 
     def testWithNoFolderTheRulesStillRunInMemory(self):
-        recorder = history.Recorder(None, self.clock, timers=False)
+        recorder = history.Recorder(None, self.clock, timers=False, monotonic=self.clock.monotonic)
         recorder.setWakeSupport(KEY, True)
         recorder.addReading(KEY, battery(60), history.ORIGIN_EVENT, at=START)
         recorder.addReading(KEY, battery(59), history.ORIGIN_EVENT, at=START + 1000)
@@ -1001,7 +1034,7 @@ class SummaryTests(RecorderCase):
             self.assertEqual(self.database.execute("select count(*) from mice").fetchone()[0], 1)
 
     def testNoHistoryFolderMeansUnavailable(self):
-        recorder = history.Recorder(None, self.clock, timers=False)
+        recorder = history.Recorder(None, self.clock, timers=False, monotonic=self.clock.monotonic)
         with self.assertRaises(history.HistoryUnavailable):
             recorder.summary(KEY)
 
@@ -1239,7 +1272,7 @@ class SummaryTests(RecorderCase):
             self.recorder.levels(KEY, "decade")
         self.assertEqual(self.recorder.levels("ffffffff", "year")["slots"], [])
         with self.assertRaises(history.HistoryUnavailable):
-            history.Recorder(None, self.clock, timers=False).levels(KEY, "year")
+            history.Recorder(None, self.clock, timers=False, monotonic=self.clock.monotonic).levels(KEY, "year")
 
 if (__name__ == "__main__"):
     unittest.main()
