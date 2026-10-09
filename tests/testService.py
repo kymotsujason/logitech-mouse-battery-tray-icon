@@ -412,6 +412,18 @@ class ServiceTests(unittest.TestCase):
             self.assertEqual(service.main(object()), 0)
         self.assertTrue(receiverList.return_value.start.called)
 
+    def testMainBuildsTheRecorderFromTheStateFolderAndStopsItLast(self):
+        manager = mock.Mock()
+        with mock.patch.dict(os.environ, {"STATE_DIRECTORY": "/var/lib/example:/other"}), mock.patch.object(service, "installExceptionHooks"), mock.patch.object(service.signal, "signal"), mock.patch.object(service, "serve", return_value=(object(), object())), mock.patch.object(service.history, "Recorder") as recorder, mock.patch.object(service, "ReceiverList") as receiverList, mock.patch.object(service, "UPowerHistory") as upowerHistory, mock.patch.object(service, "quitOnSigterm"), mock.patch.object(service, "QCoreApplication") as application, mock.patch.object(sys, "stdout", io.StringIO()):
+            application.instance.return_value.exec.return_value = 0
+            manager.attach_mock(upowerHistory.return_value.stop, "upowerStop")
+            manager.attach_mock(receiverList.return_value.stop, "receiversStop")
+            manager.attach_mock(recorder.return_value.stop, "recorderStop")
+            self.assertEqual(service.main(object()), 0)
+        recorder.assert_called_once_with("/var/lib/example")
+        receiverList.assert_called_once_with(recorder.return_value)
+        self.assertEqual([call[0] for call in manager.mock_calls], ["upowerStop", "receiversStop", "recorderStop"])
+
 
 class ServiceProcessTests(unittest.TestCase):
     def setUp(self):
@@ -441,10 +453,6 @@ class ServiceProcessTests(unittest.TestCase):
         process.send_signal(signal.SIGTERM)
         # main returns app.exec()'s code only after ReceiverList.stop() has closed every node, while an unhandled SIGTERM ends the process with -15
         self.assertEqual(process.wait(10), 0)
-
-
-if (__name__ == "__main__"):
-    unittest.main()
 
 
 class HistoryServiceTests(unittest.TestCase):
@@ -614,3 +622,7 @@ class StateFolderTests(unittest.TestCase):
 
     def testNoFolderOrARelativeOneMeansNoHistory(self):
         self.assertEqual((service.stateFolder({}), service.stateFolder({"STATE_DIRECTORY": "relative"})), (None, None))
+
+
+if (__name__ == "__main__"):
+    unittest.main()

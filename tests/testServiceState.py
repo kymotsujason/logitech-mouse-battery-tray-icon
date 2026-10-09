@@ -130,10 +130,6 @@ class StateTests(unittest.TestCase):
         self.assertEqual(serviceState.decodeState(exampleWith(addExtras)), serviceState.decodeState(EXAMPLE))
 
 
-if (__name__ == "__main__"):
-    unittest.main()
-
-
 class NewFieldTests(unittest.TestCase):
     def testTheNewFieldsRoundTrip(self):
         mouse = FakeMouse("02bc524c", "/dev/hidraw4", hidpp.BatteryReading(22, 1, power=2), lastRead=1790000000.0)
@@ -156,3 +152,7 @@ class NewFieldTests(unittest.TestCase):
     def testTheNewFieldsStayOutOfTheRequiredKeys(self):
         # a 1.1.1 tray checks every required key, so a 1.2.0 field there would make it turn every state away
         self.assertEqual(serviceState.ENTRY_KEYS, ("key", "pathKey", "name", "source", "percent", "charging", "millivolts", "level", "asleep", "lastRead", "wokeAt"))
+
+
+if (__name__ == "__main__"):
+    unittest.main()

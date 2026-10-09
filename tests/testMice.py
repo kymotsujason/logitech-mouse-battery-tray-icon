@@ -365,10 +365,6 @@ class MouseListTests(unittest.TestCase):
         self.assertGreater(self.mouse().wokeAt, firstWake)
 
 
-if (__name__ == "__main__"):
-    unittest.main()
-
-
 class TimedReadTests(unittest.TestCase):
     def setUp(self):
         self.mice = mice.MouseList()
@@ -429,3 +425,7 @@ class TimedReadTests(unittest.TestCase):
     def testTheEntrysFlagsReachTheMouse(self):
         self.mice.applyService(state(entry(reportsItself=True, historyRevision=4)))
         self.assertEqual((self.mice.mice[0].reportsItself, self.mice.mice[0].historyRevision), (True, 4))
+
+
+if (__name__ == "__main__"):
+    unittest.main()

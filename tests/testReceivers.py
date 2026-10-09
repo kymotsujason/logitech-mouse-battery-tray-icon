@@ -1651,10 +1651,6 @@ class ReceiverListTests(unittest.TestCase):
         retryLater.assert_called_once_with(mouse)
 
 
-if (__name__ == "__main__"):
-    unittest.main()
-
-
 WIRELESS_FEATURES = {0x0003: 3, 0x0005: 2, 0x1004: 5, 0x1D4B: 23}
 WAKE_REPORT = bytes([0x11, 1, 23, 0x00, 1, 1, 1]).ljust(20, b"\x00")
 LINK_DOWN = bytes([0x10, 1, 0x41, 0x10, 0x40, 0x00, 0x00])
@@ -1860,3 +1856,7 @@ class ReceiverHistoryTests(unittest.TestCase):
             self.mice.lastReadAll = None
             self.mice.requestReadAll()
             search.assert_called_once()
+
+
+if (__name__ == "__main__"):
+    unittest.main()
