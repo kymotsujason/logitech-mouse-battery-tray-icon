@@ -820,12 +820,12 @@ class WindowTests(WindowCase):
         return menu.rowRect(index).center().toPoint()
 
     def testTheSleepMenuOpensOverItsButtonWithOneChoiceMarked(self):
-        window, menu = self.openMenu(60)
+        window, menu = self.openMenu(300)
         self.assertTrue(menu.isVisibleTo(window))
-        self.assertEqual(menu.marked, 2)
-        # the marked row sits over the button, the way a macOS pop up button opens
+        self.assertEqual(menu.marked, 3)
+        # the marked row sits over the button, the way a macOS pop up button opens, wherever the window has room for the rows around it
         button = window.popup.mapTo(window, window.popup.rect().center())
-        self.assertTrue(menu.rowRect(2).contains(QPointF(menu.rowRect(2).center().x(), button.y())))
+        self.assertTrue(menu.rowRect(3).contains(QPointF(menu.rowRect(3).center().x(), button.y())))
         self.assertTrue(QRectF(window.rect()).contains(menu.panel))
 
     def buttonCenter(self, window):
@@ -869,6 +869,34 @@ class WindowTests(WindowCase):
                     self.assertFalse(menu.rowRect(index).intersects(button), (name, index))
             self.assertTrue(QRectF(menu.rect()).contains(menu.panel), name)
             QTest.keyClick(menu, Qt.Key.Key_Escape)
+
+    def testOtherMouseButtonsChangeNothing(self):
+        window, menu = self.openMenu()
+        picked = []
+        window.sleepCheckChanged.connect(picked.append)
+        for button in (Qt.MouseButton.RightButton, Qt.MouseButton.MiddleButton):
+            QTest.mouseClick(menu, button, pos=self.rowCenter(menu, 3))
+            QTest.mouseClick(menu, button, pos=QPoint(4, 4))
+            self.assertEqual((picked, menu.isVisibleTo(window), menu.pressed), ([], True, False))
+        # a right release after a left press inside the menu picks nothing either
+        QTest.mousePress(menu, Qt.MouseButton.LeftButton, pos=self.rowCenter(menu, 3))
+        QTest.mouseRelease(menu, Qt.MouseButton.RightButton, pos=self.rowCenter(menu, 3))
+        self.assertEqual((picked, menu.isVisibleTo(window)), ([], True))
+        menu.hide()
+        QTest.mouseClick(window.popup, Qt.MouseButton.RightButton)
+        self.assertFalse(menu.isVisibleTo(window))
+
+    def testOtherMouseButtonsDontMoveTheSegmentsOrPickAMouse(self):
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))
+        for control in (window.segments, window.rangeControl):
+            before = control.index
+            QTest.mouseClick(control, Qt.MouseButton.RightButton, pos=QPoint(control.width() - 6, control.height() // 2))
+            self.assertEqual(control.index, before)
+        self.assertEqual(window.selected, "02bc524c")
+        QTest.mouseClick(window.sidebar, Qt.MouseButton.RightButton, pos=window.sidebar.rowRect(1).center().toPoint())
+        self.assertEqual(window.selected, "02bc524c")
+        QTest.mouseClick(window.sidebar, Qt.MouseButton.LeftButton, pos=window.sidebar.rowRect(1).center().toPoint())
+        self.assertEqual(window.selected, "11111111")
 
     def testClickingAChoicePicksOnlyThatOne(self):
         window, menu = self.openMenu()

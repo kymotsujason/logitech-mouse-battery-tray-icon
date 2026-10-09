@@ -261,6 +261,8 @@ class SegmentedControl(QWidget):
         self.update()
 
     def mousePressEvent(self, event):
+        if (event.button() != Qt.MouseButton.LeftButton):
+            return
         x = event.position().x()
         for index in range(len(self.names)):
             if (self.segmentX(index) <= x < self.segmentX(index + 1)):
@@ -346,6 +348,8 @@ class ChoiceMenu(QWidget):
             self.setHover(index)
 
     def mousePressEvent(self, event):
+        if (event.button() != Qt.MouseButton.LeftButton):
+            return
         if (not self.panel.contains(event.position())):
             self.hide()
             return
@@ -356,6 +360,8 @@ class ChoiceMenu(QWidget):
         pass
 
     def mouseReleaseEvent(self, event):
+        if (event.button() != Qt.MouseButton.LeftButton):
+            return
         # a release picks only after a press inside the open menu, so the release that ends a double click on the button never does
         if (not self.pressed):
             return
@@ -421,6 +427,8 @@ class PopupButton(QWidget):
         return SLEEP_SHORT.get(self.seconds, "Off")
 
     def mousePressEvent(self, event):
+        if (event.button() != Qt.MouseButton.LeftButton):
+            return
         anchor = QRectF(QPointF(self.mapTo(self.owner, QPoint(0, 0))), QSizeF(self.size()))
         self.owner.choiceMenu.open(SLEEP_CHOICES, self.seconds, anchor, self.pick)
 
@@ -470,6 +478,8 @@ class Sidebar(QWidget):
         return QRectF(10, 40 + index * (ROW_HEIGHT + 4), self.width() - 20, ROW_HEIGHT)
 
     def mousePressEvent(self, event):
+        if (event.button() != Qt.MouseButton.LeftButton):
+            return
         for index, row in enumerate(self.rows):
             if (self.rowRect(index).contains(event.position())):
                 self.picked.emit(row[0])
