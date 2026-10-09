@@ -818,9 +818,20 @@ class RecorderTests(RecorderCase):
         self.event(600, 61, charging=1, power=2)
         self.recorder.stop()
         self.recorder = history.Recorder(self.folder, self.clock, timers=False)
-        self.event(1200, 61, charging=0, power=0)
+        # a report without the power byte, so only the reloaded charge's charging code can end it
+        self.event(1200, 61, charging=0, power=None)
         self.assertEqual([(s[0], s[1], s[2]) for s in self.sessions()], [(1, 0, 600), (0, 1200, None)])
         self.assertEqual([row[1] for row in self.rows()][-2:], [4, 0])
+
+    def testARestartReloadsTheLastPower(self):
+        self.recorder.setWakeSupport(KEY, True)
+        self.event(0, 60, charging=1, power=2)
+        self.event(600, 61, charging=1, power=2)
+        self.recorder.stop()
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False)
+        # the code still says charging, so only the reloaded power going to 0 can end the charge
+        self.event(1200, 61, charging=1, power=0)
+        self.assertEqual([(s[0], s[1], s[2]) for s in self.sessions()], [(1, 0, 600), (0, 1200, None)])
 
     def testAFailedHidppLookupForAUPowerReadingDropsItAndAsksAgain(self):
         real = self.failQuery(sqlite3.OperationalError("disk I/O error"))
