@@ -92,6 +92,12 @@ class InstallWatchTests(unittest.TestCase):
         self.assertEqual(execv.call_args.args[1], [sys.executable, "-B", os.path.join(folder, "tray.py")])
         self.assertEqual(errors, "Starting version 9.9.9 in place of " + installWatch.VERSION + "\n")
 
+    def testTheRestartCarriesWhatTheAppAsksToKeep(self):
+        self.watcher = installWatch.InstallWatcher(lambda: ["--open-window"])
+        with tempfile.TemporaryDirectory() as folder:
+            execv, errors = self.runCheck(folder, "")
+        self.assertEqual(execv.call_args.args[1], [sys.executable, "-B", os.path.join(folder, "tray.py"), "--open-window"])
+
     def testABrokenTrayPyFailsTheRealImportCheckAndSaysWhy(self):
         with tempfile.TemporaryDirectory() as folder:
             execv, errors = self.runCheck(folder, "import notThere\n")

@@ -30,8 +30,10 @@ class InstallWatcher(QObject):
     # every later version takes over from the one installed before it through this watch, so the app folder keeps tray.py and a version.py with a VERSION line
     removed = pyqtSignal()
 
-    def __init__(self):
+    def __init__(self, extraArguments=None):
         super().__init__()
+        # the app hands the new version what it should open again, such as the battery window
+        self.extraArguments = extraArguments if extraArguments is not None else (lambda: [])
         self.watcher = QFileSystemWatcher(self)
         self.timer = mice.singleShotTimer(self, INSTALL_SETTLE_MS, self.onChanged)
         self.checkTimer = mice.singleShotTimer(self, CHECK_TIMEOUT_MS, self.onCheckTimeout)
@@ -129,6 +131,6 @@ class InstallWatcher(QObject):
         # the lock file is opened without inheritance (PEP 446), so the exec closes it and the new version takes the lock
         printLine("Starting version " + newVersion + " in place of " + VERSION)
         try:
-            os.execv(sys.executable, [sys.executable, "-B", os.path.join(APP_FOLDER, "tray.py")])
+            os.execv(sys.executable, [sys.executable, "-B", os.path.join(APP_FOLDER, "tray.py")] + self.extraArguments())
         except OSError as error:
             printLine("Version " + newVersion + " couldn't start (" + str(error) + "), so " + VERSION + " keeps running")

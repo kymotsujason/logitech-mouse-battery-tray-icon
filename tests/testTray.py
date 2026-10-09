@@ -669,6 +669,21 @@ class AppTests(unittest.TestCase):
         again.showHistory()
         self.assertEqual(again.historyWindow.levelRange, "year")
 
+    def testAnUpdateKeepsAnOpenWindowOpen(self):
+        mouseApp = self.makeApp(True)
+        self.assertEqual(mouseApp.installWatcher.extraArguments(), [])
+        mouseApp.showHistory()
+        self.assertEqual(mouseApp.installWatcher.extraArguments(), [tray.OPEN_WINDOW_ARGUMENT])
+        mouseApp.historyWindow.close()
+        self.assertEqual(mouseApp.installWatcher.extraArguments(), [])
+
+    def testTheOpenWindowArgumentOpensTheWindowAtStart(self):
+        mouseApp = self.makeApp(True)
+        mouseApp.applyArguments(["tray.py"])
+        self.assertIsNone(mouseApp.historyWindow)
+        mouseApp.applyArguments(["tray.py", tray.OPEN_WINDOW_ARGUMENT])
+        self.assertTrue(mouseApp.historyWindow.isVisible())
+
     def testTheMenuALeftClickAndTheTimerEachAskTheServiceToRead(self):
         with mock.patch.object(serviceClient.ServiceWatcher, "readAll") as readAll:
             mouseApp = self.makeApp(True)

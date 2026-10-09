@@ -29,6 +29,7 @@ from version import VERSION
 
 APP_ID = "logitech-mouse-battery"
 APP_NAME = "Mouse Battery"
+OPEN_WINDOW_ARGUMENT = "--open-window"
 LOCK_NAME = "logitech-mouse-battery.lock"
 TARGET_NICENESS = 10
 PROJECT_URL = "https://github.com/kymotsujason/logitech-mouse-battery-tray-icon"
@@ -149,7 +150,7 @@ class MouseBatteryApp(QObject):
         self.trayHost = TrayHost(self.sessionBus, self.notifier)
         self.trayHost.ready.connect(self.showTray)
         self.trayHost.dontOpenAtLogin.connect(self.onDontOpenAtLogin)
-        self.installWatcher = InstallWatcher()
+        self.installWatcher = InstallWatcher(self.restartArguments)
         self.installWatcher.removed.connect(self.quitApp)
         self.menu = QMenu()
         self.menu.aboutToShow.connect(self.onMenuShown)
@@ -167,6 +168,14 @@ class MouseBatteryApp(QObject):
         self.colorTimer.setInterval(COLOR_CHECK_MS)
         self.colorTimer.timeout.connect(self.onColorsChanged)
         self.updateTray()
+
+    def restartArguments(self):
+        return [OPEN_WINDOW_ARGUMENT] if self.historyWindow is not None and self.historyWindow.isVisible() else []
+
+    def applyArguments(self, argv):
+        # an update starts the new version with this when the battery window was open, so it opens again
+        if (OPEN_WINDOW_ARGUMENT in argv[1:]):
+            self.showHistory()
 
     def start(self):
         self.mouseList.start()
@@ -411,6 +420,7 @@ def main():
     printLine("Mouse Battery " + VERSION + " started")
     mouseApp = MouseBatteryApp(app)
     mouseApp.start()
+    mouseApp.applyArguments(sys.argv)
     code = app.exec()
     mouseApp.stop()
     return code
