@@ -23,6 +23,7 @@ import hidpp
 import history
 import receivers
 import service
+import serviceClient
 import serviceState
 import version
 from tests.fakes.fakeDevice import FakeNodes, mouseHandler
@@ -568,6 +569,21 @@ class HistoryServiceTests(unittest.TestCase):
     def testGetLevelsAnswersTheRangesSlots(self):
         levels = self.levels("ffffffff", "halfYear")
         self.assertEqual((levels["key"], levels["range"], levels["slots"]), ("ffffffff", "halfYear", []))
+
+    def testGetLevelsAnswersEveryRangeForAMouseThatWasRead(self):
+        self.startWithMouse()
+        # the stop writes the rows still waiting out the wake set
+        self.recorder.stop()
+        self.recorder.store.lastAttempt = None
+        # a slot ends at the query's second and leaves out a reading made in it
+        QTest.qWait(1100)
+        for rangeName in history.LEVEL_RANGES:
+            answer = self.caller.call("GetLevels", arguments=["02bc524c", rangeName])
+            self.assertIsInstance(answer, list, rangeName)
+            levels = serviceClient.levelsFrom(QDBusMessage.createMethodCall("a.b", "/a", "a.b", "c").createReply(answer), "02bc524c", rangeName)
+            self.assertIsNotNone(levels, rangeName)
+            self.assertGreater(len(levels["slots"]), 0, rangeName)
+            self.assertIsNotNone(levels["slots"][-1][1], rangeName)
 
     def testAnUnknownRangeAnswersInvalidArgs(self):
         self.assertEqual(self.levels(rangeName="decade"), "org.freedesktop.DBus.Error.InvalidArgs")
