@@ -8,10 +8,10 @@ from unittest import mock
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 from PyQt6 import sip
-from PyQt6.QtCore import QObject, Qt, pyqtSignal
+from PyQt6.QtCore import QObject, QPoint, QPointF, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QPalette
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QApplication, QWidget
+from PyQt6.QtWidgets import QApplication, QMenu, QWidget
 
 import glass
 import health
@@ -214,12 +214,88 @@ class WindowTests(WindowCase):
         window.open()
         self.assertEqual(window.selected, shown)
 
+    def testTheFadesAreOnlyOnWhileTheyRun(self):
+        # an opacity effect draws its widget from a cached image, so the chart's fade inside an idle pane fade never showed until the window lost focus
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S", reading=hidpp.BatteryReading(18, 0)))
+        window.motionFactor = 1.0
+        self.assertFalse(window.paneFade.isEnabled())
+        window.showChart(1)
+        self.assertTrue(window.chartFade.isEnabled())
+        window.chartAnimation.setCurrentTime(window.chartAnimation.duration())
+        self.assertFalse(window.chartFade.isEnabled())
+        window.pick("11111111")
+        self.assertTrue(window.paneFade.isEnabled())
+        window.paneAnimation.setCurrentTime(window.paneAnimation.duration())
+        self.assertFalse(window.paneFade.isEnabled())
+
+    def testTurningMotionOffMidFadeLeavesTheFadeOff(self):
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S", reading=hidpp.BatteryReading(18, 0)))
+        window.motionFactor = 1.0
+        window.showChart(1)
+        window.pick("11111111")
+        window.motionFactor = 0.0
+        window.showChart(2)
+        window.pick("02bc524c")
+        self.assertEqual((window.chartFade.isEnabled(), window.paneFade.isEnabled()), (False, False))
+
     def testTheSettingButtonSendsTheChoiceAndShowsItShort(self):
         window = self.opened(entry())
         picked = []
         window.sleepCheckChanged.connect(picked.append)
         window.popup.pick(30)
         self.assertEqual((picked, window.popup.text()), ([30], "30 s"))
+
+    def openMenu(self, seconds=0):
+        window = self.opened(entry())
+        window.popup.setSeconds(seconds)
+        QTest.mouseClick(window.popup, Qt.MouseButton.LeftButton)
+        return window, window.choiceMenu
+
+    def rowCenter(self, menu, index):
+        return menu.rowRect(index).center().toPoint()
+
+    def testTheSleepMenuOpensOverItsButtonWithOneChoiceMarked(self):
+        window, menu = self.openMenu(60)
+        self.assertTrue(menu.isVisibleTo(window))
+        self.assertEqual(menu.marked, 2)
+        # the marked row sits over the button, the way a macOS pop up button opens
+        button = window.popup.mapTo(window, window.popup.rect().center())
+        self.assertTrue(menu.rowRect(2).contains(QPointF(menu.rowRect(2).center().x(), button.y())))
+        self.assertTrue(QRectF(window.rect()).contains(menu.panel))
+
+    def testClickingAChoicePicksOnlyThatOne(self):
+        window, menu = self.openMenu()
+        picked = []
+        window.sleepCheckChanged.connect(picked.append)
+        QTest.mouseClick(menu, Qt.MouseButton.LeftButton, pos=self.rowCenter(menu, 3))
+        self.assertEqual((picked, window.popup.text(), menu.isVisibleTo(window)), ([300], "5 min", False))
+
+    def testTheKeysMoveAndPick(self):
+        window, menu = self.openMenu(30)
+        picked = []
+        window.sleepCheckChanged.connect(picked.append)
+        QTest.keyClick(menu, Qt.Key.Key_Down)
+        QTest.keyClick(menu, Qt.Key.Key_Return)
+        self.assertEqual(picked, [60])
+
+    def testEscapeAndAClickOutsideCloseItWithoutAPick(self):
+        window, menu = self.openMenu()
+        picked = []
+        window.sleepCheckChanged.connect(picked.append)
+        QTest.keyClick(menu, Qt.Key.Key_Escape)
+        self.assertFalse(menu.isVisibleTo(window))
+        QTest.mouseClick(window.popup, Qt.MouseButton.LeftButton)
+        QTest.mouseClick(menu, Qt.MouseButton.LeftButton, pos=QPoint(4, 4))
+        self.assertEqual((menu.isVisibleTo(window), picked), (False, []))
+
+    def testTheMenuIsMadeOnceAndClosesWithTheWindow(self):
+        window, menu = self.openMenu()
+        for count in range(4):
+            QTest.keyClick(menu, Qt.Key.Key_Escape)
+            QTest.mouseClick(window.popup, Qt.MouseButton.LeftButton)
+        self.assertEqual((window.findChildren(QMenu), window.findChildren(historyWindow.ChoiceMenu)), ([], [menu]))
+        window.close()
+        self.assertFalse(menu.isVisibleTo(window))
 
     def testTheHealthBoxGrowsTheWindowUpTo640(self):
         window = self.opened(entry())

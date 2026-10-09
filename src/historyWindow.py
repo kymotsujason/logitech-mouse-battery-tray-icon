@@ -3,10 +3,10 @@ import os
 import time
 
 from PyQt6 import sip
-from PyQt6.QtCore import QElapsedTimer, QPointF, QRectF, Qt, QTimer, QVariantAnimation, QEasingCurve, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QElapsedTimer, QPoint, QPointF, QRectF, QSizeF, Qt, QTimer, QVariantAnimation, QEasingCurve, pyqtSignal, pyqtSlot
 from PyQt6.QtDBus import QDBusMessage
-from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QRegion
-from PyQt6.QtWidgets import QApplication, QGraphicsOpacityEffect, QLabel, QMenu, QWidget
+from PyQt6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPen, QRegion
+from PyQt6.QtWidgets import QApplication, QGraphicsOpacityEffect, QLabel, QWidget
 
 import charts
 import dbusCalls
@@ -47,6 +47,11 @@ FROST_EVERY_MS = 50
 SLEEP_CHOICES = ((0, "Off"), (30, "Every 30 seconds"), (60, "Every minute"), (300, "Every 5 minutes"))
 # the button shows the choice short, so the label beside it fits, while its menu names each one in full
 SLEEP_SHORT = {0: "Off", 30: "30 s", 60: "1 min", 300: "5 min"}
+CHOICE_ROW_HEIGHT = 26
+CHOICE_PADDING = 5
+CHOICE_TEXT_X = 26
+CHOICE_RADIUS = 10
+CHOICE_MARGIN = 8
 SEGMENTS = ("Level", "Hours per Charge", "Charging")
 LOADING_TEXT = "Loading"
 NO_SERVICE_TEXT = "Can't reach the battery service."
@@ -251,6 +256,103 @@ class SegmentedControl(QWidget):
             painter.drawText(QRectF(self.segmentX(index), 0, SEGMENT_WIDTHS[index], SEGMENT_HEIGHT), int(Qt.AlignmentFlag.AlignCenter), name)
 
 
+class ChoiceMenu(QWidget):
+    # drawn inside the window instead of as a QMenu, so its glass comes from the same frost as the panels around it
+    def __init__(self, window):
+        super().__init__(window)
+        self.owner = window
+        self.choices = ()
+        self.marked = 0
+        self.hover = 0
+        self.onPick = None
+        self.panel = QRectF()
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.hide()
+
+    def open(self, choices, value, anchor, onPick):
+        self.choices = choices
+        self.marked = next((index for index, (choice, name) in enumerate(choices) if choice == value), 0)
+        self.hover = self.marked
+        self.onPick = onPick
+        self.setGeometry(self.owner.rect())
+        width = max(anchor.width(), CHOICE_TEXT_X + max(QFontMetricsF(font(13)).horizontalAdvance(name) for choice, name in choices) + CHOICE_PADDING * 3)
+        height = len(choices) * CHOICE_ROW_HEIGHT + 2 * CHOICE_PADDING
+        # the marked row opens over the button, the way a macOS pop up button does, kept inside the window so the frost is under all of it
+        top = anchor.center().y() - CHOICE_PADDING - self.marked * CHOICE_ROW_HEIGHT - CHOICE_ROW_HEIGHT / 2
+        top = min(max(top, CHOICE_MARGIN), self.height() - CHOICE_MARGIN - height)
+        left = min(max(anchor.right() - width, CHOICE_MARGIN), self.width() - CHOICE_MARGIN - width)
+        self.panel = QRectF(left, top, width, height)
+        self.show()
+        self.raise_()
+        self.setFocus()
+        self.update()
+
+    def rowRect(self, index):
+        return QRectF(self.panel.x() + CHOICE_PADDING, self.panel.y() + CHOICE_PADDING + index * CHOICE_ROW_HEIGHT, self.panel.width() - 2 * CHOICE_PADDING, CHOICE_ROW_HEIGHT)
+
+    def rowAt(self, point):
+        return next((index for index in range(len(self.choices)) if self.rowRect(index).contains(point)), None)
+
+    def choose(self, index):
+        self.hide()
+        self.onPick(self.choices[index][0])
+
+    def mouseMoveEvent(self, event):
+        index = self.rowAt(event.position())
+        if (index is not None and index != self.hover):
+            self.hover = index
+            self.update()
+
+    def mousePressEvent(self, event):
+        if (not self.panel.contains(event.position())):
+            self.hide()
+
+    def mouseReleaseEvent(self, event):
+        index = self.rowAt(event.position())
+        if (index is not None and self.isVisible()):
+            self.choose(index)
+
+    def keyPressEvent(self, event):
+        key = event.key()
+        if (key == Qt.Key.Key_Escape):
+            self.hide()
+        elif (key in (Qt.Key.Key_Up, Qt.Key.Key_Down)):
+            self.hover = max(0, min(len(self.choices) - 1, self.hover + (1 if key == Qt.Key.Key_Down else -1)))
+            self.update()
+        elif (key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space)):
+            self.choose(self.hover)
+
+    def focusOutEvent(self, event):
+        self.hide()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        theme = self.owner.theme
+        frost = self.owner.frost()
+        glass.paintShadow(painter, self.panel, CHOICE_RADIUS, theme)
+        if (frost is not None):
+            glass.paintPanel(painter, self.panel, CHOICE_RADIUS, frost, theme, strong=True, offset=QPointF(self.mapTo(self.owner, QPoint(0, 0))))
+        for index, (choice, name) in enumerate(self.choices):
+            rect = self.rowRect(index)
+            textColor = QColor(theme.text)
+            if (index == self.hover):
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor(glass.BLUE))
+                painter.drawRoundedRect(rect, 6, 6)
+                textColor = QColor("#FFFFFF")
+            if (index == self.marked):
+                # one check mark, since only one choice can be on
+                painter.setPen(QPen(textColor, 1.8, cap=Qt.PenCapStyle.RoundCap, join=Qt.PenJoinStyle.RoundJoin))
+                middle = rect.center().y()
+                painter.drawPolyline([QPointF(rect.x() + 9, middle), QPointF(rect.x() + 12.5, middle + 3.5), QPointF(rect.x() + 19, middle - 4)])
+            painter.setFont(font(13))
+            painter.setPen(textColor)
+            painter.drawText(QRectF(rect.x() + CHOICE_TEXT_X, rect.y(), rect.width() - CHOICE_TEXT_X, rect.height()), int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), name)
+
+
 class PopupButton(QWidget):
     picked = pyqtSignal(int)
 
@@ -268,13 +370,8 @@ class PopupButton(QWidget):
         return SLEEP_SHORT.get(self.seconds, "Off")
 
     def mousePressEvent(self, event):
-        menu = QMenu(self)
-        for seconds, name in SLEEP_CHOICES:
-            action = menu.addAction(name)
-            action.setCheckable(True)
-            action.setChecked(seconds == self.seconds)
-            action.triggered.connect(lambda checked, value=seconds: self.pick(value))
-        menu.popup(self.mapToGlobal(self.rect().bottomLeft()))
+        anchor = QRectF(QPointF(self.mapTo(self.owner, QPoint(0, 0))), QSizeF(self.size()))
+        self.owner.choiceMenu.open(SLEEP_CHOICES, self.seconds, anchor, self.pick)
 
     def pick(self, seconds):
         self.setSeconds(seconds)
@@ -410,10 +507,13 @@ class HistoryWindow(QWidget):
         self.pane.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.paneFade = QGraphicsOpacityEffect(self.pane)
         self.paneFade.setOpacity(1.0)
+        # an opacity effect draws its widget from a cached image, and with the chart's own fade inside it a changed chart never showed, so each fade is only on while it runs
+        self.paneFade.setEnabled(False)
         self.pane.setGraphicsEffect(self.paneFade)
         self.paneAnimation = QVariantAnimation(self)
         self.paneAnimation.setEasingCurve(QEasingCurve.Type.OutCubic)
         self.paneAnimation.valueChanged.connect(lambda value: self.paneFade.setOpacity(value))
+        self.paneAnimation.finished.connect(lambda: self.paneFade.setEnabled(False))
         self.mouseIcon = MouseIcon(self.pane)
         self.nameLabel = label(self.pane, 12, QFont.Weight.Medium)
         self.levelLabel = label(self.pane, 40, QFont.Weight.Bold)
@@ -434,6 +534,7 @@ class HistoryWindow(QWidget):
         self.chartAnimation = QVariantAnimation(self)
         self.chartAnimation.setEasingCurve(QEasingCurve.Type.OutCubic)
         self.chartAnimation.valueChanged.connect(lambda value: self.chartFade.setOpacity(value))
+        self.chartAnimation.finished.connect(lambda: self.chartFade.setEnabled(False))
         self.formLabels = [label(self.pane, 13) for index in range(4)]
         self.formValues = [label(self.pane, 13) for index in range(3)]
         for widget, text in zip(self.formLabels, ("Charge cycles", "Last charged", "Charging speed", "Check whether mice are asleep")):
@@ -444,6 +545,7 @@ class HistoryWindow(QWidget):
         self.popup.setParent(self.pane)
         self.popup.setSeconds(sleepCheckSeconds)
         self.popup.picked.connect(self.sleepCheckChanged.emit)
+        self.choiceMenu = ChoiceMenu(self)
         self.message = label(self.pane, 13, wrap=True)
         self.message.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.paneMessage = label(self.pane, 13, wrap=True)
@@ -541,10 +643,14 @@ class HistoryWindow(QWidget):
         duration = int(PANE_FADE_MS * self.motionFactor)
         self.paneAnimation.stop()
         if (duration > 0 and self.isVisible()):
+            self.paneFade.setOpacity(0.0)
+            self.paneFade.setEnabled(True)
             self.paneAnimation.setStartValue(0.0)
             self.paneAnimation.setEndValue(1.0)
             self.paneAnimation.setDuration(duration)
             self.paneAnimation.start()
+        else:
+            self.paneFade.setEnabled(False)
         self.refresh()
 
     def showChart(self, index):
@@ -564,13 +670,14 @@ class HistoryWindow(QWidget):
             self.chartAnimation.setDuration(duration)
             self.chartAnimation.start()
         else:
-            self.chartFade.setOpacity(1.0)
+            self.chartFade.setEnabled(False)
 
     def closeEvent(self, event):
         # the window is kept for the next click, while its replies are only kept while it's open
         self.replies.clear()
         self.errors.clear()
         self.notRefreshed.clear()
+        self.choiceMenu.hide()
         for timer in (self.fetchTimer, self.retryTimer, self.ageTimer, self.blurTimer):
             timer.stop()
         event.accept()
@@ -805,7 +912,7 @@ class HistoryWindow(QWidget):
         self.frostClock.start()
         self.backdrop = None
         self.update()
-        for child in (self.segments, self.popup, self.sidebar):
+        for child in (self.segments, self.popup, self.sidebar, self.choiceMenu):
             child.update()
 
     def paneRect(self):
@@ -881,6 +988,7 @@ class HistoryWindow(QWidget):
         self.paneMessage.setGeometry(MARGIN, MARGIN, width - 2 * MARGIN, self.height() - 2 * MARGIN)
 
     def resizeEvent(self, event):
+        self.choiceMenu.hide()
         self.layoutParts()
         super().resizeEvent(event)
 
