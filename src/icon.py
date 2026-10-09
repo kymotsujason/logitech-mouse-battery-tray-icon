@@ -107,7 +107,7 @@ def drawNumber(painter, state, size, baseColor):
         painter.fillRect(cell, color)
 
 
-def renderImage(state, size, baseColor):
+def renderImage(state, size, baseColor, number=True):
     k = size / 22
     image = QImage(size, size, QImage.Format.Format_ARGB32_Premultiplied)
     image.fill(Qt.GlobalColor.transparent)
@@ -141,7 +141,9 @@ def renderImage(state, size, baseColor):
     drawWheel(painter, k, color)
     painter.restore()
 
-    drawNumber(painter, state, size, baseColor)
+    # the battery window draws the mouse large beside its own percent, so it leaves the number out
+    if (number):
+        drawNumber(painter, state, size, baseColor)
 
     painter.end()
     return image

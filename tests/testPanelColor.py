@@ -29,6 +29,26 @@ class PortalBus:
         return QDBusPendingCall.fromCompletedCall(message.createReply([QDBusVariant(answer)]))
 
 
+class PortalSettingTests(unittest.TestCase):
+    def testAnyAppearanceKeyCanBeAskedFor(self):
+        bus = PortalBus({"ReadOne": 1})
+        sent = []
+        realCall = bus.asyncCall
+
+        def recording(message, timeout=None):
+            sent.append(message.arguments())
+            return realCall(message, timeout)
+        bus.asyncCall = recording
+        answers = []
+        owner = QObject()
+        panelColor.askPortalSetting(bus, owner, "reduced-motion", lambda value, error: answers.append((value, error)))
+        for i in range(50):
+            if (answers):
+                break
+            QTest.qWait(20)
+        self.assertEqual((answers, sent), ([(1, None)], [[panelColor.APPEARANCE, "reduced-motion"]]))
+
+
 class PortalReadTests(unittest.TestCase):
     def ask(self, bus):
         answers = []

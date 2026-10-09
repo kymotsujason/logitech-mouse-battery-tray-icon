@@ -11,6 +11,7 @@ PORTAL_PATH = "/org/freedesktop/portal/desktop"
 SETTINGS_INTERFACE = "org.freedesktop.portal.Settings"
 UNKNOWN_METHOD = "org.freedesktop.DBus.Error.UnknownMethod"
 APPEARANCE = "org.freedesktop.appearance"
+PREFER_DARK = 1
 PREFER_LIGHT = 2
 
 
@@ -81,19 +82,19 @@ def baseColor(env, configHome, dirs, portalScheme, paletteColor):
     return QColor(paletteColor)
 
 
-def portalRead(method):
+def portalRead(method, key="color-scheme"):
     message = QDBusMessage.createMethodCall(PORTAL_SERVICE, PORTAL_PATH, SETTINGS_INTERFACE, method)
-    message.setArguments([APPEARANCE, "color-scheme"])
+    message.setArguments([APPEARANCE, key])
     return message
 
 
-def askPortalColorScheme(bus, owner, onAnswer, method="ReadOne"):
-    # onAnswer gets the scheme and the error name, or None, once the portal answers
+def askPortalSetting(bus, owner, key, onAnswer, method="ReadOne"):
+    # onAnswer gets the number and the error name, or None, once the portal answers, and a key an older portal doesn't have comes back as an error
     def onReply(reply):
         error = dbusCalls.failure(reply)
         # only a portal older than ReadOne gets asked with Read
         if (error == UNKNOWN_METHOD and method == "ReadOne"):
-            askPortalColorScheme(bus, owner, onAnswer, "Read")
+            askPortalSetting(bus, owner, key, onAnswer, "Read")
             return
         if (error is not None or not reply.arguments()):
             onAnswer(0, error)
@@ -101,4 +102,8 @@ def askPortalColorScheme(bus, owner, onAnswer, method="ReadOne"):
         value = dbusCalls.plain(reply.arguments()[0])
         onAnswer(value if isinstance(value, int) else 0, None)
 
-    dbusCalls.callLater(bus, portalRead(method), onReply, owner)
+    dbusCalls.callLater(bus, portalRead(method, key), onReply, owner)
+
+
+def askPortalColorScheme(bus, owner, onAnswer, method="ReadOne"):
+    askPortalSetting(bus, owner, "color-scheme", onAnswer, method)

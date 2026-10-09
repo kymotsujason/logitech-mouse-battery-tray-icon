@@ -163,5 +163,22 @@ class IconTests(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(folder, "OFL.txt")))
 
 
+class WithoutNumberTests(unittest.TestCase):
+    def testTheWindowsIconHasNoPlate(self):
+        cells, plate = icon.numberLayout("62", 120)
+        image = renderImage(IconState(percent=62), 120, WHITE, number=False)
+        # the plate sits inside the fill at 62%, so with no number every pixel there is fill
+        self.assertTrue(all(image.pixelColor(x, y).alpha() == 255 for y in range(plate.top(), plate.bottom() + 1) for x in range(plate.left(), plate.right() + 1)))
+
+    def testTheWindowsIconKeepsItsColors(self):
+        low = renderImage(IconState(percent=15), 120, WHITE, number=False).pixelColor(60, 110)
+        charging = renderImage(IconState(percent=50, charging=True), 120, WHITE, number=False).pixelColor(60, 110)
+        self.assertGreater(low.red(), 200)
+        self.assertGreater(charging.green(), 150)
+
+    def testTheTraysIconIsUnchanged(self):
+        self.assertEqual(renderImage(IconState(percent=62), 22, WHITE), renderImage(IconState(percent=62), 22, WHITE, number=True))
+
+
 if (__name__ == "__main__"):
     unittest.main()
