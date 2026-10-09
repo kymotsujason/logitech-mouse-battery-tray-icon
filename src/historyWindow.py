@@ -722,9 +722,6 @@ class HistoryWindow(QWidget):
 
     def onLevels(self, key, rangeName, levels, error):
         self.pendingLevels.discard((key, rangeName))
-        # an answer that lands after the window closed would leave slots no new reply ever replaces
-        if (not self.isVisible()):
-            return
         if (levels is not None):
             self.levels.setdefault(key, {})[rangeName] = levels["slots"]
             self.freshLevels.add((key, rangeName))
@@ -773,12 +770,9 @@ class HistoryWindow(QWidget):
             self.chartFade.setEnabled(False)
 
     def closeEvent(self, event):
-        # the window is kept for the next click, while its replies are only kept while it's open
-        self.replies.clear()
+        # the window is kept for the next click, and so are its replies, its ranges, and any answer still on its way, so the next open shows them and isOld decides what to fetch, while an error gets one more try then
         self.errors.clear()
-        self.notRefreshed.clear()
-        self.forgetLevels()
-        self.pendingLevels.clear()
+        self.levelErrors.clear()
         self.choiceMenu.hide()
         for timer in (self.fetchTimer, self.retryTimer, self.ageTimer, self.blurTimer, self.levelRetryTimer):
             timer.stop()

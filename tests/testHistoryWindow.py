@@ -55,10 +55,12 @@ class FakeWatcher(QObject):
         self.levelAsks = []
         self.levelAnswers = {}
         self.holdLevels = False
+        self.waitingLevels = []
 
     def getLevels(self, key, rangeName, onAnswer):
         self.levelAsks.append((key, rangeName))
         if (self.holdLevels):
+            self.waitingLevels.append((key, rangeName, onAnswer))
             return
         levels, error = self.levelAnswers.get((key, rangeName), (levelsReply(key, rangeName), None))
         onAnswer(levels, error)
@@ -276,6 +278,53 @@ class WindowTests(WindowCase):
         window.refresh()
         self.assertEqual(len(self.watcher.asked), 2)
         self.assertFalse(window.fetchTimer.isActive())
+
+    def testAReopenWithinTheGapShowsTheKeptReply(self):
+        window = self.opened(entry())
+        window.close()
+        window.open()
+        self.assertFalse(window.message.isVisibleTo(window))
+        self.assertEqual(self.watcher.asked, ["02bc524c"])
+
+    def testAReopenFetchesAReplyThatWentOldWhileClosed(self):
+        window = self.opened(entry())
+        window.close()
+        self.state(entry(revision=2))
+        window.lastFetch.clear()
+        window.open()
+        self.assertEqual(self.watcher.asked, ["02bc524c"] * 2)
+
+    def testAHistoryAnswerThatLandsWhileClosedIsKept(self):
+        self.watcher.hold = True
+        window = self.opened(entry())
+        window.close()
+        key, onAnswer = self.watcher.waiting.pop()
+        onAnswer(reply(key), None)
+        window.lastFetch.clear()
+        window.open()
+        self.assertFalse(window.message.isVisibleTo(window))
+        self.assertEqual(self.watcher.asked, ["02bc524c"])
+
+    def testARangeAnswerThatLandsWhileClosedIsKept(self):
+        window = self.opened(entry())
+        self.watcher.holdLevels = True
+        window.pickRange("year")
+        window.close()
+        key, rangeName, onAnswer = self.watcher.waitingLevels.pop()
+        onAnswer(levelsReply(key, rangeName), None)
+        window.lastFetch.clear()
+        window.open()
+        self.assertEqual(self.watcher.levelAsks, [("02bc524c", "year")])
+        self.assertEqual(window.levelChart.slots, levelsReply("02bc524c", "year")["slots"])
+
+    def testAReopenDoesntAskAgainForARangeOnItsWay(self):
+        window = self.opened(entry())
+        self.watcher.holdLevels = True
+        window.pickRange("year")
+        window.close()
+        window.lastFetch.clear()
+        window.open()
+        self.assertEqual(self.watcher.levelAsks, [("02bc524c", "year")])
 
     def testAServiceRestartForgetsTheReplies(self):
         window = self.opened(entry())
