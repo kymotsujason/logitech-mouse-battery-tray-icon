@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import json
+import os
 import signal
 import socket
 import sys
@@ -8,9 +10,11 @@ from collections import OrderedDict
 from PyQt6.QtCore import QCoreApplication, QObject, QSocketNotifier, QTimer, pyqtClassInfo, pyqtSignal, pyqtSlot
 from PyQt6.QtDBus import QDBusAbstractAdaptor, QDBusConnection, QDBusMessage
 
+import history
 import serviceState
 from exceptionHooks import installExceptionHooks, printLine
 from receivers import ReceiverList
+from upower import UPowerWatcher
 from version import VERSION
 
 # a device can send a report every millisecond, and each one would otherwise be its own encode and system bus broadcast
@@ -32,6 +36,8 @@ class BatteryService(QDBusAbstractAdaptor):
         self.bus = bus
         self.sentState = None
         self.callerBudgets = OrderedDict()
+        # GetHistory has a budget of its own, so an open window never costs anyone a read
+        self.historyBudgets = OrderedDict()
         self.setAutoRelaySignals(True)
         self.broadcastTimer = QTimer(self)
         self.broadcastTimer.setSingleShot(True)
@@ -63,6 +69,36 @@ class BatteryService(QDBusAbstractAdaptor):
             return
         self.receiverList.requestReadAll()
 
+    @pyqtSlot(QDBusMessage)
+    def ReadSilent(self, message):
+        caller = self.callerOf(message)
+        if (caller is None):
+            self.refuse(message, CALLER_UNKNOWN, "Couldn't tell which account asked for the read.")
+            return
+        # a batch already queued covers this one, so it costs no read
+        if (self.receiverList.isReadSilentQueued() or self.receiverList.isReadAllQueued()):
+            return
+        if (not self.takeRead(caller)):
+            self.refuse(message, READ_ALL_LIMITED, "Each account gets " + str(READ_ALL_BURST) + " reads at once and then one every " + str(READ_ALL_REFILL_SECONDS) + " seconds.")
+            return
+        self.receiverList.requestReadSilent()
+
+    @pyqtSlot(str, QDBusMessage, result=str)
+    def GetHistory(self, key, message):
+        caller = self.callerOf(message)
+        if (caller is None):
+            self.refuse(message, CALLER_UNKNOWN, "Couldn't tell which account asked for the history.")
+            return ""
+        if (not self.takeFrom(self.historyBudgets, caller)):
+            self.refuse(message, READ_ALL_LIMITED, "Each account gets " + str(READ_ALL_BURST) + " history reads at once and then one every " + str(READ_ALL_REFILL_SECONDS) + " seconds.")
+            return ""
+        try:
+            summary = self.receiverList.recorder.summary(key)
+        except history.HistoryUnavailable:
+            self.refuse(message, serviceState.HISTORY_UNAVAILABLE, "The history isn't available right now.")
+            return ""
+        return json.dumps(summary, sort_keys=True)
+
     def refuse(self, message, name, text):
         # an empty reply would look like a read that ran, so a caller couldn't tell its readings may be old
         message.setDelayedReply(True)
@@ -74,20 +110,23 @@ class BatteryService(QDBusAbstractAdaptor):
         return reply.value() if reply.isValid() else None
 
     def takeRead(self, caller):
+        return self.takeFrom(self.callerBudgets, caller)
+
+    def takeFrom(self, budgets, caller):
         now = time.monotonic()
         # a full budget is what an unseen account starts with, so dropping it changes nothing while the map stays as small as the accounts calling lately
         # every update moves its budget to the end, so the front is the oldest and the prune stops at the first one still refilling instead of walking every account
-        while (self.callerBudgets):
-            other, (reads, since) = next(iter(self.callerBudgets.items()))
+        while (budgets):
+            other, (reads, since) = next(iter(budgets.items()))
             if (reads + (now - since) / READ_ALL_REFILL_SECONDS < READ_ALL_BURST):
                 break
-            del self.callerBudgets[other]
-        reads, since = self.callerBudgets.pop(caller, (READ_ALL_BURST, now))
+            del budgets[other]
+        reads, since = budgets.pop(caller, (READ_ALL_BURST, now))
         reads = min(READ_ALL_BURST, reads + (now - since) / READ_ALL_REFILL_SECONDS)
         if (reads < 1):
-            self.callerBudgets[caller] = (reads, now)
+            budgets[caller] = (reads, now)
             return False
-        self.callerBudgets[caller] = (reads - 1, now)
+        budgets[caller] = (reads - 1, now)
         return True
 
     def onChanged(self):
@@ -104,6 +143,39 @@ class BatteryService(QDBusAbstractAdaptor):
 
 class ServiceObject(QObject):
     pass
+
+
+class UPowerHistory(QObject):
+    # the service keeps its own UPower watcher whose readings go only to the history, never into the state the tray reads
+    def __init__(self, recorder, bus):
+        super().__init__()
+        self.recorder = recorder
+        self.watcher = UPowerWatcher(bus)
+        self.watcher.mouseChanged.connect(self.onMouse)
+        self.watcher.mouseRemoved.connect(self.onRemoved)
+        self.paths = {}
+
+    def start(self):
+        self.watcher.watchOwner()
+        self.watcher.start()
+
+    def stop(self):
+        self.watcher.stop()
+
+    def onMouse(self, mouse):
+        self.paths[mouse.path] = (mouse.key, mouse.pathKey)
+        self.recorder.addReading(mouse.key, mouse.reading, history.ORIGIN_UPOWER, name=mouse.name, source=history.SOURCE_UPOWER, pathKey=mouse.pathKey)
+
+    def onRemoved(self, path):
+        found = self.paths.pop(path, None)
+        if (found is not None):
+            self.recorder.addMarker(found[0], history.ORIGIN_GAP, source=history.SOURCE_UPOWER, pathKey=found[1])
+
+
+def stateFolder(env):
+    # systemd hands the unit's StateDirectory over as a colon separated list, and only the first is the history's
+    folder = env.get("STATE_DIRECTORY", "").split(":")[0]
+    return folder if os.path.isabs(folder) else None
 
 
 def serve(bus, receiverList):
@@ -138,18 +210,30 @@ def main(bus=None):
     app = QCoreApplication.instance() or QCoreApplication(sys.argv[:1])
     if (bus is None):
         bus = QDBusConnection.systemBus()
-    receiverList = ReceiverList()
+    folder = stateFolder(os.environ)
+    recorder = history.Recorder(folder)
+    receiverList = ReceiverList(recorder)
     served = serve(bus, receiverList)
     # exiting 1 lets systemd restart a service that started before the bus loaded its policy
     if (served is None):
         return 1
     # an upgrade restarts the service, so the journal shows which version took over
     printLine("Mouse Battery service " + VERSION + " started")
+    if (folder is None):
+        printLine("No state folder was given, so no history is kept")
+    else:
+        # opening now puts any trouble with the file in the journal at start instead of at the first reading
+        recorder.available()
     # the wakeup fd is one of these sockets, so they're held until the loop ends instead of being freed and closed under the signal handler
     sigterm = quitOnSigterm(app)
+    upowerHistory = UPowerHistory(recorder, bus)
+    upowerHistory.start()
     receiverList.start()
     code = app.exec()
+    upowerHistory.stop()
     receiverList.stop()
+    # closing the nodes above writes their gap rows, so the recorder stops last
+    recorder.stop()
     return code
 
 

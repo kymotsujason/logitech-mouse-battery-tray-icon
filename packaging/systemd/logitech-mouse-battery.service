@@ -14,6 +14,9 @@ BusName=io.github.kymotsujason.LogitechMouseBattery
 ExecStart=/usr/bin/python3 -B /usr/share/logitech-mouse-battery/service.py
 # the journal would otherwise tag every line python3
 SyslogIdentifier=logitech-mouse-battery
+# ProtectSystem=strict leaves the history only this folder to write, which systemd makes for the service user and hands over as STATE_DIRECTORY
+StateDirectory=logitech-mouse-battery
+StateDirectoryMode=0750
 User=logitech-mouse-battery
 Group=logitech-mouse-battery
 Restart=on-failure

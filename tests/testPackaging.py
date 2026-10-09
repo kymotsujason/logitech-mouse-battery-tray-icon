@@ -97,7 +97,7 @@ SERVICE_FILES = [
     ("packaging/dbus/io.github.kymotsujason.LogitechMouseBattery.service", "/usr/share/dbus-1/system-services/io.github.kymotsujason.LogitechMouseBattery.service"),
     ("packaging/sysusers/logitech-mouse-battery.conf", "/usr/lib/sysusers.d/logitech-mouse-battery.conf"),
 ]
-ALLOWED_CALLS = {(serviceState.INTERFACE, "GetState"), (serviceState.INTERFACE, "ReadAll"), ("org.freedesktop.DBus.Introspectable", "Introspect"), ("org.freedesktop.DBus.Peer", "Ping"), ("org.freedesktop.DBus.Peer", "GetMachineId")}
+ALLOWED_CALLS = {(serviceState.INTERFACE, "GetState"), (serviceState.INTERFACE, "ReadAll"), (serviceState.INTERFACE, "ReadSilent"), (serviceState.INTERFACE, "GetHistory"), ("org.freedesktop.DBus.Introspectable", "Introspect"), ("org.freedesktop.DBus.Peer", "Ping"), ("org.freedesktop.DBus.Peer", "GetMachineId")}
 
 
 def iniSections(path):
@@ -139,6 +139,10 @@ class ServiceFileTests(unittest.TestCase):
         self.assertGreaterEqual(restartSeconds * (burst - 1), 10)
         # it starts when udev or a caller wants it, never at boot by itself
         self.assertNotIn("Install", sections)
+
+    def testTheUnitGivesTheHistoryItsOwnFolder(self):
+        service = iniSections(os.path.join(PACKAGING, "systemd", UNIT_NAME))["Service"]
+        self.assertEqual((service.get("StateDirectory"), service.get("StateDirectoryMode")), ("logitech-mouse-battery", "0750"))
 
     def testTheUnitLoadsHidBeforeItStarts(self):
         unit = iniSections(os.path.join(PACKAGING, "systemd", UNIT_NAME))["Unit"]

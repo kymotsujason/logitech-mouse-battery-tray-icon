@@ -1,8 +1,11 @@
 import errno
 import io
+import json
 import os
+import shutil
 import signal
 import sys
+import tempfile
 import time
 import unittest
 from unittest import mock
@@ -16,6 +19,7 @@ from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
 
 import hidpp
+import history
 import receivers
 import service
 import serviceState
@@ -72,9 +76,11 @@ class Caller(QObject):
     def onState(self, message):
         self.signals.append(message.arguments()[0])
 
-    def call(self, member, interface=serviceState.INTERFACE, timeout=3.0):
+    def call(self, member, interface=serviceState.INTERFACE, timeout=3.0, arguments=None):
         self.answers = []
         message = QDBusMessage.createMethodCall(serviceState.SERVICE_NAME, serviceState.OBJECT_PATH, interface, member)
+        if (arguments is not None):
+            message.setArguments(arguments)
         self.bus.callWithCallback(message, self.onReply, self.onError, 3000)
         waitUntil(lambda: self.answers, timeout)
         return self.answers[0] if self.answers else None
@@ -400,7 +406,7 @@ class ServiceTests(unittest.TestCase):
             self.assertEqual(service.main(self.connectTo("second")), 1)
 
     def testMainStartsTheReceiversWhenItsStartLineCantBePrinted(self):
-        with mock.patch.object(service, "installExceptionHooks"), mock.patch.object(service.signal, "signal"), mock.patch.object(service, "serve", return_value=(object(), object())), mock.patch.object(service, "ReceiverList") as receiverList, mock.patch.object(service, "quitOnSigterm"), mock.patch.object(service, "QCoreApplication") as application, mock.patch.object(sys, "stderr", BrokenStream()):
+        with mock.patch.object(service, "installExceptionHooks"), mock.patch.object(service.signal, "signal"), mock.patch.object(service, "serve", return_value=(object(), object())), mock.patch.object(service, "ReceiverList") as receiverList, mock.patch.object(service, "UPowerHistory"), mock.patch.object(service, "quitOnSigterm"), mock.patch.object(service, "QCoreApplication") as application, mock.patch.object(sys, "stderr", BrokenStream()):
             application.instance.return_value.exec.return_value = 0
             self.assertEqual(service.main(object()), 0)
         self.assertTrue(receiverList.return_value.start.called)
@@ -438,3 +444,126 @@ class ServiceProcessTests(unittest.TestCase):
 
 if (__name__ == "__main__"):
     unittest.main()
+
+
+class HistoryServiceTests(unittest.TestCase):
+    def setUp(self):
+        requireTools(self)
+        self.privateBus = PrivateBus()
+        self.nodes = FakeNodes()
+        self.folder = tempfile.mkdtemp()
+        self.patches = [
+            mock.patch.object(hidpp, "findHidppNodes", self.nodes.find),
+            mock.patch.object(hidpp.HidppNode, "open", self.nodes.open),
+            mock.patch.object(hidpp, "PING_TIMEOUT", 0.2),
+            mock.patch.object(hidpp, "REQUEST_TIMEOUT", 0.5),
+            mock.patch.object(receivers, "SETTLE_MS", 10),
+            mock.patch.object(receivers, "WAKE_RETRY_MS", 300),
+        ]
+        for patch in self.patches:
+            patch.start()
+        self.names = ["historyService" + str(id(self)), "historyClient" + str(id(self))]
+        self.serviceBus = QDBusConnection.connectToBus(self.privateBus.address, self.names[0])
+        self.clientBus = QDBusConnection.connectToBus(self.privateBus.address, self.names[1])
+        self.recorder = history.Recorder(self.folder)
+        self.receiverList = receivers.ReceiverList(self.recorder)
+        self.served = service.serve(self.serviceBus, self.receiverList)
+        self.caller = Caller(self.clientBus)
+
+    def tearDown(self):
+        self.receiverList.stop()
+        self.recorder.stop()
+        for name in self.names:
+            QDBusConnection.disconnectFromBus(name)
+        for patch in self.patches:
+            patch.stop()
+        self.nodes.closeAll()
+        self.privateBus.close()
+        sip.delete(self.receiverList)
+        shutil.rmtree(self.folder)
+
+    def startWithMouse(self):
+        device = self.nodes.add(RECEIVER, mouseHandler())
+        self.receiverList.start()
+        self.assertTrue(waitUntil(lambda: self.receiverList.mice and not self.receiverList.isBusy()))
+        return device
+
+    def history(self, key="02bc524c"):
+        answer = self.caller.call("GetHistory", arguments=[key])
+        return json.loads(answer[0]) if isinstance(answer, list) else answer
+
+    def testGetHistoryAnswersTheMousesSummary(self):
+        self.startWithMouse()
+        # the stop writes the rows still waiting out the wake set
+        self.recorder.stop()
+        self.recorder.store.lastAttempt = None
+        summary = self.history()
+        self.assertEqual((summary["key"], summary["name"], summary["source"]), ("02bc524c", "PRO X3 SUPERSTRIKE", "hidpp"))
+
+    def testAnUnknownKeyAnswersAnEmptyHistory(self):
+        summary = self.history("ffffffff")
+        self.assertEqual((summary["key"], summary["sessions"]), ("ffffffff", []))
+
+    def testWithoutAFolderGetHistoryAnswersHistoryUnavailable(self):
+        self.receiverList.recorder = history.Recorder(None)
+        self.assertEqual(self.history(), serviceState.HISTORY_UNAVAILABLE)
+
+    def testGetHistoryHasABudgetOfItsOwn(self):
+        answers = [self.history("ffffffff") for i in range(service.READ_ALL_BURST + 1)]
+        self.assertEqual(answers[-1], serviceState.READ_ALL_LIMITED)
+        self.assertTrue(all(isinstance(answer, dict) for answer in answers[:-1]))
+        self.assertEqual(self.caller.call("ReadAll"), [])
+
+    def testReadSilentReadsOnlyMiceThatDontReportOnTheirOwn(self):
+        device = self.startWithMouse()
+        before = batteryReads(device)
+        with mock.patch.object(self.recorder, "reportsItself", lambda key: True):
+            self.assertEqual(self.caller.call("ReadSilent"), [])
+            QTest.qWait(300)
+            self.assertEqual(batteryReads(device), before)
+        self.assertEqual(self.caller.call("ReadSilent"), [])
+        self.assertTrue(waitUntil(lambda: batteryReads(device) > before))
+
+    def testReadSilentSpendsTheReadAllBudget(self):
+        self.startWithMouse()
+        for i in range(service.READ_ALL_BURST):
+            self.caller.call("ReadSilent")
+            QTest.qWait(1100)
+        self.assertEqual(self.caller.call("ReadAll"), serviceState.READ_ALL_LIMITED)
+
+    def testAReadSilentWhileABatchWaitsCostsNoRead(self):
+        self.startWithMouse()
+        self.caller.call("ReadAll")
+        self.caller.call("ReadAll")
+        self.assertTrue(self.receiverList.isReadAllQueued())
+        with mock.patch.object(self.served[1], "takeRead", wraps=self.served[1].takeRead) as taken:
+            self.assertEqual(self.caller.call("ReadSilent"), [])
+            taken.assert_not_called()
+
+
+class FakeUPowerMouse:
+    def __init__(self, path, key, percent, pathKey=False):
+        self.path = path
+        self.key = key
+        self.name = "MX Master 3S"
+        self.reading = hidpp.BatteryReading(percent, 0)
+        self.pathKey = pathKey
+
+
+class UPowerHistoryTests(unittest.TestCase):
+    def testUPowerReadingsGoToTheRecorderAndARemovalIsAGap(self):
+        recorder = mock.Mock()
+        glue = service.UPowerHistory(recorder, QDBusConnection("unconnected"))
+        glue.onMouse(FakeUPowerMouse("/org/freedesktop/UPower/devices/mouse_0", "9a1b2c3d", 70))
+        glue.onRemoved("/org/freedesktop/UPower/devices/mouse_0")
+        glue.onRemoved("/org/freedesktop/UPower/devices/other")
+        recorder.addReading.assert_called_once_with("9a1b2c3d", hidpp.BatteryReading(70, 0), history.ORIGIN_UPOWER, name="MX Master 3S", source=history.SOURCE_UPOWER, pathKey=False)
+        recorder.addMarker.assert_called_once_with("9a1b2c3d", history.ORIGIN_GAP, source=history.SOURCE_UPOWER, pathKey=False)
+
+
+class StateFolderTests(unittest.TestCase):
+    def testTheFirstAbsoluteFolderIsTheHistorys(self):
+        self.assertEqual(service.stateFolder({"STATE_DIRECTORY": "/var/lib/logitech-mouse-battery:/var/lib/other"}), "/var/lib/logitech-mouse-battery")
+
+    def testNoFolderOrARelativeOneMeansNoHistory(self):
+        self.assertEqual((service.stateFolder({}), service.stateFolder({"STATE_DIRECTORY": "relative"})), (None, None))
