@@ -1378,6 +1378,21 @@ class SummaryTests(RecorderCase):
         self.clock.now = START + 11 * 366 * 24 * 60 * 60
         self.assertEqual(len(self.recorder.levels(KEY, "all")["slots"]), 120)
 
+    def testAReadingOrAChargeInTheQuerysOwnSecondIsInTheNewestSlot(self):
+        now = 30 * 24 * 60 * 60
+        self.addReadingRow(60, percent=90)
+        self.addReadingRow(now, percent=70)
+        self.addSession(history.CHARGE, now, None, 70, None)
+        self.clock.now = START + now + 0.4
+        newest = self.recorder.summary(KEY)["recent"][-1]
+        self.assertEqual((newest[1], newest[4]), (70, True))
+        for name in ("day", "week"):
+            newest = self.recorder.levels(KEY, name)["slots"][-1]
+            self.assertEqual((newest[1], newest[4]), (70, True), name)
+        for name in history.SPAN_RANGES:
+            newest = self.recorder.levels(KEY, name)["slots"][-1]
+            self.assertEqual((newest[1], newest[3]), (70, 1), name)
+
     def testRoughLevelsAndMillivoltsBecomeHeights(self):
         self.clock.now = START + 30 * 24 * 60 * 60
         self.addRoughRow(60, level="good")

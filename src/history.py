@@ -1141,11 +1141,13 @@ def spanSlots(db, mouseId, edges):
     before = db.execute("select origin, " + VALUE_SQL + " from readings where mouseId = ? and at < ? and origin in (0, 1, 4, 5) order by at desc, seq desc limit 1", (mouseId, edges[0][0])).fetchone()
     carried = None if before is None or before[0] == ORIGIN_GAP else before[1]
     slots = []
-    for start, end in edges:
+    for slot, (start, end) in enumerate(edges):
+        # the newest slot ends at the query's own second, and a reading made during that second belongs in it
+        limit = end + 1 if slot == len(edges) - 1 else end
         # each slot is a range scan on the primary key, so ten years of readings cost a few hundred indexed queries
-        low, high = db.execute("select min(" + VALUE_SQL + "), max(" + VALUE_SQL + ") from readings where mouseId = ? and at >= ? and at < ? and origin in (0, 1, 5)", (mouseId, start, end)).fetchone()
-        last = db.execute("select origin, " + VALUE_SQL + " from readings where mouseId = ? and at >= ? and at < ? and origin in (0, 1, 4, 5) order by at desc, seq desc limit 1", (mouseId, start, end)).fetchone()
-        charges = db.execute("select count(*) from sessions where mouseId = ? and kind = ? and startAt >= ? and startAt < ?", (mouseId, CHARGE, start, end)).fetchone()[0]
+        low, high = db.execute("select min(" + VALUE_SQL + "), max(" + VALUE_SQL + ") from readings where mouseId = ? and at >= ? and at < ? and origin in (0, 1, 5)", (mouseId, start, limit)).fetchone()
+        last = db.execute("select origin, " + VALUE_SQL + " from readings where mouseId = ? and at >= ? and at < ? and origin in (0, 1, 4, 5) order by at desc, seq desc limit 1", (mouseId, start, limit)).fetchone()
+        charges = db.execute("select count(*) from sessions where mouseId = ? and kind = ? and startAt >= ? and startAt < ?", (mouseId, CHARGE, start, limit)).fetchone()[0]
         values = [value for value in (low, high, carried) if value is not None]
         slots.append([end, min(values), max(values), charges] if values else [end, None, None, charges])
         if (last is not None):
@@ -1165,7 +1167,9 @@ def recentSlots(db, mouseId, now, count=SLOTS, seconds=SLOT_SECONDS):
     for slot in range(count):
         slotStart = start + slot * seconds
         slotEnd = slotStart + seconds
-        while (index < len(rows) and rows[index][0] < slotEnd):
+        # the newest slot ends at the query's own second, and a reading made during that second belongs in it
+        limit = slotEnd + 1 if slot == count - 1 else slotEnd
+        while (index < len(rows) and rows[index][0] < limit):
             at, origin, percent, levelName, millivolts = rows[index]
             if (origin == ORIGIN_GAP):
                 # nothing is known after a gap until the next reading
@@ -1173,7 +1177,7 @@ def recentSlots(db, mouseId, now, count=SLOTS, seconds=SLOT_SECONDS):
             elif (origin in READING_ORIGINS):
                 level = (percent, levelName, millivolts)
             index += 1
-        charged = any(chargeStart < slotEnd and chargeEnd > slotStart for chargeStart, chargeEnd in charges)
+        charged = any(chargeStart < limit and chargeEnd > slotStart for chargeStart, chargeEnd in charges)
         if (level is None):
             slots.append([slotEnd, None, None, None, charged])
         else:
