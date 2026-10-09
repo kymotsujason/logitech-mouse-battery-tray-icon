@@ -18,6 +18,8 @@ INTEGRITY_FLAG = "history.check-integrity"
 SCHEMA_VERSION = 1
 OPEN_RETRY_SECONDS = 600
 HOLD_SECONDS = 10
+# a clock that stepped back would otherwise make a wait no timer can hold, so the timer looks again at least this often
+LONGEST_WAIT_SECONDS = 2 * 60 * 60
 # the probe saw a wake's battery event come with or after its wireless status event, but only on two wakes, so a reading this close before a wake counts as part of it
 WAKE_SET_SECONDS = 2
 MILLIVOLT_STEP = 20
@@ -762,7 +764,8 @@ class Recorder(QObject):
         if (not due):
             self.timer.stop()
             return
-        self.timer.start(max(1, int((min(due) - self.clock()) * 1000) + 1))
+        wait = min(min(due) - self.clock(), LONGEST_WAIT_SECONDS)
+        self.timer.start(max(1, int(wait * 1000) + 1))
 
     def stop(self):
         for entry in self.entries.values():

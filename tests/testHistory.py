@@ -449,7 +449,26 @@ class StepTests(RecorderCase):
 
     def testAClockThatSteppedBackSavesNoStep(self):
         self.drops((5000, 80), (6800, 79), (100, 78))
+        # stopping writes the held row, so the 79 to 78 step reaches the length check
+        self.recorder.stop()
+        self.assertIn((100, 0, 78), [row[:3] for row in self.rows()])
         self.assertEqual([(s[3], s[4]) for s in self.steps()], [(80, 79)])
+
+    def testAClockThatSteppedBackWaitsNoLongerThanTwoHours(self):
+        later = 40 * 24 * 60 * 60
+        recorder = history.Recorder(None, self.clock)
+        recorder.addReading(KEY, battery(50), history.ORIGIN_EVENT, at=START + later)
+        self.clock.now = START + later + 2
+        recorder.tick()
+        recorder.addReading(KEY, battery(49), history.ORIGIN_EVENT, at=START + later + 3)
+        self.clock.now = START + later + 5
+        recorder.tick()
+        self.assertIsNotNone(recorder.entries[KEY].held)
+        self.clock.now = START
+        recorder.tick()
+        self.assertTrue(recorder.timer.isActive())
+        self.assertLessEqual(recorder.timer.interval(), 2 * 60 * 60 * 1000 + 1)
+        recorder.stop()
 
 
 class ReportsItselfTests(RecorderCase):
