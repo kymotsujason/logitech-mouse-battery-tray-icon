@@ -226,6 +226,15 @@ class WindowTests(WindowCase):
         window.refresh()
         self.assertEqual(len(self.watcher.asked), 2)
 
+    def testAReplyAskedForDuringTheServicesHoldIsOld(self):
+        # a change of the percent alone soon after the last write is held for up to HOLD_SECONDS before it's written
+        window = self.opened(entry())
+        self.upowerChange()
+        mouse = window.selectedMouse()
+        askedAt = window.upowerChangedAt["02bc524c"] + history.WAKE_SET_SECONDS + history.HOLD_SECONDS
+        self.assertTrue(window.isOld(mouse, historyWindow.Reply(reply("02bc524c"), mouse.historyRevision, askedAt)))
+        self.assertGreater(historyWindow.UPOWER_SETTLE_SECONDS, history.WAKE_SET_SECONDS + history.HOLD_SECONDS)
+
     def testAUPowerChangeDuringAFetchMakesItsAnswerOld(self):
         self.watcher.hold = True
         window = self.opened(entry())

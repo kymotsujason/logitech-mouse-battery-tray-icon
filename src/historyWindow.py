@@ -38,8 +38,8 @@ CHART_MIN_HEIGHT = 160
 # the layout's fixed parts, top margin to bottom margin, around the top row and the chart
 FIXED_HEIGHT = MARGIN + 20 + SEGMENT_HEIGHT + 14 + 16 + FORM_HEIGHT + MARGIN
 FETCH_GAP_SECONDS = 30
-# the service writes a UPower reading only once its wake set wait is over, so a fetch after a change waits that long and a bit for the GetAll each side makes
-UPOWER_SETTLE_SECONDS = history.WAKE_SET_SECONDS + 3
+# the service writes a UPower reading once its wake set wait is over, and holds a change of the percent alone until HOLD_SECONDS after its last write, so a fetch after a change waits out both and a bit for the GetAll each side makes
+UPOWER_SETTLE_SECONDS = history.WAKE_SET_SECONDS + history.HOLD_SECONDS + 3
 STALE_SLOT_SECONDS = 2 * 60 * 60
 RETRY_MS = 30 * 1000
 # KWin answered within 20 ms where it was measured, so the first check comes soon and a slower machine gets one more
