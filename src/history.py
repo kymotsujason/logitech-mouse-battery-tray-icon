@@ -1030,7 +1030,7 @@ def bucketEntry(bucket, figures):
 
 
 def emptyHistory(key):
-    return {"version": HISTORY_VERSION, "key": key, "name": None, "source": None, "firstSeen": None, "reportsItself": False, "wakeSupport": False, "open": None, "drain": {"buckets": bucketEntries([], drainBucket, DRAIN_BUCKETS), "largeSteps": False}, "charge": [], "lastCharge": None, "lastError": None, "monthly": [], "sessionColumns": list(SESSION_COLUMNS), "sessions": [], "recent": []}
+    return {"version": HISTORY_VERSION, "key": key, "name": None, "source": None, "firstSeen": None, "reportsItself": False, "wakeSupport": False, "wakesVisible": True, "open": None, "drain": {"buckets": bucketEntries([], drainBucket, DRAIN_BUCKETS), "largeSteps": False}, "charge": [], "lastCharge": None, "lastError": None, "monthly": [], "sessionColumns": list(SESSION_COLUMNS), "sessions": [], "recent": []}
 
 
 def readSummary(db, entry, key, now):
@@ -1050,6 +1050,8 @@ def readSummary(db, entry, key, now):
             summary["reportsItself"] = entry.pendingFlags["reportsItselfSince"] is not None
         if ("wakeSupport" in entry.pendingFlags):
             summary["wakeSupport"] = bool(entry.pendingFlags["wakeSupport"])
+    # a lookup that hasn't answered keeps the saved wakeSupport, while no drop can be measured until one does
+    summary["wakesVisible"] = entry is None or not entry.track.wakesUnseen
     summary["open"] = openSummary(db, mouseId)
     drops = db.execute("select session, fromPercent, minutesPerPercent from steps where mouseId = ? and kind = 0 and unbroken = 1 and fromPercent <= 80 and toPercent >= 20 order by at, seq", (mouseId,)).fetchall()
     sizes = [moved for (moved,) in db.execute("select fromPercent - toPercent from steps where mouseId = ? and kind = 0 order by at desc, seq desc limit ?", (mouseId, LARGE_STEP_COUNT))]

@@ -32,6 +32,7 @@ ROUGH_TEXT = "This mouse reports only rough levels, so drain and charge speed ca
 VOLTAGE_TEXT = "This mouse reports only its voltage, so drain and charge speed can't be measured."
 NO_WAKES_TEXT = "This mouse doesn't say when it wakes, so drain can't be measured. Charging speed still can."
 LARGE_STEPS_TEXT = "This mouse reports its level in large steps, so drain can't be measured."
+WAKES_UNSEEN_TEXT = "This mouse's wakes aren't visible yet, so drain isn't being measured."
 
 
 @dataclass(frozen=True)
@@ -122,6 +123,9 @@ def drainMessage(summary, reading, readyRanges):
         return Line(LEARNING, NO_WAKES_TEXT)
     if (summary["drain"].get("largeSteps")):
         return Line(LEARNING, LARGE_STEPS_TEXT)
+    # a summary from a service older than the field says nothing either way
+    if (not summary.get("wakesVisible", True)):
+        return Line(LEARNING, WAKES_UNSEEN_TEXT)
     return Line(LEARNING, "Still learning, " + str(readyRanges) + " of " + str(READY_BUCKETS) + " battery ranges measured.")
 
 

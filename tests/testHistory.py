@@ -1089,6 +1089,15 @@ class SummaryTests(RecorderCase):
             for j in range(3):
                 self.addStep(session, history.DISCHARGE, i * 1000 + j + 1, minutes(i), fromPercent - j, fromPercent - j - 1)
 
+    def testTheSummarySaysWhetherWakesAreVisible(self):
+        self.assertTrue(self.recorder.summary(KEY)["wakesVisible"])
+        self.recorder.setWakeSupport(KEY, None)
+        summary = self.recorder.summary(KEY)
+        # the saved flag stands while a lookup hasn't answered, but no wake can be seen until one does
+        self.assertEqual((summary["wakeSupport"], summary["wakesVisible"]), (True, False))
+        self.recorder.setWakeSupport(KEY, True)
+        self.assertTrue(self.recorder.summary(KEY)["wakesVisible"])
+
     def testAnUnknownKeyIsAnEmptyHistory(self):
         summary = self.recorder.summary("ffffffff")
         self.assertEqual((summary["key"], summary["sessions"], summary["open"], summary["charge"]), ("ffffffff", [], None, []))

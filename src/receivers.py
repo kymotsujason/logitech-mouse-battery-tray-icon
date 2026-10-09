@@ -30,6 +30,10 @@ IDENTIFY_GAP_MS = 1000
 GONE_ERRNOS = (errno.ENODEV, errno.EIO, errno.ESHUTDOWN, errno.EBADF, errno.ENXIO, errno.ENOENT)
 TRANSIENT_ERROR_LIMIT = 3
 STOP_WAIT_SECONDS = 1.0
+# a wake lookup that keeps failing is asked again at once a few times and then after waits that double up to an hour, while every identify still asks
+WAKE_LOOKUP_FREE_TRIES = 3
+WAKE_LOOKUP_WAIT_MS = 60 * 1000
+WAKE_LOOKUP_WAIT_MAX_MS = 60 * 60 * 1000
 
 
 def printTraceback(heading):
@@ -38,6 +42,12 @@ def printTraceback(heading):
         traceback.print_exc()
     except (OSError, ValueError):
         pass
+
+
+def wakeLookupWait(failures):
+    if (failures < WAKE_LOOKUP_FREE_TRIES):
+        return 0
+    return min(WAKE_LOOKUP_WAIT_MS * 2 ** min(failures - WAKE_LOOKUP_FREE_TRIES, 16), WAKE_LOOKUP_WAIT_MAX_MS)
 
 
 class NodeWorker(threading.Thread):
@@ -188,6 +198,8 @@ class ReceiverMouse:
         self.wakeAnswered = False
         # a unit id's mouse whose lookup didn't answer, so its next read or battery event asks again
         self.wakeLookupDue = False
+        self.wakeLookupFailures = 0
+        self.wakeLookupAfter = None
         self.reportsItself = False
         self.historyRevision = 0
 
@@ -613,6 +625,9 @@ class ReceiverList(QObject):
         if (kind == "wake"):
             # the lookup stays due, so the mouse's next read or battery event asks again
             state.pendingWakeLookups.discard(item[1])
+            mouse = self.findByNode(state.path, item[1])
+            if (mouse is not None and mouse.wakeLookupDue):
+                self.wakeLookupFailed(mouse)
             return
         if (kind == "read"):
             self.settleRead(state, item[1])
@@ -665,12 +680,15 @@ class ReceiverList(QObject):
             mouse.wakeIndex = found.wakeIndex
             mouse.wakeAnswered = found.wakeAnswered
             mouse.wakeLookupDue = False
+            if (found.wakeAnswered):
+                self.wakeLookupAnswered(mouse)
             supported = mouse.wakeIndex is not None
         elif (mouse.wakeAnswered):
             supported = mouse.wakeIndex is not None
         else:
             # nothing says the mouse lacks the feature, so its saved flag stands until a lookup answers
             mouse.wakeLookupDue = True
+            self.wakeLookupFailed(mouse)
             supported = None
         self.recorder.setWakeSupport(key, supported, pathKey=mouse.pathKey)
         # the service may have missed something before a mouse it hadn't seen, one that moved, or one whose link came back
@@ -683,7 +701,7 @@ class ReceiverList(QObject):
             reading = mouse.reading
             arrived = mouse.batteryEventAt
         self.applyOutcome(mouse, found.outcome, reading, queuedAt, woke=(moved or linkUp), arrived=arrived)
-        if (mouse.wakeLookupDue and found.outcome == hidpp.ANSWER):
+        if (mouse.wakeLookupDue and found.outcome == hidpp.ANSWER and not self.wakeLookupWaiting(mouse)):
             # the mouse answered its battery read, so the read this brings asks for the index again instead of leaving it until the next link up
             self.retryLater(mouse)
 
@@ -771,21 +789,41 @@ class ReceiverList(QObject):
         state.worker.queueWork(("read", mouse.slot, mouse.feature, time.monotonic()))
 
     def lookUpWake(self, state, mouse):
-        if (not mouse.wakeLookupDue or mouse.slot in state.pendingWakeLookups):
+        if (not mouse.wakeLookupDue or mouse.slot in state.pendingWakeLookups or self.wakeLookupWaiting(mouse)):
             return
         state.pendingWakeLookups.add(mouse.slot)
         state.worker.queueWork(("wake", mouse.slot))
+
+    def wakeLookupWaiting(self, mouse):
+        return mouse.wakeLookupAfter is not None and time.monotonic() < mouse.wakeLookupAfter
+
+    def wakeLookupFailed(self, mouse):
+        mouse.wakeLookupFailures += 1
+        if (mouse.wakeLookupFailures == 1):
+            printLine("Wireless status lookup for " + mouse.key + " didn't answer, so its wakes aren't seen until one does")
+        wait = wakeLookupWait(mouse.wakeLookupFailures)
+        mouse.wakeLookupAfter = time.monotonic() + wait / 1000 if wait else None
+
+    def wakeLookupAnswered(self, mouse):
+        if (mouse.wakeLookupFailures):
+            printLine("Wireless status lookup for " + mouse.key + " answered")
+        mouse.wakeLookupFailures = 0
+        mouse.wakeLookupAfter = None
 
     def onWakeFound(self, state, slot, result):
         state.pendingWakeLookups.discard(slot)
         mouse = self.findByNode(state.path, slot)
         answered, wakeIndex = result
         # an identify that answered since this was queued already set the index
-        if (mouse is None or not mouse.wakeLookupDue or not answered):
+        if (mouse is None or not mouse.wakeLookupDue):
+            return
+        if (not answered):
+            self.wakeLookupFailed(mouse)
             return
         mouse.wakeIndex = wakeIndex
         mouse.wakeAnswered = True
         mouse.wakeLookupDue = False
+        self.wakeLookupAnswered(mouse)
         self.recorder.setWakeSupport(mouse.key, wakeIndex is not None, pathKey=mouse.pathKey)
 
     def settleRead(self, state, slot):

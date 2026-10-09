@@ -115,6 +115,14 @@ class LineTests(unittest.TestCase):
         large = summary(drain={"buckets": readyBuckets((), 0, ()), "largeSteps": True})
         self.assertEqual(self.lines(large)[0], [(health.LEARNING, health.LARGE_STEPS_TEXT)])
 
+    def testAMouseWhoseWakesArentVisibleYetIsntStillLearning(self):
+        value = summary(wakesVisible=False, drain={"buckets": readyBuckets((80,), 30.0, (30.0, 30.0, 30.0)), "largeSteps": False})
+        self.assertEqual(self.lines(value), ([(health.LEARNING, health.WAKES_UNSEEN_TEXT)], health.SYMBOL_CLOCK))
+        # a service from before the field still gets its learning count
+        old = summary()
+        del old["wakesVisible"]
+        self.assertEqual(self.lines(old)[0][0][1], "Still learning, 0 of 3 battery ranges measured.")
+
     def testNoMoreThanThreeLines(self):
         value = summary(lastError=NOW, drain={"buckets": readyBuckets((80, 70, 60), 30.0, (24.0, 24.0, 24.0)), "largeSteps": False}, charge=[{"power": 2, "buckets": readyBuckets((20, 30, 40), 0.5, (0.6, 0.6, 0.6))}])
         self.assertEqual([kind for kind, text in self.lines(value)[0]], [health.ALERT, health.DRAIN, health.CHARGE_LINE_KIND])

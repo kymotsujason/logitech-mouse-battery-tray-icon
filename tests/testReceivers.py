@@ -1819,6 +1819,54 @@ class ReceiverHistoryTests(unittest.TestCase):
         self.assertTrue(waitUntil(lambda: self.mouse().wakeIndex == 23))
         self.assertFalse(self.mouse().wakeLookupDue)
 
+    def lookups(self, receiver):
+        return sum(1 for sent in list(receiver.requests) if isWakeLookup(sent))
+
+    def startWithFailingLookups(self, answering):
+        answer = mouseHandler(features=WIRELESS_FEATURES)
+
+        def handle(request):
+            if (isWakeLookup(request) and not answering):
+                return [deviceError(request)]
+            return answer(request)
+        receiver = self.start(handle)
+        self.mouse().wakeTimer.stop()
+        return receiver
+
+    def lookUpOnce(self, receiver):
+        before = self.lookups(receiver)
+        self.mice.readAll()
+        self.assertTrue(waitUntil(lambda: not self.mice.isBusy() and not self.mice.nodes[RECEIVER].pendingWakeLookups))
+        return self.lookups(receiver) - before
+
+    def testALookupThatKeepsFailingWaitsLongerEachTime(self):
+        answering = []
+        with mock.patch.object(receivers, "WAKE_LOOKUP_WAIT_MS", 400):
+            receiver = self.startWithFailingLookups(answering)
+            # the identify's lookup was the first to fail, so two more go out at once and then the waits start
+            self.assertEqual([self.lookUpOnce(receiver) for i in range(3)], [1, 1, 0])
+            QTest.qWait(450)
+            self.assertEqual([self.lookUpOnce(receiver) for i in range(2)], [1, 0])
+            QTest.qWait(450)
+            self.assertEqual(self.lookUpOnce(receiver), 0)
+            answering.append(True)
+            QTest.qWait(400)
+            self.assertEqual(self.lookUpOnce(receiver), 1)
+        self.assertEqual((self.mouse().wakeIndex, self.mouse().wakeLookupDue), (23, False))
+
+    def testTheWakeLookupWaitDoublesUpToAnHour(self):
+        self.assertEqual([receivers.wakeLookupWait(failures) for failures in (1, 2, 3, 4, 5)], [0, 0, 60 * 1000, 120 * 1000, 240 * 1000])
+        self.assertEqual(receivers.wakeLookupWait(1000), 60 * 60 * 1000)
+
+    def testAFailingLookupPrintsOnceAndOnceMoreWhenItAnswers(self):
+        answering = []
+        receiver = self.startWithFailingLookups(answering)
+        self.lookUpOnce(receiver)
+        answering.append(True)
+        self.lookUpOnce(receiver)
+        self.assertEqual(self.mouse().wakeIndex, 23)
+        self.assertEqual(self.errors.getvalue().splitlines()[1:], ["Wireless status lookup for 02bc524c didn't answer, so its wakes aren't seen until one does", "Wireless status lookup for 02bc524c answered"])
+
     def testAMouseWithoutAUnitIdTakesTheLookupAsItCame(self):
         self.start(mouseHandler(features={0x0005: 2, 0x1004: 5, 0x1D4B: 23}))
         self.assertEqual((self.mouse().key, self.mouse().wakeIndex), (RECEIVER + "#1", 23))
