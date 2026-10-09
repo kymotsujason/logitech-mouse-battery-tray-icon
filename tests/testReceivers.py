@@ -70,7 +70,7 @@ class WorkerTests(unittest.TestCase):
         self.worker.queueWork(("read", 1, FEATURE, 0.0))
         message = nextMessage(self.messages, "read")
         self.assertIs(message[1], self.worker)
-        self.assertEqual(message[2:], (1, (hidpp.ANSWER, hidpp.BatteryReading(81, 0)), 0.0))
+        self.assertEqual(message[2:], (1, (hidpp.ANSWER, hidpp.BatteryReading(81, 0, power=0)), 0.0))
 
     def testSearchResultIsPosted(self):
         self.startWorker(mouseHandler())
@@ -141,7 +141,7 @@ class WorkerTests(unittest.TestCase):
         message = nextMessage(self.messages, "failed")
         self.assertEqual((message[2], message[3].errno), (("read", 1, FEATURE, 0.0), errno.ETIMEDOUT))
         self.worker.queueWork(("read", 1, FEATURE, 0.0))
-        self.assertEqual(nextMessage(self.messages, "read")[3], (hidpp.ANSWER, hidpp.BatteryReading(81, 0)))
+        self.assertEqual(nextMessage(self.messages, "read")[3], (hidpp.ANSWER, hidpp.BatteryReading(81, 0, power=0)))
 
     def testWritesTurnedAwayThreeTimesInARowLoseTheNode(self):
         self.startWorker(mouseHandler())
@@ -259,7 +259,7 @@ class WorkerTests(unittest.TestCase):
             self.worker.queueWork(("read", 1, FEATURE, 1.0))
             first = nextMessage(self.messages, "read")
             second = nextMessage(self.messages, "read")
-        self.assertEqual((first[3], second[3]), ((hidpp.ANSWER, hidpp.BatteryReading(81, 0)),) * 2)
+        self.assertEqual((first[3], second[3]), ((hidpp.ANSWER, hidpp.BatteryReading(81, 0, power=0)),) * 2)
 
     def testAReportTakenByARequestDoesntStallTheNextWork(self):
         self.device = FakeDevice(mouseHandler())
@@ -376,7 +376,7 @@ class ReceiverListTests(unittest.TestCase):
         self.mice.start()
         self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"]))
         mouse = self.mouse()
-        self.assertEqual((mouse.name, mouse.nodePath, mouse.slot, mouse.reading), (NAME.decode(), RECEIVER, 1, hidpp.BatteryReading(81, 0)))
+        self.assertEqual((mouse.name, mouse.nodePath, mouse.slot, mouse.reading), (NAME.decode(), RECEIVER, 1, hidpp.BatteryReading(81, 0, power=0)))
         self.assertFalse(mouse.asleep)
 
     def testAMouseOnASecondReceiverBehindAKeyboard(self):
@@ -607,7 +607,7 @@ class ReceiverListTests(unittest.TestCase):
         self.mice.start()
         self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"]))
         receiver.send(bytes([0x11, 1, 5, 0x00, 64, 0x04, 1, 1]).ljust(20, b"\x00"))
-        self.assertTrue(waitUntil(lambda: self.mouse().reading == hidpp.BatteryReading(64, 1)))
+        self.assertTrue(waitUntil(lambda: self.mouse().reading == hidpp.BatteryReading(64, 1, power=1)))
 
     def testALinkUpWithANewUnitIdReplacesTheEntry(self):
         receiver = self.nodes.add(RECEIVER, mouseHandler())
@@ -868,7 +868,7 @@ class ReceiverListTests(unittest.TestCase):
         receiver.handler = eventThenSilence
         self.mice.readAll()
         self.assertTrue(waitUntil(lambda: not self.mice.nodes[RECEIVER].pendingReads))
-        self.assertEqual((self.mouse().reading, self.mouse().asleep), (hidpp.BatteryReading(42, 0), False))
+        self.assertEqual((self.mouse().reading, self.mouse().asleep), (hidpp.BatteryReading(42, 0, power=0), False))
 
     def eventDuringTheName(self, receiver):
         # the battery reply comes first, and a battery event the mouse sends while its name is read is the newer level
@@ -890,7 +890,7 @@ class ReceiverListTests(unittest.TestCase):
         self.mice.requestSearch(RECEIVER)
         self.assertTrue(waitUntil(lambda: not self.mice.isBusy()))
         mouse = self.mouse()
-        self.assertEqual((mouse.reading, mouse.asleep, mouse.name), (hidpp.BatteryReading(42, 0), False, NAME.decode()))
+        self.assertEqual((mouse.reading, mouse.asleep, mouse.name), (hidpp.BatteryReading(42, 0, power=0), False, NAME.decode()))
 
     def testABatteryEventDuringAnIdentifysNameReadWinsOverItsReading(self):
         receiver = self.nodes.add(RECEIVER, mouseHandler())
@@ -901,7 +901,7 @@ class ReceiverListTests(unittest.TestCase):
         self.mice.message.connect(lambda message: identified.append(message) if message[0] == "identified" else None)
         receiver.send(LINK_UP)
         self.assertTrue(waitUntil(lambda: identified and not self.mice.isBusy()))
-        self.assertEqual(self.mouse().reading, hidpp.BatteryReading(42, 0))
+        self.assertEqual(self.mouse().reading, hidpp.BatteryReading(42, 0, power=0))
 
     def testAnErrorOnANewMousesFirstReadReadsItAgainSoon(self):
         answers = {(5, 0): [0x0F, 0x02]}
@@ -912,7 +912,7 @@ class ReceiverListTests(unittest.TestCase):
         self.assertEqual((mouse.reading, mouse.asleep), (None, False))
         self.assertTrue(mouse.wakeTimer is not None and mouse.wakeTimer.isActive())
         answers[(5, 1)] = [77, 0x04, 0, 0]
-        self.assertTrue(waitUntil(lambda: self.mouse().reading == hidpp.BatteryReading(77, 0), timeout=2.0))
+        self.assertTrue(waitUntil(lambda: self.mouse().reading == hidpp.BatteryReading(77, 0, power=0), timeout=2.0))
 
     def testAMouseThatKeepsAnsweringWithAnErrorIsReadAFewTimesThenWaits(self):
         receiver = self.nodes.add(RECEIVER, mouseHandler(answers={(5, 0): [0x0F, 0x02]}))
@@ -923,7 +923,7 @@ class ReceiverListTests(unittest.TestCase):
         self.assertEqual(batteryReads(receiver), 4)
         self.assertFalse(self.mouse().wakeTimer.isActive())
         receiver.send(bytes([0x11, 1, 5, 0x00, 64, 0x04, 0, 0]).ljust(20, b"\x00"))
-        self.assertTrue(waitUntil(lambda: self.mouse().reading == hidpp.BatteryReading(64, 0)))
+        self.assertTrue(waitUntil(lambda: self.mouse().reading == hidpp.BatteryReading(64, 0, power=0)))
 
     def holdTwoBusyNodes(self):
         self.nodes.add(RECEIVER, mouseHandler())
@@ -1425,7 +1425,7 @@ class ReceiverListTests(unittest.TestCase):
             receiver.send(OTHER_REPORT)
         self.assertTrue(waitUntil(lambda: len(changes) >= 3))
         QTest.qWait(200)
-        self.assertEqual((self.mouse().reading, len(changes)), (hidpp.BatteryReading(64, 0), 3))
+        self.assertEqual((self.mouse().reading, len(changes)), (hidpp.BatteryReading(64, 0, power=0), 3))
 
     def testItSaysItsSearchingWhileTheFirstSearchRuns(self):
         self.nodes.add(RECEIVER, silent)
@@ -1541,10 +1541,10 @@ class ReceiverListTests(unittest.TestCase):
         self.assertIn(1, lostState.pendingReads)
         answers = {(5, 0): [0x0F, 0x02], (5, 1): [33, 0x04, 0, 0]}
         self.nodes.replace(RECEIVER, mouseHandler(answers=answers))
-        self.assertTrue(waitUntil(lambda: self.mice.nodes.get(RECEIVER) not in (None, lostState) and not self.mice.nodes[RECEIVER].searching and self.mouse() is not None and self.mouse().reading == hidpp.BatteryReading(33, 0)))
+        self.assertTrue(waitUntil(lambda: self.mice.nodes.get(RECEIVER) not in (None, lostState) and not self.mice.nodes[RECEIVER].searching and self.mouse() is not None and self.mouse().reading == hidpp.BatteryReading(33, 0, power=0)))
         answers[(5, 1)] = [34, 0x04, 0, 0]
         self.mice.readAll()
-        self.assertTrue(waitUntil(lambda: self.mouse().reading == hidpp.BatteryReading(34, 0)))
+        self.assertTrue(waitUntil(lambda: self.mouse().reading == hidpp.BatteryReading(34, 0, power=0)))
 
     def testABatteryReportThatRepeatsTheReadingStillEmits(self):
         receiver = self.nodes.add(RECEIVER, mouseHandler())
@@ -1556,7 +1556,7 @@ class ReceiverListTests(unittest.TestCase):
         receiver.send(bytes([0x11, 1, 5, 0x00, 81, 0x04, 0, 0]).ljust(20, b"\x00"))
         self.assertTrue(waitUntil(lambda: self.mouse().lastRead != firstRead))
         QTest.qWait(100)
-        self.assertEqual((self.mouse().reading, len(changes)), (hidpp.BatteryReading(81, 0), 1))
+        self.assertEqual((self.mouse().reading, len(changes)), (hidpp.BatteryReading(81, 0, power=0), 1))
 
     def testBusyWhileASearchOrAReadIsPending(self):
         self.nodes.add(RECEIVER, mouseHandler())

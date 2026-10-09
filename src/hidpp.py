@@ -29,6 +29,8 @@ FEATURE_BATTERY_VOLTAGE = 0x1001
 FEATURE_UNIFIED_BATTERY = 0x1004
 BATTERY_FEATURES = [FEATURE_UNIFIED_BATTERY, FEATURE_BATTERY_STATUS, FEATURE_BATTERY_VOLTAGE]
 FEATURE_DEVICE_INFO = 0x0003
+# the wireless status feature sends an event each time the device connects, which is how a wake shows when nothing else says so
+FEATURE_WIRELESS_STATUS = 0x1D4B
 MOUSE_KINDS = (3, 4, 5)
 
 ANSWER = 0
@@ -68,6 +70,7 @@ EVENT_OTHER = 1
 EVENT_BATTERY = 2
 EVENT_LINK_DOWN = 3
 EVENT_LINK_UP = 4
+EVENT_WAKE = 5
 
 
 @dataclass(frozen=True)
@@ -84,6 +87,8 @@ class BatteryReading:
     charging: int
     millivolts: int | None = None
     level: str | None = None
+    # byte 3 of a unified battery status, the external power source as the device sent it, and None where the feature or report has no such byte
+    power: int | None = None
 
 
 @dataclass(frozen=True)
@@ -96,6 +101,8 @@ class FoundMouse:
     outcome: int = ANSWER
     # the monotonic time the worker got the reading, which a battery event it read later is newer than
     readAt: float | None = None
+    # the wireless status feature's index, or None when the device has none or the lookup failed
+    wakeIndex: int | None = None
 
 
 @dataclass(frozen=True)
@@ -375,8 +382,17 @@ def identifySlot(node, slot, deadline=None):
     # a read cut off by the budget says the identify ran out of time, not that the mouse went quiet, so the mouse is kept and read again later as one that answered with an error
     if (outcome == TIMEOUT and time.monotonic() >= deadline):
         return (FOUND, FoundMouse(slot, unitId, None, feature, None, ERROR))
+    wakeIndex = findWakeIndex(node, slot, deadline)
     name = readName(node, slot, deadline)
-    return (FOUND, FoundMouse(slot, unitId, name, feature, reading, outcome, readAt))
+    return (FOUND, FoundMouse(slot, unitId, name, feature, reading, outcome, readAt, wakeIndex))
+
+
+def findWakeIndex(node, deviceIndex, deadline=None):
+    # a lookup that fails leaves the mouse on the old wake rule instead of failing the identify
+    kind, featureIndex = lookupFeature(node, deviceIndex, FEATURE_WIRELESS_STATUS, deadline)
+    if (kind != ANSWER or not featureIndex):
+        return None
+    return featureIndex
 
 
 def searchNode(node, skipped=frozenset(), pingTimeout=None, deadline=None):
@@ -443,9 +459,11 @@ def unifiedLevelName(flags):
 
 def parseUnifiedStatus(params, hasPercent):
     charging = params[2] if params[2] < HIDPP_STATUS_COUNT else CHARGING_ERROR
+    # a short report holds only three parameter bytes, so the power byte isn't there to read
+    power = params[3] if len(params) > 3 else None
     if (hasPercent):
-        return BatteryReading(min(params[0], 100), charging)
-    return BatteryReading(None, charging, level=unifiedLevelName(params[1]))
+        return BatteryReading(min(params[0], 100), charging, power=power)
+    return BatteryReading(None, charging, level=unifiedLevelName(params[1]), power=power)
 
 
 def readBattery(node, feature, deadline=None):
@@ -474,7 +492,7 @@ def isReply(report):
     return (report[3] & 0x0F) != 0
 
 
-def parseEvent(report, feature):
+def parseEvent(report, feature, wakeIndex=None):
     if (len(report) < 5 or report[1] != feature.deviceIndex):
         return (EVENT_NONE, None)
     if (isReply(report)):
@@ -484,6 +502,9 @@ def parseEvent(report, feature):
         if (report[4] & 0x40):
             return (EVENT_LINK_DOWN, None)
         return (EVENT_LINK_UP, None)
+    # the device sends a wireless status event with function 0 and software id 0 each time it connects, waking included
+    if (wakeIndex is not None and report[2] == wakeIndex and report[3] == 0x00):
+        return (EVENT_WAKE, None)
     # a feature event has function 0 and software id 0, since the device sent it on its own
     if (report[2] == feature.featureIndex and report[3] == 0x00 and len(report) >= 7):
         if (feature.featureId == FEATURE_UNIFIED_BATTERY):

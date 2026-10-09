@@ -199,7 +199,33 @@ class DeviceTests(unittest.TestCase):
             return answer(request)
         self.device = FakeDevice(slowName)
         outcome, found = hidpp.identifySlot(self.device.node(), 1, time.monotonic() + 0.4)
-        self.assertEqual((outcome, found.reading, found.outcome), (hidpp.FOUND, hidpp.BatteryReading(81, 0), hidpp.ANSWER))
+        self.assertEqual((outcome, found.reading, found.outcome), (hidpp.FOUND, hidpp.BatteryReading(81, 0, power=0), hidpp.ANSWER))
+
+    def testAnIdentifyFindsTheWirelessStatusFeature(self):
+        self.device = FakeDevice(mouseHandler(features={0x0003: 3, 0x0005: 2, 0x1004: 5, 0x1D4B: 23}))
+        outcome, found = hidpp.identifySlot(self.device.node(), 1)
+        self.assertEqual((outcome, found.wakeIndex), (hidpp.FOUND, 23))
+
+    def testAMouseWithoutTheWirelessStatusFeatureHasNoWakeIndex(self):
+        self.device = FakeDevice(mouseHandler())
+        outcome, found = hidpp.identifySlot(self.device.node(), 1)
+        self.assertEqual((outcome, found.wakeIndex), (hidpp.FOUND, None))
+
+    def testAFailedWirelessStatusLookupStillFindsTheMouse(self):
+        answer = mouseHandler(features={0x0003: 3, 0x0005: 2, 0x1004: 5, 0x1D4B: 23})
+
+        def failWirelessLookup(request):
+            if (request[2] == 0 and (request[3] >> 4) == 0 and ((request[4] << 8) | request[5]) == 0x1D4B):
+                return [deviceError(request)]
+            return answer(request)
+        self.device = FakeDevice(failWirelessLookup)
+        outcome, found = hidpp.identifySlot(self.device.node(), 1)
+        self.assertEqual((outcome, found.wakeIndex, found.name), (hidpp.FOUND, None, NAME.decode()))
+
+    def testAUnifiedReadingKeepsItsPowerByte(self):
+        self.device = FakeDevice(mouseHandler(answers={(5, 0): [0x0F, 0x02], (5, 1): [22, 0x02, 1, 2]}))
+        feature = hidpp.BatteryFeature(1, hidpp.FEATURE_UNIFIED_BATTERY, 5, True)
+        self.assertEqual(hidpp.readBattery(self.device.node(), feature), (hidpp.ANSWER, hidpp.BatteryReading(22, 1, power=2)))
 
     def testASearchWithItsBudgetSpentLeavesAnsweringSlotsUnknown(self):
         self.device = FakeDevice(mouseHandler())
@@ -248,7 +274,7 @@ class DeviceTests(unittest.TestCase):
     def testUnifiedBatteryReading(self):
         self.device = FakeDevice(mouseHandler())
         feature = hidpp.BatteryFeature(1, hidpp.FEATURE_UNIFIED_BATTERY, 5, True)
-        self.assertEqual(hidpp.readBattery(self.device.node(), feature), (hidpp.ANSWER, hidpp.BatteryReading(81, 0)))
+        self.assertEqual(hidpp.readBattery(self.device.node(), feature), (hidpp.ANSWER, hidpp.BatteryReading(81, 0, power=0)))
 
     def testUnifiedBatteryWithoutPercent(self):
         answers = {(5, 0): [0x0F, 0x00], (5, 1): [0, 0x04, 1, 1]}
@@ -256,7 +282,7 @@ class DeviceTests(unittest.TestCase):
         node = self.device.node()
         kind, feature = hidpp.findBattery(node, 1)
         self.assertFalse(feature.hasPercent)
-        self.assertEqual(hidpp.readBattery(node, feature), (hidpp.ANSWER, hidpp.BatteryReading(None, 1, level="good")))
+        self.assertEqual(hidpp.readBattery(node, feature), (hidpp.ANSWER, hidpp.BatteryReading(None, 1, level="good", power=1)))
 
     def testBatteryStatusFeature(self):
         self.device = FakeDevice(mouseHandler(features={0x0005: 2, 0x1000: 6}, answers={(6, 0): [55, 50, 1]}))
@@ -362,7 +388,7 @@ class SearchTests(unittest.TestCase):
         before = time.monotonic()
         result = hidpp.searchNode(self.device.node(), pingTimeout=0.05)
         feature = hidpp.BatteryFeature(1, hidpp.FEATURE_UNIFIED_BATTERY, 5, True)
-        self.assertEqual(result.mice, (hidpp.FoundMouse(1, "02bc524c", NAME.decode(), feature, hidpp.BatteryReading(81, 0), readAt=mock.ANY),))
+        self.assertEqual(result.mice, (hidpp.FoundMouse(1, "02bc524c", NAME.decode(), feature, hidpp.BatteryReading(81, 0, power=0), readAt=mock.ANY),))
         self.assertTrue(before < result.mice[0].readAt < time.monotonic())
         self.assertEqual((result.skipped, result.unknown), (frozenset(), frozenset()))
 
@@ -417,9 +443,26 @@ class SearchTests(unittest.TestCase):
 class EventTests(unittest.TestCase):
     feature = hidpp.BatteryFeature(1, hidpp.FEATURE_UNIFIED_BATTERY, 5, True)
 
+    def testAShortBatteryEventHasNoPowerByte(self):
+        # a short report is 7 bytes, so its three parameter bytes stop before byte 3
+        report = bytes([0x10, 1, 5, 0x00, 64, 0x04, 1])
+        self.assertEqual(hidpp.parseEvent(report, self.feature), (hidpp.EVENT_BATTERY, hidpp.BatteryReading(64, 1, power=None)))
+
+    def testAWirelessStatusEventIsAWake(self):
+        report = bytes([0x11, 1, 23, 0x00, 1, 1, 1]).ljust(20, b"\x00")
+        self.assertEqual(hidpp.parseEvent(report, self.feature, 23), (hidpp.EVENT_WAKE, None))
+
+    def testAWirelessStatusEventWithoutAKnownIndexIsAnotherEvent(self):
+        report = bytes([0x11, 1, 23, 0x00, 1, 1, 1]).ljust(20, b"\x00")
+        self.assertEqual(hidpp.parseEvent(report, self.feature), (hidpp.EVENT_OTHER, None))
+
+    def testAReplyOnTheWirelessStatusIndexIsntAWake(self):
+        report = bytes([0x11, 1, 23, 0x09, 1, 1, 1]).ljust(20, b"\x00")
+        self.assertEqual(hidpp.parseEvent(report, self.feature, 23), (hidpp.EVENT_NONE, None))
+
     def testBatteryEvent(self):
         report = bytes([0x11, 1, 5, 0x00, 64, 0x04, 1, 1]).ljust(20, b"\x00")
-        self.assertEqual(hidpp.parseEvent(report, self.feature), (hidpp.EVENT_BATTERY, hidpp.BatteryReading(64, 1)))
+        self.assertEqual(hidpp.parseEvent(report, self.feature), (hidpp.EVENT_BATTERY, hidpp.BatteryReading(64, 1, power=1)))
 
     def testVoltageEvent(self):
         feature = hidpp.BatteryFeature(1, hidpp.FEATURE_BATTERY_VOLTAGE, 7, False)
