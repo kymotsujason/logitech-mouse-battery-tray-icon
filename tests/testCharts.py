@@ -1,5 +1,8 @@
 import calendar
+import locale
 import os
+import re
+import sys
 import time
 import unittest
 import unittest.mock
@@ -13,6 +16,8 @@ from PyQt6.QtWidgets import QApplication
 
 import charts
 import glass
+import history
+import historyWindow
 
 app = QApplication.instance() or QApplication([])
 NOW = int(time.time())
@@ -123,7 +128,7 @@ class LevelChartTests(ChartCase):
         chart = self.make(charts.LevelChart())
         chart.setSlots(self.spans(52, 7 * 24 * 60 * 60), rangeName="year")
         rendered(chart)
-        names = [time.strftime("%b", time.strptime(str(month), "%m")) for month in range(1, 13)]
+        names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
         labels = chart.axisLabels()
         self.assertTrue(all(text in names or text.isdigit() for index, text in labels), labels)
         self.assertGreaterEqual(len(labels), 6)
@@ -170,7 +175,109 @@ class LevelChartTests(ChartCase):
         chart = self.make(charts.LineChart("Hours per Charge", "h", charts.HOURS_EMPTY, charts.HOURS_CAPTION))
         self.assertEqual(chart.title, "Hours per Charge, All Time")
 
+class EnglishNameTests(ChartCase):
+    def namedStrftime(self, asked):
+        real = time.strftime
+
+        def strftime(fmt, *args):
+            # strptime asks for names itself to build its tables, so only the window's own calls count
+            if (sys._getframe(1).f_globals["__name__"] == "charts"):
+                asked.append(fmt)
+            # stands in for a locale whose names differ, whichever one this machine has installed
+            return real(re.sub("%[aAbB]", "?", fmt), *args)
+        return unittest.mock.patch.object(time, "strftime", strftime)
+
+    def at(self, month, day, hour=0):
+        return time.mktime((2026, month, day, hour, 0, 0, 0, 0, -1))
+
+    def testTheWindowNeverAsksTheLocaleForAName(self):
+        asked = []
+        week = self.make(charts.LevelChart())
+        week.setSlots([[self.at(10, 5, 2) + index * 7200, 62, None, None, False] for index in range(84)])
+        month = self.make(charts.LevelChart())
+        month.setSlots([[self.at(10, 9, 12), 20, 90, 1]] * 60, rangeName="month")
+        line = self.make(charts.LineChart("Charging Speed", "min per 10%", charts.CHARGING_EMPTY))
+        line.setSeries({"charger": [("2026-08", 4.0), ("2026-09", 5.0), ("2026-10", 4.5)]})
+        with self.namedStrftime(asked):
+            for chart in (week, month, line):
+                rendered(chart)
+            week.axisLabels()
+            for rangeName in history.LEVEL_RANGES:
+                chart = self.make(charts.LevelChart())
+                chart.setSlots([[self.at(10, 9, 12), 20, 90, 1]] if rangeName in charts.SPAN_RANGES else [[self.at(10, 9, 12), 20, None, None, False]], rangeName=rangeName)
+                chart.hoverText(0)
+            charts.latestText(41.6, "h", "2026-03", self.at(10, 9, 12))
+        self.assertTrue(asked)
+        self.assertEqual([fmt for fmt in asked if re.search("%[aAbB]", fmt)], [])
+
+    def testTheAxisAndHoverNamesAreEnglish(self):
+        chart = self.make(charts.LevelChart())
+        chart.setSlots([[self.at(10, 5, 2) + index * 7200, 62, None, None, False] for index in range(84)])
+        chart.resize(700, 238)
+        self.assertEqual(chart.axisLabels(), [(12, "Tue"), (24, "Wed"), (36, "Thu"), (48, "Fri"), (60, "Sat"), (72, "Sun")])
+        self.assertEqual(chart.hoverText(3), "Mon 08:00, 62%")
+        cases = (("month", self.at(10, 9, 12), "Oct 9, 00:00 to 12:00, 20% to 90%, charged"), ("halfYear", self.at(10, 9), "Week of Oct 2, 20% to 90%, charged"), ("all", self.at(11, 1), "October 2026, 20% to 90%, charged"))
+        for rangeName, end, expected in cases:
+            chart.setSlots([[end, 20, 90, 1]], rangeName=rangeName)
+            self.assertEqual(chart.hoverText(0), expected, rangeName)
+
+    def testTheMonthNamesAreEnglishUnderAnotherLocale(self):
+        saved = locale.setlocale(locale.LC_TIME)
+        chosen = None
+        for name in ("de_DE.UTF-8", "fr_FR.UTF-8", "es_ES.UTF-8", "ja_JP.UTF-8"):
+            try:
+                locale.setlocale(locale.LC_TIME, name)
+            except locale.Error:
+                continue
+            chosen = name
+            break
+        if (chosen is None):
+            self.skipTest("no non English locale is installed")
+        try:
+            self.assertEqual(charts.latestText(41.6, "h", "2026-03", self.at(10, 9, 12)), "42 h, Mar 2026")
+            chart = self.make(charts.LevelChart())
+            chart.setSlots([[self.at(3, 5), 20, 90, 1]], rangeName="all")
+            self.assertEqual(chart.hoverText(0), "February 2026, 20% to 90%, charged")
+            chart.setSlots([[self.at(10, 5, 2), 62, None, None, False]])
+            self.assertEqual(chart.hoverText(0), "Mon 02:00, 62%")
+        finally:
+            locale.setlocale(locale.LC_TIME, saved)
+
+
+class RangeTableTests(unittest.TestCase):
+    def testTheChartsTablesFollowTheServicesRanges(self):
+        names = set(history.LEVEL_RANGES)
+        self.assertEqual(charts.SPAN_RANGES, history.SPAN_RANGES)
+        for table in (charts.RANGE_TITLES, charts.RANGE_EMPTY, charts.LABEL_SPACING, charts.RANGE_SECONDS):
+            self.assertEqual(set(table), names)
+        for name, (count, seconds) in history.LEVEL_RANGES.items():
+            self.assertEqual(charts.RANGE_SECONDS[name], seconds, name)
+
+    def testTheWindowsRangeControlFollowsTheServicesRanges(self):
+        self.assertEqual(historyWindow.RANGE_NAMES, tuple(history.LEVEL_RANGES))
+        self.assertEqual(len(historyWindow.RANGE_LABELS), len(historyWindow.RANGE_NAMES))
+        self.assertEqual(len(historyWindow.RANGE_WIDTHS), len(historyWindow.RANGE_NAMES))
+
+
 class LineChartTests(ChartCase):
+    def testTheBigNumberIsTheNewestMonthAcrossEverySeries(self):
+        chart = self.make(charts.LineChart("Charging Speed", "min per 10%", charts.CHARGING_EMPTY))
+        chart.setSeries({"charger": [("2026-08", 6.0), ("2026-09", 5.0)], "wireless charger": [("2026-09", 4.0), ("2026-10", 3.0)]})
+        self.assertEqual(chart.headline(), ("2026-10", 3.0))
+        shown = []
+        with unittest.mock.patch.object(charts, "latestText", lambda value, unit, month, now: shown.append((value, month)) or ""):
+            rendered(chart)
+        self.assertEqual(shown, [(3.0, "2026-10")])
+
+    def testEverySeriesGetsALine(self):
+        chart = self.make(charts.LineChart("Charging Speed", "min per 10%", charts.CHARGING_EMPTY))
+        chart.setSeries({name: [("2026-09", 4.0 + index), ("2026-10", 5.0)] for index, name in enumerate(("a", "b", "c", "d", "e"))})
+        drawn = []
+        with unittest.mock.patch.object(charts.LineChart, "paintLine", lambda self, painter, area, positions, color, fade: drawn.append(color.name())):
+            rendered(chart)
+        self.assertEqual(len(drawn), 5)
+        self.assertEqual(drawn[4], drawn[0])
+
     def testAnEmptySeriesSaysSo(self):
         chart = self.make(charts.LineChart("Hours per Charge", "h", charts.HOURS_EMPTY, charts.HOURS_CAPTION))
         chart.setSeries({"hours": []})
@@ -214,12 +321,17 @@ class LineChartTests(ChartCase):
 
     def testTheLatestFigureIsntCutShort(self):
         chart = self.make(charts.LineChart("Charging Speed", "min per 10%", charts.CHARGING_EMPTY))
-        chart.setSeries({"charger 1": [(time.strftime("%Y-%m"), 4.0)]})
-        image = rendered(chart)
+        chart.setSeries({"charger 1": [(time.strftime("%Y-%m", time.gmtime()), 4.0)]})
+        shown = []
+        real = charts.latestText
+        with unittest.mock.patch.object(charts, "latestText", lambda *args: shown.append(real(*args)) or shown[-1]):
+            image = rendered(chart)
+        self.assertEqual(shown, ["4 min per 10%, this month"])
         inked = [x for x in range(image.width()) for y in range(30, 43) if image.pixelColor(x, y).alpha() > 100]
         # the text's width depends on the font each system falls back to, so the box it must fit is measured too
-        width = QFontMetrics(charts.font(22, QFont.Weight.Bold)).horizontalAdvance("4 min per 10%, this month")
+        width = QFontMetrics(charts.font(22, QFont.Weight.Bold)).horizontalAdvance(shown[0])
         self.assertGreater(max(inked), 16 + min(width, chart.width() - 32 - charts.AXIS_WIDTH) - 8)
+
 
 if (__name__ == "__main__"):
     unittest.main()

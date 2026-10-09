@@ -4,6 +4,7 @@ import time
 from dataclasses import dataclass, field
 
 import hidpp
+import mice
 
 DRAIN_LINE = 0.85
 CHARGE_LINE = 1.15
@@ -178,7 +179,7 @@ def lastChargedText(summary):
     if (lastCharge is None):
         return None
     moment = time.localtime(lastCharge["endAt"] if lastCharge["endAt"] is not None else lastCharge["startAt"])
-    return time.strftime("%b ", moment) + str(moment.tm_mday) + ", " + powerLabel(lastCharge["power"])
+    return mice.MONTH_NAMES[moment.tm_mon - 1] + " " + str(moment.tm_mday) + ", " + powerLabel(lastCharge["power"])
 
 
 def openFigures(summary, reading):

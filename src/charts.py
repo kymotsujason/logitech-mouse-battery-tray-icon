@@ -6,6 +6,7 @@ from PyQt6.QtWidgets import QWidget
 
 import glass
 import hidpp
+import mice
 
 RANGE_TITLES = {"day": "Battery Level, Last 24 Hours", "week": "Battery Level, Last 7 Days", "month": "Battery Level, Last 30 Days", "halfYear": "Battery Level, Last 6 Months", "year": "Battery Level, Last Year", "all": "Battery Level, All Time"}
 RANGE_EMPTY = {"day": "No readings in the last 24 hours", "week": "No readings in the last 7 days", "month": "No readings in the last 30 days", "halfYear": "No readings in the last 6 months", "year": "No readings in the last year", "all": "No readings yet"}
@@ -50,7 +51,8 @@ def latestText(value, unit, month, now):
     # the service groups the figures by UTC month, so this month is the UTC one too
     if (month == time.strftime("%Y-%m", time.gmtime(now))):
         return str(round(value)) + " " + unit + ", this month"
-    return str(round(value)) + " " + unit + ", " + time.strftime("%b %Y", time.strptime(month, "%Y-%m"))
+    named = time.strptime(month, "%Y-%m")
+    return str(round(value)) + " " + unit + ", " + mice.MONTH_NAMES[named.tm_mon - 1] + " " + str(named.tm_year)
 
 
 def slotValue(slot):
@@ -199,14 +201,14 @@ class LevelChart(Chart):
             if (self.rangeName == "day"):
                 key, label = (moment.tm_yday, moment.tm_hour // 6), "%02d:00" % (moment.tm_hour // 6 * 6)
             elif (self.rangeName == "week"):
-                key, label = moment.tm_yday, time.strftime("%a", moment)
+                key, label = moment.tm_yday, mice.DAY_NAMES[moment.tm_wday]
             elif (self.rangeName == "month"):
-                key, label = moment.tm_yday, time.strftime("%b ", moment) + str(moment.tm_mday)
+                key, label = moment.tm_yday, mice.MONTH_NAMES[moment.tm_mon - 1] + " " + str(moment.tm_mday)
             elif (byYear):
                 key, label = moment.tm_year, str(moment.tm_year)
             else:
                 # January is named by its year, so a chart over a year apart shows which October is which
-                key, label = (moment.tm_year, moment.tm_mon), str(moment.tm_year) if moment.tm_mon == 1 else time.strftime("%b", moment)
+                key, label = (moment.tm_year, moment.tm_mon), str(moment.tm_year) if moment.tm_mon == 1 else mice.MONTH_NAMES[moment.tm_mon - 1]
             x = self.labelCenter(index) if self.centersLabels() else area.x() + area.width() * index / len(self.slots)
             # a slot of its own month is named whole, while any other first slot starts partway through its day or month, so its name waits for the next one
             first = lastKey is None and not self.centersLabels()
@@ -237,18 +239,20 @@ class LevelChart(Chart):
         slot = self.slots[index]
         start = self.slotStart(index)
         if (not self.isSpan()):
-            when = time.strftime("%a %H:%M", time.localtime(slot[0]))
+            moment = time.localtime(slot[0])
+            when = mice.DAY_NAMES[moment.tm_wday] + time.strftime(" %H:%M", moment)
             if (self.voltage):
                 return when + ", " + str(slot[3]) + " mV"
             if (slot[1] is None):
                 return when + ", " + str(slot[2])
             return when + ", " + str(slot[1]) + "%"
+        begin = time.localtime(start)
         if (self.rangeName == "month"):
-            when = time.strftime("%b ", time.localtime(start)) + str(time.localtime(start).tm_mday) + time.strftime(", %H:%M to ", time.localtime(start)) + time.strftime("%H:%M", time.localtime(slot[0]))
+            when = mice.MONTH_NAMES[begin.tm_mon - 1] + " " + str(begin.tm_mday) + time.strftime(", %H:%M to ", begin) + time.strftime("%H:%M", time.localtime(slot[0]))
         elif (self.rangeName == "all"):
-            when = time.strftime("%B %Y", time.localtime(start))
+            when = mice.FULL_MONTH_NAMES[begin.tm_mon - 1] + " " + str(begin.tm_year)
         else:
-            when = "Week of " + time.strftime("%b ", time.localtime(start)) + str(time.localtime(start).tm_mday)
+            when = "Week of " + mice.MONTH_NAMES[begin.tm_mon - 1] + " " + str(begin.tm_mday)
         if (slot[1] is None):
             return when + ", no readings"
         levels = self.valueText(slot[1]) if slot[1] == slot[2] else self.valueText(slot[1]) + " to " + self.valueText(slot[2])
@@ -320,6 +324,15 @@ class LineChart(Chart):
     def months(self):
         return sorted({month for points in self.series.values() for month, value in points})
 
+    def headline(self):
+        # the newest month across every series, and the first series in name order when two share it
+        newest = None
+        for label in sorted(self.series):
+            month, value = self.series[label][-1]
+            if (newest is None or month > newest[0]):
+                newest = (month, value)
+        return newest
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -336,11 +349,12 @@ class LineChart(Chart):
         self.paintGrid(painter, area, [str(round(high)) + " " + self.unit, str(round((low + high) / 2)) + " " + self.unit, str(round(low)) + " " + self.unit])
         colors = [QColor(self.theme.green), QColor(glass.BLUE), QColor(self.theme.orange), QColor(self.theme.secondary)]
         legend = []
-        for (label, points), color in zip(sorted(self.series.items()), colors):
+        for index, (label, points) in enumerate(sorted(self.series.items())):
+            color = colors[index % len(colors)]
             positions = [QPointF(area.x() + area.width() * (months.index(month) / max(1, len(months) - 1) if len(months) > 1 else 0.5), area.bottom() - (value - low) / (high - low) * area.height()) for month, value in points]
             self.paintLine(painter, area, positions, color, fade=len(self.series) == 1)
             legend.append((label, color))
-        latestMonth, latest = self.series[sorted(self.series)[0]][-1]
+        latestMonth, latest = self.headline()
         painter.setFont(font(22, QFont.Weight.Bold))
         painter.setPen(QColor(self.theme.text))
         painter.drawText(QRectF(16, TOP - 2, self.width() - 32 - AXIS_WIDTH, 26), int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), latestText(latest, self.unit, latestMonth, time.time()))
@@ -394,5 +408,5 @@ class LineChart(Chart):
         painter.setPen(QColor(self.theme.secondary))
         places = [area.x() + area.width() * (index / max(1, len(months) - 1) if len(months) > 1 else 0.5) for index in range(len(months))]
         for index in labeledMonths(places):
-            name = time.strftime("%b", time.strptime(months[index], "%Y-%m"))
+            name = mice.MONTH_NAMES[time.strptime(months[index], "%Y-%m").tm_mon - 1]
             painter.drawText(QRectF(places[index] - MONTH_LABEL_WIDTH / 2, area.bottom() + 6, MONTH_LABEL_WIDTH, 16), int(Qt.AlignmentFlag.AlignCenter), name)

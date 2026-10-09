@@ -1,5 +1,7 @@
+import sys
 import time
 import unittest
+from unittest import mock
 
 import health
 import hidpp
@@ -146,12 +148,27 @@ class FigureTests(unittest.TestCase):
         self.assertEqual(result.chargingByPower, {"wireless charger": [("2026-10", 4.0)], "charger": [("2026-10", 5.0)]})
 
     def testLastChargedAndChargingSpeedFollowTheLastChargesPower(self):
-        lastCharge = {"kind": 1, "startAt": NOW - DAY, "endAt": NOW - DAY + 3600, "startPercent": 20, "endPercent": 100, "power": 2, "readingCount": 40, "slowCount": 0, "errorCount": 0, "inferred": 0}
+        ended = time.mktime((2026, 10, 9, 12, 0, 0, 0, 0, -1))
+        lastCharge = {"kind": 1, "startAt": ended - 3600, "endAt": ended, "startPercent": 20, "endPercent": 100, "power": 2, "readingCount": 40, "slowCount": 0, "errorCount": 0, "inferred": 0}
         value = summary(lastCharge=lastCharge, monthly=[{"month": "2026-10", "drain": None, "charge": [[1, 0.9], [2, 0.42]], "drained": 0, "sessions": 1}])
         result = health.assess(value, reading(), NOW)
-        moment = time.localtime(NOW - DAY + 3600)
-        self.assertEqual(result.lastCharged, time.strftime("%b ", moment) + str(moment.tm_mday) + ", wireless charger")
+        self.assertEqual(result.lastCharged, "Oct 9, wireless charger")
         self.assertEqual(result.chargingSpeed, "4 min per 10%")
+
+    def testLastChargedIsInEnglishWhateverTheLocale(self):
+        ended = time.mktime((2026, 3, 5, 12, 0, 0, 0, 0, -1))
+        lastCharge = {"kind": 1, "startAt": ended - 3600, "endAt": ended, "startPercent": 20, "endPercent": 100, "power": 2, "readingCount": 40, "slowCount": 0, "errorCount": 0, "inferred": 0}
+        real = time.strftime
+        asked = []
+
+        def strftime(fmt, *args):
+            if (sys._getframe(1).f_globals["__name__"] == "health"):
+                asked.append(fmt)
+            return real(fmt.replace("%b", "?").replace("%a", "?"), *args)
+        with mock.patch.object(time, "strftime", strftime):
+            result = health.assess(summary(lastCharge=lastCharge), reading(), NOW)
+        self.assertEqual(result.lastCharged, "Mar 5, wireless charger")
+        self.assertEqual([fmt for fmt in asked if "%b" in fmt or "%a" in fmt], [])
 
     def testPowerLabels(self):
         self.assertEqual([health.powerLabel(power) for power in (2, 1, 0, None)], ["wireless charger", "charger 1", "charger", "charger"])

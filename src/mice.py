@@ -25,6 +25,9 @@ STATUS_TEXT = {
 }
 # the menu is in English, so a date in it is too, whatever the locale
 MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+FULL_MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
+# indexed by tm_wday, which counts from Monday
+DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 
 def readingTime(stamp, now):
