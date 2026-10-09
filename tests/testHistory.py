@@ -893,7 +893,8 @@ class SummaryTests(RecorderCase):
     def testAKeyFromAnyAccountIsOnlyEverAValue(self):
         # any local account may send any key, so it's bound as a parameter and never read as SQL
         for key in ("x' or '1'='1", "'; drop table readings; --", "k" * 100000, ""):
-            self.assertEqual(self.recorder.summary(key)["sessions"], [])
+            self.assertEqual(self.recorder.summary(key), history.emptyHistory(key))
+            self.assertEqual(self.recorder.levels(key, "year"), {"version": history.LEVELS_VERSION, "key": key, "range": "year", "slots": []})
         with self.recorder.store.transaction():
             self.assertEqual(self.database.execute("select count(*) from mice").fetchone()[0], 1)
 
