@@ -23,14 +23,23 @@ class IconTests(unittest.TestCase):
             image = renderImage(IconState(percent=81), size, WHITE)
             self.assertEqual((image.width(), image.height()), (size, size))
 
-    def testPlateIsClearedAroundTheNumber(self):
-        # the plate's border is one cell outside the digits, so it's always clear, whatever the level
+    def testTheOutlineIsClearedAroundEachDigit(self):
+        # the outline is one cell around every lit cell, so it's always clear, whatever the level
         for percent in (5, 29, 81, 100):
             image = renderImage(IconState(percent=percent), 22, WHITE)
             cells, plate = icon.numberLayout(str(percent), 22)
-            border = [(x, y) for x in range(plate.left(), plate.right() + 1) for y in (plate.top(), plate.bottom())]
-            border += [(x, y) for y in range(plate.top(), plate.bottom() + 1) for x in (plate.left(), plate.right())]
-            self.assertTrue(all(image.pixelColor(x, y).alpha() == 0 for x, y in border), percent)
+            outline = [(x, y) for rect in icon.outlineRects(cells) for x in range(rect.left(), rect.right() + 1) for y in range(rect.top(), rect.bottom() + 1)]
+            self.assertTrue(all(image.pixelColor(x, y).alpha() == 0 for x, y in outline if not any(cell.contains(x, y) for cell in cells)), percent)
+
+    def testTheOutlineFollowsTheDigitsInsteadOfARectangle(self):
+        # at 81% the number sits wholly in the fill, so a pixel inside the old plate but away from every digit keeps the fill
+        for size in (22, 44):
+            image = renderImage(IconState(percent=81), size, WHITE)
+            cells, plate = icon.numberLayout("81", size)
+            rects = icon.outlineRects(cells)
+            outside = [(x, y) for x in range(plate.left(), plate.right() + 1) for y in range(plate.top(), plate.bottom() + 1) if not any(rect.contains(x, y) for rect in rects)]
+            self.assertTrue(outside, size)
+            self.assertTrue(all(image.pixelColor(x, y).alpha() == 255 for x, y in outside), size)
 
     def testTraySizeDigitsAreCrisp(self):
         # inside the fill, each digit pixel is either fully cut out or fully kept
@@ -45,13 +54,14 @@ class IconTests(unittest.TestCase):
             for percent in range(101):
                 image = renderImage(IconState(percent=percent, charging=True), size, WHITE)
                 cells, plate = icon.numberLayout(str(percent), size)
+                rects = icon.outlineRects(cells)
                 for y in range(plate.top(), plate.bottom() + 1):
                     for x in range(plate.left(), plate.right() + 1):
                         color = image.pixelColor(x, y)
                         inCell = any(cell.contains(x, y) for cell in cells)
                         if (inCell):
                             self.assertEqual(color.rgba(), WHITE.rgba(), (size, percent, x, y))
-                        else:
+                        elif (any(rect.contains(x, y) for rect in rects)):
                             self.assertEqual(color.alpha(), 0, (size, percent, x, y))
 
     def testEveryPercentDrawsADifferentNumber(self):

@@ -73,7 +73,7 @@ def drawWheel(painter, k, color):
 
 
 def numberLayout(text, size):
-    # whole pixel cells keep the digits sharp, and the plate is one cell wider than the digits on every side
+    # whole pixel cells keep the digits sharp, and the plate is the box one cell outside the digits that their outline stays within
     glyphs = SMALL_DIGITS if len(text) >= 3 else DIGITS
     rows = len(glyphs["0"])
     k = size / 22
@@ -94,13 +94,20 @@ def numberLayout(text, size):
     return cells, plate
 
 
+def outlineRects(cells):
+    # each lit cell grown by one cell on every side, so the cleared area follows the digits instead of boxing them
+    unit = cells[0].width() if cells else 0
+    return [cell.adjusted(-unit, -unit, unit, unit) for cell in cells]
+
+
 def drawNumber(painter, state, size, baseColor):
     if (state.percent is None or size < NUMBER_MIN_SIZE):
         return
     cells, plate = numberLayout(str(max(0, min(100, state.percent))), size)
-    # the plate clears the fill and track behind the number, so the fill line never runs through a digit
+    # the outline clears the fill and track around each digit, so the fill line never runs through one
     painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationOut)
-    painter.fillRect(plate, QColor(0, 0, 0))
+    for rect in outlineRects(cells):
+        painter.fillRect(rect, QColor(0, 0, 0))
     painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
     color = numberColor(state, baseColor)
     for cell in cells:
