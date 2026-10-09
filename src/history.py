@@ -582,6 +582,8 @@ class MouseEntry:
         # the newest reading seen, saved or not, and whether a marker came after it, for the rule that clears reports on its own
         self.latest = None
         self.latestBroken = True
+        # flag changes memory already has but the database doesn't, which the next transaction that succeeds saves, load's included
+        self.pendingFlags = {}
 
 
 class Recorder(QObject):
@@ -686,16 +688,26 @@ class Recorder(QObject):
     def setWakeSupport(self, key, supported, pathKey=False):
         entry = self.entryFor(key, pathKey)
         self.claim(entry, SOURCE_HIDPP)
-        self.ensureLoaded(entry)
-        if (entry.persist and entry.loaded and self.store.isOpen()):
-            try:
-                with self.store.transaction() as db:
-                    db.execute("update mice set wakeSupport = ? where id = ?", (int(supported), entry.mouseId))
-            except sqlite3.Error as error:
-                # memory changes only after a commit, so it stays as saved until the next identify
-                self.writeFailed(entry, error)
-                return
         entry.track.wakeSupport = supported
+        entry.pendingFlags["wakeSupport"] = supported
+        self.saveFlags(entry)
+
+    def saveFlags(self, entry):
+        if (not self.ensureLoaded(entry) or not self.store.isOpen() or not entry.pendingFlags):
+            return
+        try:
+            with self.store.transaction() as db:
+                self.writeFlags(db, entry)
+        except sqlite3.Error as error:
+            self.writeFailed(entry, error)
+            return
+        entry.pendingFlags = {}
+
+    def writeFlags(self, db, entry):
+        if ("wakeSupport" in entry.pendingFlags):
+            db.execute("update mice set wakeSupport = ? where id = ?", (int(entry.pendingFlags["wakeSupport"]), entry.mouseId))
+        if ("reportsItselfSince" in entry.pendingFlags):
+            DbWriter(db, entry.mouseId).updateReportsItself(entry.pendingFlags["reportsItselfSince"])
 
     def addReading(self, key, reading, origin, name=None, source=SOURCE_HIDPP, pathKey=False, at=None):
         at = self.clock() if at is None else at
@@ -739,16 +751,9 @@ class Recorder(QObject):
         if (base.percent is None or row.percent is None or abs(row.percent - base.percent) < CLEAR_POINTS):
             return
         # the mouse moved two points without a battery event, so it doesn't report every step after all
-        self.ensureLoaded(entry)
-        if (entry.persist and entry.loaded and self.store.isOpen()):
-            try:
-                with self.store.transaction() as db:
-                    DbWriter(db, entry.mouseId).updateReportsItself(None)
-            except sqlite3.Error as error:
-                # memory changes only after a commit, so the flag stays as saved
-                self.writeFailed(entry, error)
-                return
         entry.track.reportsItselfSince = None
+        entry.pendingFlags["reportsItselfSince"] = None
+        self.saveFlags(entry)
 
     def addMarker(self, key, origin, source=SOURCE_HIDPP, pathKey=False, at=None):
         arrived = self.clock() if at is None else at
@@ -855,7 +860,7 @@ class Recorder(QObject):
         found = db.execute("select id, reportsItselfSince, wakeSupport, source from mice where key = ?", (entry.key,)).fetchone()
         if (found is None):
             with self.store.transaction():
-                cursor = db.execute("insert into mice (key, name, source, firstSeen, wakeSupport) values (?, ?, ?, ?, ?)", (entry.key, entry.name, entry.source, int(self.clock()), int(entry.track.wakeSupport)))
+                cursor = db.execute("insert into mice (key, name, source, firstSeen, reportsItselfSince, wakeSupport) values (?, ?, ?, ?, ?, ?)", (entry.key, entry.name, entry.source, int(self.clock()), entry.track.reportsItselfSince, int(entry.track.wakeSupport)))
             entry.mouseId = cursor.lastrowid
             track = Track(entry.track.wakeSupport, entry.track.reportsItselfSince)
         else:
@@ -863,8 +868,12 @@ class Recorder(QObject):
             if (found[3] == SOURCE_HIDPP):
                 entry.source = SOURCE_HIDPP
             track = Track(bool(found[2]), found[1])
+            # a flag change made while the history wasn't open is newer than the saved one
+            track.wakeSupport = entry.pendingFlags.get("wakeSupport", track.wakeSupport)
+            track.reportsItselfSince = entry.pendingFlags.get("reportsItselfSince", track.reportsItselfSince)
             with self.store.transaction():
                 db.execute("update mice set name = coalesce(?, name), source = ? where id = ?", (entry.name, entry.source, entry.mouseId))
+                self.writeFlags(db, entry)
             last = db.execute("select at, origin, percent, level, charging, power, millivolts from readings where mouseId = ? and origin in (0, 1, 5) order by at desc, seq desc limit 1", (entry.mouseId,)).fetchone()
             if (last is not None):
                 track.last = Row(*last)
@@ -876,6 +885,7 @@ class Recorder(QObject):
         track.boundary = True
         entry.track = track
         entry.loaded = True
+        entry.pendingFlags = {}
 
     def loadOpenSession(self, db, mouseId):
         found = db.execute("select id, kind, startAt, startPercent, power, readingCount, slowCount, errorCount, inferred from sessions where mouseId = ? and endAt is null order by startAt desc, id desc limit 1", (mouseId,)).fetchone()
@@ -912,6 +922,7 @@ class Recorder(QObject):
                     writer = DbWriter(db, entry.mouseId)
                     if (entry.nameChanged):
                         db.execute("update mice set name = ? where id = ?", (entry.name, entry.mouseId))
+                    self.writeFlags(db, entry)
                     track = entry.track.copy()
                     if (entry.needsGap and row.origin != ORIGIN_GAP):
                         track.applyMarker(Row(row.at, ORIGIN_GAP), writer)
@@ -922,6 +933,7 @@ class Recorder(QObject):
                 return
             entry.needsGap = False
             entry.nameChanged = False
+            entry.pendingFlags = {}
             entry.track = track
             entry.revision += 1
             entry.lastWriteAt = row.at
@@ -934,6 +946,8 @@ class Recorder(QObject):
         track = entry.track.copy()
         self.apply(track, row, NullWriter())
         flagChanged = (track.reportsItselfSince is None) != (entry.track.reportsItselfSince is None)
+        if (flagChanged and entry.persist):
+            entry.pendingFlags["reportsItselfSince"] = track.reportsItselfSince
         entry.track = track
         entry.lastWriteAt = row.at
         # nothing was saved, so the revision stays, but the service still has to pick up the new flag
@@ -1004,7 +1018,7 @@ def readSummary(db, entry, key, now):
     summary = emptyHistory(key)
     summary.update({"name": name, "source": source, "firstSeen": firstSeen, "reportsItself": reportsItselfSince is not None, "wakeSupport": bool(wakeSupport)})
     if (entry is not None):
-        # the flags in memory are newer than the saved ones until the next write
+        # a flag change that couldn't be saved yet is in memory, and the next transaction that succeeds saves it
         summary["reportsItself"] = entry.track.reportsItselfSince is not None
         summary["wakeSupport"] = entry.track.wakeSupport
     summary["open"] = openSummary(db, mouseId)

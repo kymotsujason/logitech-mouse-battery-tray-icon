@@ -657,23 +657,68 @@ class ReportsItselfTests(RecorderCase):
         with self.db() as db:
             self.assertIsNone(db.execute("select reportsItselfSince from mice").fetchone()[0])
 
-    def testAClearThatFailsToSaveLeavesTheFlagAsSaved(self):
+    def savedFlags(self):
+        with self.db() as db:
+            return db.execute("select reportsItselfSince, wakeSupport from mice").fetchone()
+
+    def failOpening(self):
+        def failing(*args, **kwargs):
+            raise sqlite3.OperationalError("disk I/O error")
+        self.recorder.store.closeQuietly()
+        return mock.patch.object(sqlite3, "connect", failing)
+
+    def testAClearThatFailsToSaveIsSavedByTheNextWrite(self):
         self.event(0, 60)
         self.event(1000, 59)
         self.clock.now = START + 5000
         with self.failOnce(sqlite3.OperationalError("database or disk is full")):
             self.recorder.addReading(KEY, battery(57), history.ORIGIN_READ, at=START + 5000)
-        with self.db() as db:
-            saved = db.execute("select reportsItselfSince from mice").fetchone()[0]
-        self.assertEqual(self.recorder.reportsItself(KEY), saved is not None)
+        self.assertFalse(self.recorder.reportsItself(KEY))
+        self.at(5000 + history.WAKE_SET_SECONDS)
+        self.assertEqual(self.savedFlags(), (None, 1))
 
-    def testAWakeSupportThatFailsToSaveStaysAsSaved(self):
+    def testAWakeSupportThatFailsToSaveIsSavedByTheNextWrite(self):
         self.event(0, 60)
         with self.failOnce(sqlite3.OperationalError("database or disk is full")):
             self.recorder.setWakeSupport(KEY, False)
+        self.assertFalse(self.recorder.entries[KEY].track.wakeSupport)
+        self.event(1000, 59)
+        self.assertEqual(self.savedFlags(), (None, 0))
+
+    def testAWakeSupportSetWhileTheHistoryIsntOpenIsSavedWhenItOpens(self):
+        self.event(0, 60)
+        self.recorder.stop()
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False)
+        self.clock.now = START + 100
+        with self.failOpening():
+            self.recorder.setWakeSupport(KEY, False)
+        self.clock.now = START + 100 + history.OPEN_RETRY_SECONDS
+        self.event(800, 59)
+        self.assertEqual((self.recorder.entries[KEY].track.wakeSupport, self.savedFlags()[1]), (False, 0))
+
+    def testAClearWhileTheHistoryIsntOpenIsSavedWhenItOpens(self):
+        self.event(0, 60)
+        self.event(1000, 59)
+        self.clock.now = START + 5000
+        with self.failOpening():
+            self.recorder.addReading(KEY, battery(57), history.ORIGIN_READ, at=START + 5000)
+            self.at(5000 + history.WAKE_SET_SECONDS)
+        self.assertFalse(self.recorder.reportsItself(KEY))
+        self.clock.now = START + 5000 + history.OPEN_RETRY_SECONDS
+        self.event(5700, 56)
+        self.assertEqual((self.recorder.reportsItself(KEY), self.savedFlags()[0]), (False, None))
+
+    def testAFlagSetBeforeTheMouseIsSavedIsSavedWithIt(self):
+        key = "aabbccdd"
+        self.clock.now = START
+        with self.failOpening():
+            self.recorder.setWakeSupport(key, True)
+            self.event(0, 60, key=key)
+            self.event(1000, 59, key=key)
+        self.assertTrue(self.recorder.reportsItself(key))
+        self.event(1700, 58, key=key, origin=history.ORIGIN_READ)
         with self.db() as db:
-            saved = db.execute("select wakeSupport from mice").fetchone()[0]
-        self.assertEqual(self.recorder.entries[KEY].track.wakeSupport, bool(saved))
+            self.assertEqual(db.execute("select reportsItselfSince, wakeSupport from mice where key = ?", (key,)).fetchone(), (START + 1000, 1))
 
     def testAReadAfterAMarkerIsntCompared(self):
         self.event(0, 60)
