@@ -1,34 +1,34 @@
-import os
 from dataclasses import dataclass
 
-from PyQt6.QtCore import QPointF, QRectF, Qt
-from PyQt6.QtGui import QColor, QFont, QFontDatabase, QFontMetricsF, QIcon, QImage, QPainter, QPainterPath, QPixmap
+from PyQt6.QtCore import QRect, QRectF, Qt
+from PyQt6.QtGui import QColor, QIcon, QImage, QPainter, QPainterPath, QPixmap
 
 # Qt's D-Bus tray drops any size over 64 px, so larger ones would only cost paint time
 ICON_SIZES = [16, 22, 24, 32, 44, 48, 64]
 # below this size the digits don't read, so the icon keeps its fill and drops the number
 NUMBER_MIN_SIZE = 22
-# up to this size antialiased digits read faint, so they're drawn crisp
-CRISP_MAX_SIZE = 22
 RED_PERCENT = 20
 GREEN = "#30D158"
 RED = "#FF453A"
 GRAY = "#8E8E93"
-FALLBACK_FAMILY = "Noto Sans"
-FONT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "NotoSans-Medium.ttf")
-digitFamilyName = None
-
-
-def digitFamily():
-    global digitFamilyName
-    if (digitFamilyName is None):
-        digitFamilyName = FALLBACK_FAMILY
-        fontId = QFontDatabase.addApplicationFont(FONT_FILE)
-        if (fontId >= 0):
-            families = QFontDatabase.applicationFontFamilies(fontId)
-            if (families):
-                digitFamilyName = families[0]
-    return digitFamilyName
+# blocky digits drawn cell by cell, since a font at tray size let the hinter drop the tail that tells a 9 from an 8
+DIGITS = {
+    "0": ["####", "#..#", "#..#", "#..#", "#..#", "#..#", "####"],
+    "1": ["..#.", ".##.", "..#.", "..#.", "..#.", "..#.", ".###"],
+    "2": ["####", "...#", "...#", "####", "#...", "#...", "####"],
+    "3": ["####", "...#", "...#", ".###", "...#", "...#", "####"],
+    "4": ["#..#", "#..#", "#..#", "####", "...#", "...#", "...#"],
+    "5": ["####", "#...", "#...", "####", "...#", "...#", "####"],
+    "6": ["####", "#...", "#...", "####", "#..#", "#..#", "####"],
+    "7": ["####", "...#", "...#", "..#.", "..#.", ".#..", ".#.."],
+    "8": ["####", "#..#", "#..#", "####", "#..#", "#..#", "####"],
+    "9": ["####", "#..#", "#..#", "####", "...#", "...#", "####"],
+}
+# 100 is the only three digit number, and it fits the body only in smaller digits, with a narrow 1 so it centers on a whole pixel
+SMALL_DIGITS = {
+    "0": ["###", "#.#", "#.#", "#.#", "###"],
+    "1": [".#", "##", ".#", ".#", ".#"],
+}
 
 
 @dataclass(frozen=True)
@@ -68,27 +68,43 @@ def roundedPath(x, y, width, height, radius, k):
     return path
 
 
-def drawMarks(painter, state, k, color, textColor):
+def drawWheel(painter, k, color):
     painter.fillPath(roundedPath(10.25, 3.2, 1.5, 3.4, 0.75, k), color)
-    size = round(22 * k)
-    if (state.empty or state.percent is None or size < NUMBER_MIN_SIZE):
+
+
+def numberLayout(text, size):
+    # whole pixel cells keep the digits sharp, and the plate is one cell wider than the digits on every side
+    glyphs = SMALL_DIGITS if len(text) >= 3 else DIGITS
+    rows = len(glyphs["0"])
+    k = size / 22
+    unit = max(1, round(k))
+    columns = sum(len(glyphs[digit][0]) for digit in text) + len(text) - 1
+    width = columns * unit
+    left = round(11 * k) - width // 2
+    top = round(14 * k) - rows * unit // 2
+    cells = []
+    x = left
+    for digit in text:
+        for row, line in enumerate(glyphs[digit]):
+            for column, mark in enumerate(line):
+                if (mark == "#"):
+                    cells.append(QRect(x + column * unit, top + row * unit, unit, unit))
+        x += (len(glyphs[digit][0]) + 1) * unit
+    plate = QRect(left - unit, top - unit, width + 2 * unit, (rows + 2) * unit)
+    return cells, plate
+
+
+def drawNumber(painter, state, size, baseColor):
+    if (state.percent is None or size < NUMBER_MIN_SIZE):
         return
-    text = str(state.percent)
-    pixelSize = (6.5 if len(text) >= 3 else 8) * k
-    font = QFont(digitFamily())
-    font.setWeight(QFont.Weight.Medium)
-    if (size <= CRISP_MAX_SIZE):
-        # antialiased digits at tray size only partly cover their pixels and read faint, so draw them crisp
-        font.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
-        font.setStyleStrategy(QFont.StyleStrategy.NoAntialias)
-    font.setPointSizeF(pixelSize * 72.0 / painter.device().logicalDpiY())
-    bounds = QFontMetricsF(font, painter.device()).tightBoundingRect(text)
-    # whole pixel positions keep the hinted digits sharp
-    x = round(11 * k - (bounds.left() + bounds.width() / 2))
-    y = round(14 * k - (bounds.top() + bounds.height() / 2))
-    painter.setFont(font)
-    painter.setPen(textColor)
-    painter.drawText(QPointF(x, y), text)
+    cells, plate = numberLayout(str(max(0, min(100, state.percent))), size)
+    # the plate clears the fill and track behind the number, so the fill line never runs through a digit
+    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationOut)
+    painter.fillRect(plate, QColor(0, 0, 0))
+    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+    color = numberColor(state, baseColor)
+    for cell in cells:
+        painter.fillRect(cell, color)
 
 
 def renderImage(state, size, baseColor):
@@ -97,7 +113,6 @@ def renderImage(state, size, baseColor):
     image.fill(Qt.GlobalColor.transparent)
     painter = QPainter(image)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
 
     body = roundedPath(4, 1, 14, 20, 7, k)
     color = markColor(state, baseColor)
@@ -106,7 +121,7 @@ def renderImage(state, size, baseColor):
     painter.fillPath(body, track)
 
     if (state.empty):
-        drawMarks(painter, state, k, color, color)
+        drawWheel(painter, k, color)
         painter.end()
         return image
 
@@ -116,15 +131,17 @@ def renderImage(state, size, baseColor):
     painter.save()
     painter.setClipRect(QRectF(0, fillTop, size, size - fillTop))
     painter.fillPath(body, fillColor(state, baseColor))
-    # the number and wheel become holes in the fill, letting the panel show through
+    # the wheel becomes a hole in the fill, letting the panel show through
     painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationOut)
-    drawMarks(painter, state, k, QColor(0, 0, 0), QColor(0, 0, 0))
+    drawWheel(painter, k, QColor(0, 0, 0))
     painter.restore()
 
     painter.save()
     painter.setClipRect(QRectF(0, 0, size, fillTop))
-    drawMarks(painter, state, k, color, numberColor(state, baseColor))
+    drawWheel(painter, k, color)
     painter.restore()
+
+    drawNumber(painter, state, size, baseColor)
 
     painter.end()
     return image

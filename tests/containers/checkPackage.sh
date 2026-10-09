@@ -76,7 +76,7 @@ if [ "$kind" = "arch" ]; then
     archHook=/usr/share/libalpm/hooks/$name.hook
 fi
 missing=""
-for path in /usr/bin/$name $appDir/autostart.py $appDir/check.py $appDir/clearAccess.py $appDir/dbusCalls.py $appDir/exceptionHooks.py $appDir/hidDescriptor.py $appDir/hidpp.py $appDir/icon.py $appDir/installWatch.py $appDir/isHidpp.py $appDir/lowBattery.py $appDir/mice.py $appDir/notify.py $appDir/panelColor.py $appDir/receivers.py $appDir/service.py $appDir/serviceClient.py $appDir/serviceState.py $appDir/tray.py $appDir/trayHost.py $appDir/upower.py $appDir/version.py $appDir/NotoSans-Medium.ttf $appDir/OFL.txt $appDir/afterInstall.sh /usr/share/applications/$name.desktop /etc/xdg/autostart/$name.desktop /usr/lib/udev/rules.d/70-$name.rules /usr/share/icons/hicolor/scalable/apps/$name.svg /usr/share/metainfo/io.github.kymotsujason.LogitechMouseBattery.metainfo.xml /usr/lib/systemd/system/$name.service /usr/share/dbus-1/system.d/io.github.kymotsujason.LogitechMouseBattery.conf /usr/share/dbus-1/system-services/io.github.kymotsujason.LogitechMouseBattery.service /usr/lib/sysusers.d/$name.conf $archHook; do
+for path in /usr/bin/$name $appDir/autostart.py $appDir/check.py $appDir/clearAccess.py $appDir/dbusCalls.py $appDir/exceptionHooks.py $appDir/hidDescriptor.py $appDir/hidpp.py $appDir/icon.py $appDir/installWatch.py $appDir/isHidpp.py $appDir/lowBattery.py $appDir/mice.py $appDir/notify.py $appDir/panelColor.py $appDir/receivers.py $appDir/service.py $appDir/serviceClient.py $appDir/serviceState.py $appDir/tray.py $appDir/trayHost.py $appDir/upower.py $appDir/version.py $appDir/afterInstall.sh /usr/share/applications/$name.desktop /etc/xdg/autostart/$name.desktop /usr/lib/udev/rules.d/70-$name.rules /usr/share/icons/hicolor/scalable/apps/$name.svg /usr/share/metainfo/io.github.kymotsujason.LogitechMouseBattery.metainfo.xml /usr/lib/systemd/system/$name.service /usr/share/dbus-1/system.d/io.github.kymotsujason.LogitechMouseBattery.conf /usr/share/dbus-1/system-services/io.github.kymotsujason.LogitechMouseBattery.service /usr/lib/sysusers.d/$name.conf $archHook; do
     if [ ! -f "$path" ]; then
         missing="$missing $path"
     fi
@@ -100,15 +100,15 @@ check "the terminal check ends with one of its known lines" "$known" "yes"
 rendered=$(QT_QPA_PLATFORM=offscreen python3 -B -c '
 import sys
 sys.path.insert(0, "/usr/share/logitech-mouse-battery")
-from PyQt6.QtGui import QFontDatabase
 from PyQt6.QtWidgets import QApplication
 app = QApplication(sys.argv[:1])
 import icon
 image = icon.renderImage(icon.IconState(percent=69), 22, "#fcfcfc")
-opaque = sum(1 for y in range(22) for x in range(22) if image.pixelColor(x, y).alpha() == 255)
-print("drawn" if QFontDatabase.addApplicationFont(icon.FONT_FILE) >= 0 and opaque > 0 else "failed")
+cells, plate = icon.numberLayout("69", 22)
+solid = all(image.pixelColor(cell.left(), cell.top()).alpha() == 255 for cell in cells)
+print("drawn" if cells and solid else "failed")
 ' 2>/dev/null)
-check "the icon renders offscreen with the bundled font" "$rendered" "drawn"
+check "the icon renders its digits offscreen" "$rendered" "drawn"
 
 check "the rule's program accepts the C54F HID++ node" "$(ruleProgram "$(fakeNode 0003:046D:C54F.0001 "$C54F_HIDPP")")" "0"
 check "the rule's program rejects a generic desktop node" "$(ruleProgram "$(fakeNode 0003:046D:C0A9.0002 "$GENERIC_DESKTOP")")" "1"

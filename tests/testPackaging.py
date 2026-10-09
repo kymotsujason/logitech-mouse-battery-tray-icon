@@ -235,8 +235,7 @@ class MetainfoTests(unittest.TestCase):
 
 def appFiles():
     # every Python module in src/ is part of the app, so a new one has to be packaged as well
-    modules = sorted(name for name in os.listdir(SRC) if name.endswith(".py"))
-    return modules + ["NotoSans-Medium.ttf", "OFL.txt"]
+    return sorted(name for name in os.listdir(SRC) if name.endswith(".py"))
 
 
 class NfpmTests(unittest.TestCase):
