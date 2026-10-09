@@ -165,10 +165,13 @@ class Store:
     def isOpen(self):
         return self.db is not None
 
+    def neverOpens(self):
+        return self.folder is None or self.tooNew or self.brokenThisRun
+
     def ensureOpen(self):
         if (self.db is not None):
             return True
-        if (self.folder is None or self.tooNew or self.brokenThisRun):
+        if (self.neverOpens()):
             return False
         now = self.clock()
         if (self.lastAttempt is not None and now - self.lastAttempt < OPEN_RETRY_SECONDS):
@@ -712,8 +715,11 @@ class Recorder(QObject):
 
     def isHidppKey(self, entry):
         # a key only UPower has named this run is still a HID++ mouse when its saved history says so
-        if (not entry.persist or not self.available()):
+        if (not entry.persist or self.store is None):
             return False
+        if (not self.store.ensureOpen()):
+            # a history that may still open could say the key is HID++, so the reading is dropped and the next one asks again
+            return False if self.store.neverOpens() else None
         try:
             found = self.store.db.execute("select source from mice where key = ?", (entry.key,)).fetchone()
         except sqlite3.Error as error:
@@ -896,7 +902,11 @@ class Recorder(QObject):
         return session
 
     def write(self, entry, row):
-        if (entry.persist and self.ensureLoaded(entry) and self.store.isOpen()):
+        saving = entry.persist and self.ensureLoaded(entry) and self.store.isOpen()
+        # loading can find the key saved as HID++, and a UPower reading already waiting doesn't belong in that history
+        if (row.origin == ORIGIN_UPOWER and entry.source == SOURCE_HIDPP):
+            return
+        if (saving):
             try:
                 with self.store.transaction() as db:
                     writer = DbWriter(db, entry.mouseId)

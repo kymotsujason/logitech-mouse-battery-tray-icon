@@ -847,6 +847,37 @@ class RecorderTests(RecorderCase):
         self.recorder.addReading("9a1b2c3d", battery(70), history.ORIGIN_UPOWER, source=history.SOURCE_UPOWER, at=START + 60)
         self.assertEqual((entry.source, len(entry.pending)), (history.SOURCE_UPOWER, 1))
 
+    def testAHistoryThatCantOpenYetLeavesASavedHidppKeyToHidpp(self):
+        self.event(0, 50)
+        self.recorder.stop()
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False)
+
+        def failing(*args, **kwargs):
+            raise sqlite3.OperationalError("disk I/O error")
+        self.clock.now = START + 600
+        with mock.patch.object(sqlite3, "connect", failing):
+            self.recorder.addReading(KEY, battery(49), history.ORIGIN_UPOWER, source=history.SOURCE_UPOWER, at=START + 600)
+        entry = self.recorder.entries[KEY]
+        self.assertEqual((entry.source, entry.pending), (None, []))
+        self.clock.now = START + 600 + history.OPEN_RETRY_SECONDS
+        self.recorder.addReading(KEY, battery(48), history.ORIGIN_UPOWER, source=history.SOURCE_UPOWER, at=START + 1200)
+        self.at(1300)
+        self.assertEqual(([row[2] for row in self.rows()], entry.source), ([50], history.SOURCE_HIDPP))
+
+    def testAHistoryThatNeverOpensLetsUPowerHaveTheKey(self):
+        self.recorder.store.tooNew = True
+        self.recorder.addReading("9a1b2c3d", battery(70), history.ORIGIN_UPOWER, source=history.SOURCE_UPOWER, at=START)
+        self.assertEqual(self.recorder.entries["9a1b2c3d"].source, history.SOURCE_UPOWER)
+
+    def testAUPowerRowWaitingWhenLoadFindsAHidppKeyIsLeftOut(self):
+        self.event(0, 50)
+        self.recorder.stop()
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False)
+        with mock.patch.object(self.recorder, "isHidppKey", return_value=False):
+            self.recorder.addReading(KEY, battery(49), history.ORIGIN_UPOWER, source=history.SOURCE_UPOWER, at=START + 600)
+        self.at(700)
+        self.assertEqual(([row[2] for row in self.rows()], self.recorder.entries[KEY].source), ([50], history.SOURCE_HIDPP))
+
     def testACorruptHidppLookupForAUPowerReadingMarksTheHistoryCorrupt(self):
         self.failQuery(corruption())
         self.recorder.addReading("9a1b2c3d", battery(70), history.ORIGIN_UPOWER, source=history.SOURCE_UPOWER, at=START)
