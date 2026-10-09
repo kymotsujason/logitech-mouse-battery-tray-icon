@@ -221,6 +221,23 @@ class TraceTests(RecorderCase):
         self.assertEqual([(step[3], step[4], step[6]) for step in self.steps()], [(60, 59, 0), (59, 57, 0), (57, 56, 0)])
 
 
+    def testAReadingWaitsTwoWholeSecondsFromItsArrival(self):
+        self.assertTrue(self.recorder.available())
+        self.clock.now = START + 100.9
+        self.recorder.addReading(KEY, battery(57), history.ORIGIN_EVENT)
+        self.clock.now = START + 102.0
+        self.recorder.tick()
+        self.assertEqual(self.rows(), [])
+        self.clock.now = START + 102.5
+        self.recorder.addMarker(KEY, history.ORIGIN_WAKE)
+        self.assertEqual([row[:3] for row in self.rows()], [(102, 2, None), (102, 0, 57)])
+
+    def testAWakeLooksBackTwoSecondsFromItsOwnArrival(self):
+        self.recorder.addReading(KEY, battery(57), history.ORIGIN_EVENT, at=START + 100.1)
+        self.clock.now = START + 102.9
+        self.recorder.addMarker(KEY, history.ORIGIN_WAKE)
+        self.assertEqual([row[:3] for row in self.rows()], [(100, 0, 57), (102, 2, None)])
+
 class HoldTests(RecorderCase):
     def testAReadingInsideTenSecondsIsHeldAndWrittenWhenTheyreUp(self):
         self.event(0, 50)

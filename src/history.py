@@ -5,7 +5,7 @@ import sqlite3
 import statistics
 import time
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
@@ -99,10 +99,12 @@ class Row:
     charging: int | None = None
     power: int | None = None
     millivolts: int | None = None
+    # the moment a reading came in, which the wake set's 2 s are counted from, while at is cut to whole seconds for the table
+    arrived: float | None = field(default=None, compare=False)
 
 
 def readingRow(reading, origin, at):
-    return Row(int(at), origin, reading.percent, reading.level, reading.charging, reading.power, reading.millivolts)
+    return Row(int(at), origin, reading.percent, reading.level, reading.charging, reading.power, reading.millivolts, at)
 
 
 def differs(row, saved):
@@ -669,7 +671,7 @@ class Recorder(QObject):
                 self.writeFailed(entry, error)
 
     def addReading(self, key, reading, origin, name=None, source=SOURCE_HIDPP, pathKey=False, at=None):
-        at = int(self.clock() if at is None else at)
+        at = self.clock() if at is None else at
         entry = self.entryFor(key, pathKey)
         if (not self.claim(entry, source)):
             return
@@ -716,14 +718,15 @@ class Recorder(QObject):
                 self.writeFailed(entry, error)
 
     def addMarker(self, key, origin, source=SOURCE_HIDPP, pathKey=False, at=None):
-        at = int(self.clock() if at is None else at)
+        arrived = self.clock() if at is None else at
+        at = int(arrived)
         entry = self.entryFor(key, pathKey)
         if (not self.claim(entry, source)):
             return
         marker = Row(at, origin)
         if (origin == ORIGIN_WAKE):
-            early = [row for row in entry.pending if row.at < at - WAKE_SET_SECONDS]
-            late = [row for row in entry.pending if row.at >= at - WAKE_SET_SECONDS]
+            early = [row for row in entry.pending if row.arrived < arrived - WAKE_SET_SECONDS]
+            late = [row for row in entry.pending if row.arrived >= arrived - WAKE_SET_SECONDS]
         else:
             early = list(entry.pending)
             late = []
@@ -741,7 +744,7 @@ class Recorder(QObject):
     def tick(self):
         now = self.clock()
         for entry in list(self.entries.values()):
-            while (entry.pending and entry.pending[0].at <= now - WAKE_SET_SECONDS):
+            while (entry.pending and entry.pending[0].arrived <= now - WAKE_SET_SECONDS):
                 self.process(entry, entry.pending.pop(0))
             if (entry.held is not None and entry.lastWriteAt is not None and now >= entry.lastWriteAt + HOLD_SECONDS):
                 self.flushHeld(entry)
@@ -753,7 +756,7 @@ class Recorder(QObject):
         due = []
         for entry in self.entries.values():
             if (entry.pending):
-                due.append(entry.pending[0].at + WAKE_SET_SECONDS)
+                due.append(entry.pending[0].arrived + WAKE_SET_SECONDS)
             if (entry.held is not None and entry.lastWriteAt is not None):
                 due.append(entry.lastWriteAt + HOLD_SECONDS)
         if (not due):
