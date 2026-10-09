@@ -333,6 +333,33 @@ class WindowTests(WindowCase):
         self.assertFalse(window.message.isVisibleTo(window))
         self.assertEqual(self.watcher.asked, ["02bc524c"])
 
+    def testAnErrorThatLandsWhileClosedLeavesTheNextOpenItsTry(self):
+        self.watcher.hold = True
+        window = self.opened(entry())
+        window.close()
+        key, onAnswer = self.watcher.waiting.pop()
+        onAnswer(None, serviceClient.UNDECODABLE)
+        self.assertEqual(window.errors, {})
+        self.watcher.hold = False
+        window.lastFetch.clear()
+        window.open()
+        self.assertEqual(self.watcher.asked, ["02bc524c"] * 2)
+        self.assertFalse(window.message.isVisibleTo(window))
+
+    def testARangeErrorThatLandsWhileClosedLeavesTheNextOpenItsTry(self):
+        window = self.opened(entry())
+        self.watcher.holdLevels = True
+        window.pickRange("year")
+        window.close()
+        key, rangeName, onAnswer = self.watcher.waitingLevels.pop()
+        onAnswer(None, serviceState.READ_ALL_LIMITED)
+        self.assertEqual((window.levelErrors, window.levelRetryTimer.isActive()), ({}, False))
+        self.watcher.holdLevels = False
+        window.lastFetch.clear()
+        window.open()
+        self.assertEqual(self.watcher.levelAsks, [("02bc524c", "year")] * 2)
+        self.assertEqual(window.levelChart.slots, levelsReply("02bc524c", "year")["slots"])
+
     def testARangeAnswerThatLandsWhileClosedIsKept(self):
         window = self.opened(entry())
         self.watcher.holdLevels = True

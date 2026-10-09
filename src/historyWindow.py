@@ -774,6 +774,9 @@ class HistoryWindow(QWidget):
 
     def onLevels(self, key, rangeName, levels, error):
         self.pendingLevels.discard((key, rangeName))
+        # close cleared the errors so the next open tries once more, and an error landing after it would undo that and start a retry for a hidden window
+        if (levels is None and not self.isVisible()):
+            return
         if (levels is not None):
             self.levels.setdefault(key, {})[rangeName] = levels["slots"]
             self.freshLevels.add((key, rangeName))
@@ -916,6 +919,9 @@ class HistoryWindow(QWidget):
 
     def onHistory(self, key, revision, askedAt, summary, error):
         self.pending.discard(key)
+        # close cleared the errors so the next open tries once more, and an error landing after it would undo that
+        if (summary is None and not self.isVisible()):
+            return
         if (summary is not None):
             self.replies[key] = Reply(summary, revision, askedAt)
             self.forgetLevels(key)
@@ -926,7 +932,7 @@ class HistoryWindow(QWidget):
             self.errors[key] = error
         else:
             self.errors[key] = error
-            if (error == serviceState.HISTORY_UNAVAILABLE and self.isVisible()):
+            if (error == serviceState.HISTORY_UNAVAILABLE):
                 self.retryTimer.start()
         self.refresh()
 
