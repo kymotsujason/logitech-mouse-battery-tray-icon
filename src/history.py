@@ -1023,7 +1023,7 @@ def openSummary(db, mouseId):
         return None
     sessionId, kind, startAt, startPercent = found
     # time left and time to full use the open session's steps at any level
-    values = [minutes for (minutes,) in db.execute("select minutesPerPercent from steps where mouseId = ? and kind = ? and session = ? and unbroken = 1", (mouseId, kind, sessionId))]
+    values = [minutes for (minutes,) in db.execute("select minutesPerPercent from steps where mouseId = ? and kind = ? and at >= ? and session = ? and unbroken = 1", (mouseId, kind, startAt, sessionId))]
     return {"kind": kind, "startAt": startAt, "startPercent": startPercent, "median": statistics.median(values) if values else None, "count": len(values)}
 
 

@@ -996,6 +996,18 @@ class SummaryTests(RecorderCase):
         scans = [sql for sql in dict.fromkeys(statements) if any(row[3].startswith("SCAN") for row in self.database.execute("explain query plan " + sql))]
         self.assertEqual(scans, [])
 
+    def testTheOpenSessionsStepsAreARangeFromItsStart(self):
+        session = self.addSession(history.DISCHARGE, 5000)
+        self.addStep(session, history.DISCHARGE, 5001, 30.0, 75, 74)
+        statements = []
+        self.database.set_trace_callback(statements.append)
+        self.recorder.summary(KEY)
+        self.database.set_trace_callback(None)
+        found = [sql for sql in statements if "from steps" in sql and "session = " in sql]
+        self.assertEqual(len(found), 1)
+        plan = " ".join(row[3] for row in self.database.execute("explain query plan " + found[0]))
+        self.assertIn("at>?", plan.replace(" ", ""))
+
     def testLastChargeAndLastError(self):
         self.addSession(history.CHARGE, 0, 500, 20, 80, power=2, readingCount=6, slowCount=4)
         self.addSession(history.DISCHARGE, 500)
