@@ -1,3 +1,5 @@
+import contextlib
+import gc
 import io
 import os
 import shutil
@@ -6,6 +8,7 @@ import sys
 import tempfile
 import time
 import unittest
+import warnings
 from unittest import mock
 
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
@@ -90,8 +93,15 @@ class RecorderCase(unittest.TestCase):
         self.clock.now = START + seconds
         self.recorder.addMarker(key, origin, at=START + seconds)
 
+    @contextlib.contextmanager
     def db(self):
-        return sqlite3.connect(os.path.join(self.folder, history.FILE_NAME))
+        db = sqlite3.connect(os.path.join(self.folder, history.FILE_NAME))
+        try:
+            # the connection's own with block commits, but it never closes
+            with db:
+                yield db
+        finally:
+            db.close()
 
     def failOnce(self, error):
         real = self.recorder.store.transaction
@@ -149,6 +159,18 @@ class StoreTests(RecorderCase):
             self.assertEqual(db.execute("pragma user_version").fetchone()[0], 1)
             tables = {name for (name,) in db.execute("select name from sqlite_master where type = 'table'")}
         self.assertEqual(tables, {"mice", "readings", "steps", "sessions"})
+
+    def testTheHelpersCloseTheirConnections(self):
+        self.event(0, 50)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            self.rows()
+            self.sessions()
+            self.steps()
+            with self.db() as db:
+                db.execute("select 1")
+            gc.collect()
+        self.assertEqual([str(each.message) for each in caught if issubclass(each.category, ResourceWarning)], [])
 
     def testTheDatabaseIsInWalMode(self):
         self.assertTrue(self.recorder.available())
