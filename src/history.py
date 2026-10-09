@@ -664,13 +664,15 @@ class Recorder(QObject):
         entry = self.entryFor(key, pathKey)
         self.claim(entry, SOURCE_HIDPP)
         self.ensureLoaded(entry)
-        entry.track.wakeSupport = supported
         if (entry.persist and entry.loaded and self.store.isOpen()):
             try:
                 with self.store.transaction() as db:
                     db.execute("update mice set wakeSupport = ? where id = ?", (int(supported), entry.mouseId))
             except sqlite3.Error as error:
+                # memory changes only after a commit, so it stays as saved until the next identify
                 self.writeFailed(entry, error)
+                return
+        entry.track.wakeSupport = supported
 
     def addReading(self, key, reading, origin, name=None, source=SOURCE_HIDPP, pathKey=False, at=None):
         at = self.clock() if at is None else at
@@ -711,13 +713,15 @@ class Recorder(QObject):
             return
         # the mouse moved two points without a battery event, so it doesn't report every step after all
         self.ensureLoaded(entry)
-        entry.track.reportsItselfSince = None
         if (entry.persist and entry.loaded and self.store.isOpen()):
             try:
                 with self.store.transaction() as db:
                     DbWriter(db, entry.mouseId).updateReportsItself(None)
             except sqlite3.Error as error:
+                # memory changes only after a commit, so the flag stays as saved
                 self.writeFailed(entry, error)
+                return
+        entry.track.reportsItselfSince = None
 
     def addMarker(self, key, origin, source=SOURCE_HIDPP, pathKey=False, at=None):
         arrived = self.clock() if at is None else at

@@ -63,6 +63,17 @@ class RecorderCase(unittest.TestCase):
     def db(self):
         return sqlite3.connect(os.path.join(self.folder, history.FILE_NAME))
 
+    def failOnce(self, error):
+        real = self.recorder.store.transaction
+        calls = []
+
+        def failingOnce():
+            calls.append(1)
+            if (len(calls) == 1):
+                raise error
+            return real()
+        return mock.patch.object(self.recorder.store, "transaction", failingOnce)
+
     def rows(self):
         with self.db() as db:
             return db.execute("select at - ?, origin, percent, charging, power from readings order by at, seq", (START,)).fetchall()
@@ -513,6 +524,24 @@ class ReportsItselfTests(RecorderCase):
         self.assertFalse(self.recorder.reportsItself(KEY))
         with self.db() as db:
             self.assertIsNone(db.execute("select reportsItselfSince from mice").fetchone()[0])
+
+    def testAClearThatFailsToSaveLeavesTheFlagAsSaved(self):
+        self.event(0, 60)
+        self.event(1000, 59)
+        self.clock.now = START + 5000
+        with self.failOnce(sqlite3.OperationalError("database or disk is full")):
+            self.recorder.addReading(KEY, battery(57), history.ORIGIN_READ, at=START + 5000)
+        with self.db() as db:
+            saved = db.execute("select reportsItselfSince from mice").fetchone()[0]
+        self.assertEqual(self.recorder.reportsItself(KEY), saved is not None)
+
+    def testAWakeSupportThatFailsToSaveStaysAsSaved(self):
+        self.event(0, 60)
+        with self.failOnce(sqlite3.OperationalError("database or disk is full")):
+            self.recorder.setWakeSupport(KEY, False)
+        with self.db() as db:
+            saved = db.execute("select wakeSupport from mice").fetchone()[0]
+        self.assertEqual(self.recorder.entries[KEY].track.wakeSupport, bool(saved))
 
     def testAReadAfterAMarkerIsntCompared(self):
         self.event(0, 60)
