@@ -104,6 +104,10 @@ contents:
     dst: /usr/share/logitech-mouse-battery/upower.py
     file_info:
       mode: 0644
+  - src: src/history.py
+    dst: /usr/share/logitech-mouse-battery/history.py
+    file_info:
+      mode: 0644
   - src: src/version.py
     dst: /usr/share/logitech-mouse-battery/version.py
     file_info:
