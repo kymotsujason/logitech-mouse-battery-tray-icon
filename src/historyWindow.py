@@ -348,10 +348,11 @@ class ChoiceMenu(QWidget):
             self.setHover(index)
 
     def mousePressEvent(self, event):
-        if (event.button() != Qt.MouseButton.LeftButton):
-            return
+        # a press of any button away from the panel closes the menu, while only the left one picks
         if (not self.panel.contains(event.position())):
             self.hide()
+            return
+        if (event.button() != Qt.MouseButton.LeftButton):
             return
         self.pressed = True
 

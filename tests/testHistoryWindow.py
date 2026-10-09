@@ -876,8 +876,11 @@ class WindowTests(WindowCase):
         window.sleepCheckChanged.connect(picked.append)
         for button in (Qt.MouseButton.RightButton, Qt.MouseButton.MiddleButton):
             QTest.mouseClick(menu, button, pos=self.rowCenter(menu, 3))
-            QTest.mouseClick(menu, button, pos=QPoint(4, 4))
             self.assertEqual((picked, menu.isVisibleTo(window), menu.pressed), ([], True, False))
+            QTest.mouseClick(menu, button, pos=QPoint(4, 4))
+            self.assertEqual((picked, menu.isVisibleTo(window), menu.pressed), ([], False, False))
+            QTest.mouseClick(window.popup, Qt.MouseButton.LeftButton)
+            self.assertTrue(menu.isVisibleTo(window))
         # a right release after a left press inside the menu picks nothing either
         QTest.mousePress(menu, Qt.MouseButton.LeftButton, pos=self.rowCenter(menu, 3))
         QTest.mouseRelease(menu, Qt.MouseButton.RightButton, pos=self.rowCenter(menu, 3))
