@@ -512,6 +512,7 @@ class HistoryWindow(QWidget):
         self.pending = set()
         self.lastFetch = {}
         self.upowerChangedAt = {}
+        self.upowerSeen = {}
         self.levelRange = levelRange if levelRange in RANGE_NAMES else "week"
         # each mouse's slots per range, dropped with its history reply, since a new reply means new readings
         self.levels = {}
@@ -538,6 +539,7 @@ class HistoryWindow(QWidget):
         serviceWatcher.serviceRestarted.connect(self.forgetReplies)
         if (upowerWatcher is not None):
             upowerWatcher.mouseChanged.connect(self.onUPowerMouse)
+            upowerWatcher.mouseRemoved.connect(self.onUPowerRemoved)
         QApplication.instance().paletteChanged.connect(self.onPaletteChanged)
         self.watchingPortal = False
         self.blurred = False
@@ -689,10 +691,19 @@ class HistoryWindow(QWidget):
         self.refresh()
 
     def onUPowerMouse(self, upowerMouse):
+        seen = self.upowerSeen.get(upowerMouse.key)
+        # UPower refreshes its other properties too, and a reading that stayed the same gives the service nothing new to write
+        if (seen is not None and seen[1] == upowerMouse.reading):
+            return
+        self.upowerSeen[upowerMouse.key] = (upowerMouse.path, upowerMouse.reading)
         # kept by key, so an answer to a fetch still on its way when the change came is old too
         self.upowerChangedAt[upowerMouse.key] = time.monotonic()
         if (upowerMouse.key == self.selected):
             self.refresh()
+
+    def onUPowerRemoved(self, path):
+        # the service writes a gap as the mouse goes, and the first reading once it's back, so that reading counts as a change
+        self.upowerSeen = {key: seen for key, seen in self.upowerSeen.items() if seen[0] != path}
 
     def pick(self, key):
         if (key == self.selected):

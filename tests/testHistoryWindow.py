@@ -24,6 +24,7 @@ import panelColor
 import serviceClient
 import serviceState
 import tray
+import upower
 from serviceState import ServiceEntry, ServiceState
 
 app = QApplication.instance() or QApplication([])
@@ -78,6 +79,7 @@ class FakeWatcher(QObject):
 
 class FakeUPower(QObject):
     mouseChanged = pyqtSignal(object)
+    mouseRemoved = pyqtSignal(str)
 
 
 class WindowCase(unittest.TestCase):
@@ -199,12 +201,8 @@ class WindowTests(WindowCase):
         self.assertEqual(self.watcher.asked, ["02bc524c"])
         self.assertTrue(window.fetchTimer.isActive())
 
-    def upowerChange(self, key="02bc524c"):
-        class UPowerMouse:
-            pass
-        changed = UPowerMouse()
-        changed.key = key
-        self.upower.mouseChanged.emit(changed)
+    def upowerChange(self, key="02bc524c", reading=hidpp.BatteryReading(61, 0)):
+        self.upower.mouseChanged.emit(upower.UPowerMouse("/org/freedesktop/UPower/devices/mouse_" + key, key, None, reading))
 
     def settle(self, window, key="02bc524c"):
         window.upowerChangedAt[key] -= historyWindow.UPOWER_SETTLE_SECONDS
@@ -234,6 +232,24 @@ class WindowTests(WindowCase):
         askedAt = window.upowerChangedAt["02bc524c"] + history.WAKE_SET_SECONDS + history.HOLD_SECONDS
         self.assertTrue(window.isOld(mouse, historyWindow.Reply(reply("02bc524c"), mouse.historyRevision, askedAt)))
         self.assertGreater(historyWindow.UPOWER_SETTLE_SECONDS, history.WAKE_SET_SECONDS + history.HOLD_SECONDS)
+
+    def testAUPowerRefreshThatLeavesTheReadingAloneIsntAChange(self):
+        window = self.opened(entry())
+        self.upowerChange()
+        changedAt = window.upowerChangedAt["02bc524c"]
+        self.upowerChange()
+        self.assertEqual(window.upowerChangedAt["02bc524c"], changedAt)
+        self.upowerChange(reading=hidpp.BatteryReading(60, 0))
+        self.assertGreater(window.upowerChangedAt["02bc524c"], changedAt)
+
+    def testAUPowerMouseThatCameBackIsAChangeEvenWithTheSameReading(self):
+        # the service writes a gap when the mouse goes and the first reading once it's back
+        window = self.opened(entry())
+        self.upowerChange()
+        changedAt = window.upowerChangedAt["02bc524c"]
+        self.upower.mouseRemoved.emit("/org/freedesktop/UPower/devices/mouse_02bc524c")
+        self.upowerChange()
+        self.assertGreater(window.upowerChangedAt["02bc524c"], changedAt)
 
     def testAUPowerChangeDuringAFetchMakesItsAnswerOld(self):
         self.watcher.hold = True
