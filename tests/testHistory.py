@@ -147,6 +147,8 @@ class StoreTests(RecorderCase):
         again = history.Recorder(self.folder, self.clock, timers=False)
         self.assertTrue(again.available())
         again.stop()
+        self.assertEqual([name for name in os.listdir(self.folder) if ".broken-" in name], [])
+        self.assertEqual([row[:3] for row in self.rows()], [(0, 0, 50)])
 
     def testANewerDatabaseIsLeftAsItIs(self):
         with self.db() as db:
@@ -217,6 +219,8 @@ class StoreTests(RecorderCase):
         self.assertEqual(self.checksOpening(again), ["pragma integrity_check"])
         self.assertFalse(os.path.exists(os.path.join(self.folder, history.INTEGRITY_FLAG)))
         again.stop()
+        self.assertEqual([name for name in os.listdir(self.folder) if ".broken-" in name], [])
+        self.assertEqual([row[:3] for row in self.rows()], [(0, 0, 50)])
         # the flag is gone, so the start after that goes back to the quick check
         last = history.Recorder(self.folder, self.clock, timers=False)
         self.assertEqual(self.checksOpening(last), ["pragma quick_check"])
