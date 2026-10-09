@@ -10,7 +10,7 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 from PyQt6 import sip
 from PyQt6.QtCore import QAbstractAnimation, QObject, QPoint, QPointF, QRectF, QSizeF, Qt, pyqtSignal
 from PyQt6.QtDBus import QDBusPendingCall, QDBusVariant
-from PyQt6.QtGui import QColor, QIcon, QPalette
+from PyQt6.QtGui import QColor, QIcon, QImageReader, QPalette
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QMenu, QWidget
 
@@ -33,6 +33,7 @@ from tests.fakes.recordingBus import RecordingBus
 app = QApplication.instance() or QApplication([])
 NOW = time.time()
 PACKAGING = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "packaging")
+SVG_LOADS = b"svg" in [bytes(f) for f in QImageReader.supportedImageFormats()]
 
 
 def entry(key="02bc524c", name="PRO X3 SUPERSTRIKE", reading=hidpp.BatteryReading(62, 0), asleep=False, pathKey=False, revision=1, lastRead=NOW):
@@ -195,24 +196,31 @@ class WindowTests(WindowCase):
         self.state(entry(asleep=True, lastRead=time.time()))
         self.assertTrue(window.statusLabel.text().startswith("Asleep, read at "))
 
+    def assertWindowIcon(self, window, name):
+        self.assertEqual(window.stateIconName, name)
+        # without Qt's SVG plugin no state icon loads, and the window keeps the app's icon
+        if (SVG_LOADS):
+            self.assertEqual(window.windowIcon().name(), name)
+
     def testTheWindowIconFollowsTheShownMouse(self):
         window = self.opened(entry())
-        self.assertEqual(window.windowIcon().name(), icon.APP_ICON)
+        self.assertWindowIcon(window, icon.APP_ICON)
         self.state(entry(reading=hidpp.BatteryReading(45, hidpp.CHARGING_CHARGING)))
-        self.assertEqual(window.windowIcon().name(), icon.APP_ICON + "-charging")
+        self.assertWindowIcon(window, icon.APP_ICON + "-charging")
         self.state(entry(reading=hidpp.BatteryReading(icon.RED_PERCENT, 0)))
-        self.assertEqual(window.windowIcon().name(), icon.APP_ICON + "-low")
+        self.assertWindowIcon(window, icon.APP_ICON + "-low")
         self.state(entry(asleep=True, lastRead=time.time()))
-        self.assertEqual(window.windowIcon().name(), icon.APP_ICON + "-asleep")
+        self.assertWindowIcon(window, icon.APP_ICON + "-asleep")
         self.state(entry(reading=None))
-        self.assertEqual(window.windowIcon().name(), icon.APP_ICON + "-empty")
+        self.assertWindowIcon(window, icon.APP_ICON + "-empty")
 
     def testWithNoMouseTheWindowKeepsTheAppIcon(self):
         window = self.opened()
         self.assertFalse(window.testAttribute(Qt.WidgetAttribute.WA_SetWindowIcon))
         self.state(entry(reading=hidpp.BatteryReading(45, hidpp.CHARGING_CHARGING)))
-        self.assertTrue(window.testAttribute(Qt.WidgetAttribute.WA_SetWindowIcon))
+        self.assertEqual(window.testAttribute(Qt.WidgetAttribute.WA_SetWindowIcon), SVG_LOADS)
         self.state()
+        self.assertEqual(window.stateIconName, None)
         self.assertFalse(window.testAttribute(Qt.WidgetAttribute.WA_SetWindowIcon))
 
     def testAThemeWithoutTheStateIconsLeavesTheAppIcon(self):
