@@ -4,6 +4,7 @@ from PyQt6.QtCore import QObject, QTimer, pyqtSignal, pyqtSlot
 from PyQt6.QtDBus import QDBusConnection, QDBusError, QDBusMessage, QDBusServiceWatcher
 
 import dbusCalls
+import history
 import serviceState
 from exceptionHooks import printLine
 
@@ -20,22 +21,30 @@ READ_SILENT = "ReadSilent"
 UNDECODABLE = "undecodable"
 
 
-def historyFrom(reply, key):
+def decodeFrom(reply, key, version):
     arguments = reply.arguments()
     if (not arguments or not isinstance(arguments[0], str)):
         return None
     try:
-        summary = json.loads(arguments[0])
+        decoded = json.loads(arguments[0])
     except ValueError:
         return None
-    if (not isinstance(summary, dict) or summary.get("version") != 1 or summary.get("key") != key):
+    if (not isinstance(decoded, dict) or decoded.get("version") != version or decoded.get("key") != key):
         return None
-    return summary
+    return decoded
+
+
+def historyFrom(reply, key):
+    return decodeFrom(reply, key, history.HISTORY_VERSION)
 
 
 def levelsFrom(reply, key, rangeName):
-    levels = historyFrom(reply, key)
+    levels = decodeFrom(reply, key, history.LEVELS_VERSION)
     if (levels is None or levels.get("range") != rangeName or not isinstance(levels.get("slots"), list)):
+        return None
+    # a span range's slots hold a low, a high, and a charge count, while the others hold a percent, a level, a voltage, and a charge flag
+    length = 4 if rangeName in history.SPAN_RANGES else 5
+    if (any(not isinstance(slot, list) or len(slot) != length for slot in levels["slots"])):
         return None
     return levels
 

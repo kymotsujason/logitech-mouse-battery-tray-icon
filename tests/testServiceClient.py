@@ -1,5 +1,6 @@
 import errno
 import io
+import json
 import os
 import shutil
 import signal
@@ -15,10 +16,14 @@ from PyQt6.QtDBus import QDBusConnection, QDBusMessage
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
 
+import health
+import hidpp
+import history
 import mice
 import serviceClient
 import serviceState
 import version
+from tests import testHistory
 from tests.fakes.privateBus import FAKES, PrivateBus, requireTools
 
 app = QApplication.instance() or QApplication([])
@@ -623,6 +628,59 @@ class ServiceWatcherTests(unittest.TestCase):
         self.assertTrue(waitUntil(lambda: len(self.goodStates()) > count, timeout=10.0))
         self.assertEqual(len(self.starts()), 4)
         self.assertEqual(self.goodStates()[-1], serviceState.decodeState(LATER))
+
+
+class DecodeTests(testHistory.RecorderCase):
+    def replyOf(self, payload):
+        return QDBusMessage.createMethodCall("a.b", "/a", "a.b", "c").createReply([json.dumps(payload, sort_keys=True)])
+
+    def levelsOf(self, rangeName, slots):
+        return {"version": history.LEVELS_VERSION, "key": testHistory.KEY, "range": rangeName, "slots": slots}
+
+    def testASlotOfTheWrongLengthDoesntDecode(self):
+        fiveFields = [[testHistory.START, 50, None, None, False]]
+        fourFields = [[testHistory.START, 20, 90, 1]]
+        for rangeName in history.LEVEL_RANGES:
+            right, wrong = (fourFields, fiveFields) if rangeName in history.SPAN_RANGES else (fiveFields, fourFields)
+            self.assertIsNotNone(serviceClient.levelsFrom(self.replyOf(self.levelsOf(rangeName, right)), testHistory.KEY, rangeName), rangeName)
+            self.assertIsNone(serviceClient.levelsFrom(self.replyOf(self.levelsOf(rangeName, wrong)), testHistory.KEY, rangeName), rangeName)
+            self.assertIsNone(serviceClient.levelsFrom(self.replyOf(self.levelsOf(rangeName, right + [None])), testHistory.KEY, rangeName), rangeName)
+
+    def testRealLevelsOfEveryRangeDecode(self):
+        self.event(0, 62)
+        self.event(3600, 60)
+        for rangeName in history.LEVEL_RANGES:
+            reply = self.replyOf(self.recorder.levels(testHistory.KEY, rangeName))
+            self.assertIsNotNone(serviceClient.levelsFrom(reply, testHistory.KEY, rangeName), rangeName)
+
+    def testARealSummaryDecodesAndIsAssessed(self):
+        self.event(0, 62)
+        self.event(3600, 60)
+        decoded = serviceClient.historyFrom(self.replyOf(self.recorder.summary(testHistory.KEY)), testHistory.KEY)
+        self.assertIsNotNone(decoded)
+        self.assertEqual(decoded["version"], history.HISTORY_VERSION)
+        self.assertTrue(health.assess(decoded, hidpp.BatteryReading(60, 0), testHistory.START + 3600).lines)
+
+    def testAnotherHistoryVersionDoesntDecode(self):
+        self.event(0, 62)
+        summary = self.recorder.summary(testHistory.KEY)
+        summary["version"] = history.HISTORY_VERSION + 1
+        self.assertIsNone(serviceClient.historyFrom(self.replyOf(summary), testHistory.KEY))
+
+    def testTheVersionsAreTheOnesTheServiceWrites(self):
+        self.event(0, 62)
+        with mock.patch.object(history, "HISTORY_VERSION", 2), mock.patch.object(history, "LEVELS_VERSION", 3):
+            summary = self.recorder.summary(testHistory.KEY)
+            levels = self.recorder.levels(testHistory.KEY, "week")
+            self.assertEqual((summary["version"], levels["version"]), (2, 3))
+            self.assertIsNotNone(serviceClient.historyFrom(self.replyOf(summary), testHistory.KEY))
+            self.assertIsNotNone(serviceClient.levelsFrom(self.replyOf(levels), testHistory.KEY, "week"))
+
+    def testAnotherLevelsVersionDoesntDecode(self):
+        self.event(0, 62)
+        levels = self.recorder.levels(testHistory.KEY, "week")
+        levels["version"] = history.LEVELS_VERSION + 1
+        self.assertIsNone(serviceClient.levelsFrom(self.replyOf(levels), testHistory.KEY, "week"))
 
 
 if (__name__ == "__main__"):
