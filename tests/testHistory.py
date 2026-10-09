@@ -10,6 +10,7 @@ from unittest import mock
 
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
+from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
 
 import hidpp
@@ -30,6 +31,15 @@ class Clock:
 
 def battery(percent, charging=0, power=0, level=None, millivolts=None):
     return hidpp.BatteryReading(percent, charging, millivolts, level, power)
+
+
+def waitUntil(condition, timeout=3.0):
+    deadline = time.monotonic() + timeout
+    while (time.monotonic() < deadline):
+        if (condition()):
+            return True
+        QTest.qWait(20)
+    return condition()
 
 
 def corruption():
@@ -413,6 +423,21 @@ class HoldTests(RecorderCase):
         self.event(0, 50)
         self.event(3, 49)
         self.recorder.stop()
+        self.assertEqual([row[2] for row in self.rows()], [50, 49])
+
+
+class TimerTests(RecorderCase):
+    def testTheRecordersOwnTimerWritesAWaitingRowAndThenAHeldOne(self):
+        self.recorder = history.Recorder(self.folder)
+        self.assertTrue(self.recorder.available())
+        with mock.patch.object(history, "WAKE_SET_SECONDS", 0.2), mock.patch.object(history, "HOLD_SECONDS", 2):
+            self.recorder.addReading(KEY, battery(50), history.ORIGIN_EVENT)
+            self.assertTrue(waitUntil(lambda: len(self.rows()) == 1))
+            self.recorder.addReading(KEY, battery(49), history.ORIGIN_EVENT)
+            entry = self.recorder.entries[KEY]
+            self.assertTrue(waitUntil(lambda: entry.held is not None))
+            self.assertEqual(len(self.rows()), 1)
+            self.assertTrue(waitUntil(lambda: len(self.rows()) == 2))
         self.assertEqual([row[2] for row in self.rows()], [50, 49])
 
 
