@@ -283,6 +283,28 @@ class ServiceWatcherTests(unittest.TestCase):
         self.assertTrue(waitUntil(lambda: answers))
         self.assertEqual(answers, [(None, serviceState.HISTORY_UNAVAILABLE)])
 
+    def testAHistoryTheServiceNeverAnswersTimesOut(self):
+        self.privateBus = PrivateBus()
+        self.setMethodAnswer("GetHistory", "hang")
+        self.startFake()
+        self.startWatcher()
+        answers = []
+        with mock.patch.object(serviceClient, "HISTORY_TIMEOUT_MS", 300):
+            self.watcher.getHistory("02bc524c", lambda summary, error: answers.append((summary, error)))
+            self.assertTrue(waitUntil(lambda: answers, timeout=1.2))
+        self.assertEqual(answers, [(None, "org.freedesktop.DBus.Error.NoReply")])
+
+    def testLevelsTheServiceNeverAnswersTimeOut(self):
+        self.privateBus = PrivateBus()
+        self.setMethodAnswer("GetLevels", "hang")
+        self.startFake()
+        self.startWatcher()
+        answers = []
+        with mock.patch.object(serviceClient, "HISTORY_TIMEOUT_MS", 300):
+            self.watcher.getLevels("02bc524c", "year", lambda levels, error: answers.append((levels, error)))
+            self.assertTrue(waitUntil(lambda: answers, timeout=1.2))
+        self.assertEqual(answers, [(None, "org.freedesktop.DBus.Error.NoReply")])
+
     def testAHistoryForAnotherKeyDoesntDecode(self):
         self.privateBus = PrivateBus()
         with open(self.stateFile + ".history", "w") as f:

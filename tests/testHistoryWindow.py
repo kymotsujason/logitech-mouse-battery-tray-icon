@@ -313,6 +313,36 @@ class WindowTests(WindowCase):
         self.assertEqual(len(self.watcher.asked), 2)
         self.assertFalse(window.fetchTimer.isActive())
 
+    def testARefusedFirstFetchIsAskedAgainAfterTheGap(self):
+        for error in (serviceState.READ_ALL_LIMITED, "org.freedesktop.DBus.Error.NoReply"):
+            self.window.close()
+            self.window.replies.clear()
+            self.window.errors.clear()
+            self.window.lastFetch.clear()
+            self.watcher.asked.clear()
+            self.watcher.answers["02bc524c"] = (None, error)
+            window = self.opened(entry())
+            self.assertEqual((self.watcher.asked, window.message.text()), (["02bc524c"], historyWindow.UNAVAILABLE_TEXT), error)
+            self.assertTrue(window.fetchTimer.isActive(), error)
+            self.assertGreater(window.fetchTimer.remainingTime(), (historyWindow.FETCH_GAP_SECONDS - 2) * 1000, error)
+            del self.watcher.answers["02bc524c"]
+            window.lastFetch["02bc524c"] -= historyWindow.FETCH_GAP_SECONDS
+            window.fetchTimer.timeout.emit()
+            self.assertEqual(self.watcher.asked, ["02bc524c"] * 2, error)
+            self.assertFalse(window.message.isVisibleTo(window), error)
+
+    def testARefusedRefreshKeepsTheReplyAndIsAskedAgainAfterTheGap(self):
+        window = self.opened(entry())
+        self.watcher.answers["02bc524c"] = (None, serviceState.READ_ALL_LIMITED)
+        window.lastFetch.clear()
+        self.state(entry(revision=2))
+        self.assertEqual((len(self.watcher.asked), window.refreshLabel.text(), window.message.isVisibleTo(window)), (2, historyWindow.NOT_REFRESHED_TEXT, False))
+        self.assertTrue(window.fetchTimer.isActive())
+        del self.watcher.answers["02bc524c"]
+        window.lastFetch["02bc524c"] -= historyWindow.FETCH_GAP_SECONDS
+        window.fetchTimer.timeout.emit()
+        self.assertEqual((len(self.watcher.asked), window.refreshLabel.text()), (3, ""))
+
     def testAReopenWithinTheGapShowsTheKeptReply(self):
         window = self.opened(entry())
         window.close()
