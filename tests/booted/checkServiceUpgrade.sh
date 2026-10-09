@@ -149,6 +149,7 @@ for i in $(seq 50); do
     sleep 0.1
 done
 check "the new process logged that $version started" "$started" "1"
+lastPid=$newPid
 check "the $version service lists the fake mouse at 81% again" "$(mouseState)" "1"
 
 historyRows() {
@@ -168,17 +169,49 @@ waitForRows() {
     echo "$rows"
 }
 
+# the first reading's time is something only the original file has, since a database made new starts after it
+oldestReading() {
+    sudo python3 -c "import sqlite3; print(sqlite3.connect('file:/var/lib/$name/history.sqlite3?mode=ro', uri=True).execute('select min(at) from readings').fetchone()[0])" 2>/dev/null
+}
+
+brokenFiles() {
+    sudo find /var/lib/$name -maxdepth 1 -name 'history.sqlite3.broken-*' | wc -l
+}
+
+# waits for a new process to log its start line, so a count read before it opened the file can't pass
+waitForStart() {
+    local pid="" count=0
+    for i in $(seq 150); do
+        pid=$(mainPid)
+        if [ "$pid" -gt 0 ] 2>/dev/null && [ "$pid" != "$lastPid" ]; then
+            count=$(sudo journalctl _PID="$pid" -o cat --no-pager | grep -cxF "Mouse Battery service $version started")
+            if [ "$count" = "1" ]; then
+                break
+            fi
+        fi
+        sleep 0.1
+    done
+    [ "$count" = "1" ] || stop "the restarted service never logged that $version started"
+    lastPid=$pid
+}
+
 check "the upgrade gave the service its state folder" "$(sudo stat -c '%U %a' /var/lib/$name 2>&1)" "$name 750"
 rows=$(waitForRows 2)
 check "the service saved the fake mouse's readings" "$( [ "$rows" -ge 2 ] 2>/dev/null && echo saved || echo "$rows rows")" "saved"
 check "GetHistory answers for the fake mouse" "$(busctl --system --timeout=5 call "$service" "$objectPath" "$interface" GetHistory s 02bc524c 2>&1 | grep -c '\\"key\\": \\"02bc524c\\"')" "1"
 check "GetLevels answers a range for the fake mouse" "$(busctl --system --timeout=5 call "$service" "$objectPath" "$interface" GetLevels ss 02bc524c year 2>&1 | grep -c '\\"range\\": \\"year\\"')" "1"
+oldest=$(oldestReading)
+[ -n "$oldest" ] || stop "the history has no first reading to compare against"
 sudo systemctl restart "$unit"
-after=$(waitForRows "$rows")
-check "the history survived a service restart" "$( [ "$after" -ge "$rows" ] 2>/dev/null && echo kept || echo "$after rows")" "kept"
+waitForStart
+after=$(waitForRows $((rows + 1)))
+check "the history survived a service restart" "$( [ "$after" -gt "$rows" ] 2>/dev/null && [ "$(oldestReading)" = "$oldest" ] && echo kept || echo "$after rows, first reading $(oldestReading)")" "kept"
+check "the restart set no broken history file aside" "$(brokenFiles)" "0"
 sudo DEBIAN_FRONTEND=noninteractive apt-get install --reinstall -y "$repo/dist/${name}_${version}_all.deb" > "$work/install3.log" 2>&1 || stop "the reinstall failed"
-again=$(waitForRows "$after")
-check "the history survived a reinstall of the same package" "$( [ "$again" -ge "$after" ] 2>/dev/null && echo kept || echo "$again rows")" "kept"
+waitForStart
+again=$(waitForRows $((after + 1)))
+check "the history survived a reinstall of the same package" "$( [ "$again" -gt "$after" ] 2>/dev/null && [ "$(oldestReading)" = "$oldest" ] && echo kept || echo "$again rows, first reading $(oldestReading)")" "kept"
+check "the reinstall set no broken history file aside" "$(brokenFiles)" "0"
 
 if [ "$failures" -gt 0 ]; then
     exit 1
