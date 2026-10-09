@@ -20,6 +20,8 @@ READ_ALL_REFILL_SECONDS = 30
 LEVELS_BURST = 10
 LEVELS_REFILL_SECONDS = 5
 INVALID_ARGS = "org.freedesktop.DBus.Error.InvalidArgs"
+# the longest key is a UPower object path, near 60 characters, and a reply echoes the key, so anything far past that is refused
+MAX_KEY_LENGTH = 256
 STATE_VERSION = 1
 STATE_KEYS = ("version", "busy", "searching", "nodes", "deniedPaths", "mice")
 ENTRY_KEYS = ("key", "pathKey", "name", "source", "percent", "charging", "millivolts", "level", "asleep", "lastRead", "wokeAt")

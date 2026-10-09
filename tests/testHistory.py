@@ -762,6 +762,16 @@ class SummaryTests(RecorderCase):
         self.addReadingRow(7 * 24 * 60 * 60 + 600, percent=70)
         self.assertEqual(self.recorder.levels(KEY, "week")["slots"], self.recorder.summary(KEY)["recent"])
 
+    def testADayStartsEmptyAfterAGapBeforeIt(self):
+        # a mouse gone since before the day began shows no level until it reads again
+        self.clock.now = START + 48 * 60 * 60
+        self.addReadingRow(60, percent=50)
+        self.addReadingRow(18 * 60 * 60, origin=history.ORIGIN_GAP)
+        self.addReadingRow(43 * 60 * 60, percent=70)
+        slots = self.recorder.levels(KEY, "day")["slots"]
+        self.assertEqual([slot[1] for slot in slots[:2]], [None, None])
+        self.assertEqual(slots[-1][1], 70)
+
     def testTheDayHasHalfHourLevelBars(self):
         self.clock.now = START + 24 * 60 * 60
         self.addReadingRow(10, percent=80)

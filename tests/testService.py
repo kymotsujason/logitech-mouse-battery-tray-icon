@@ -529,6 +529,12 @@ class HistoryServiceTests(unittest.TestCase):
         self.receiverList.recorder = history.Recorder(None)
         self.assertEqual(self.levels(), serviceState.HISTORY_UNAVAILABLE)
 
+    def testAnOverlongKeyIsRefusedBeforeAnyWork(self):
+        # a reply echoes the key, so a huge one would cost the service a reply three times its size
+        key = "k" * (serviceState.MAX_KEY_LENGTH + 1)
+        self.assertEqual((self.levels(key), self.history(key)), (serviceState.INVALID_ARGS, serviceState.INVALID_ARGS))
+        self.assertIsInstance(self.levels("k" * serviceState.MAX_KEY_LENGTH), dict)
+
     def testGetLevelsHasABudgetOfItsOwn(self):
         # a person tapping through the six ranges spends six calls, so the burst is larger than the history's
         answers = [self.levels("ffffffff") for i in range(serviceState.LEVELS_BURST + 1)]

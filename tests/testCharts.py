@@ -1,3 +1,4 @@
+import calendar
 import os
 import time
 import unittest
@@ -195,6 +196,21 @@ class LineChartTests(ChartCase):
         now = time.mktime((2026, 10, 9, 12, 0, 0, 0, 0, -1))
         self.assertEqual(charts.latestText(41.6, "h", "2026-10", now), "42 h, this month")
         self.assertEqual(charts.latestText(41.6, "h", "2026-03", now), "42 h, Mar 2026")
+
+    def testThisMonthIsTheMonthTheFiguresAreGroupedBy(self):
+        # the service groups the figures by UTC month, so late on October 31 in California the newest figure is November's
+        saved = os.environ.get("TZ")
+        os.environ["TZ"] = "America/Los_Angeles"
+        time.tzset()
+        try:
+            now = calendar.timegm((2026, 11, 1, 3, 0, 0, 0, 0, 0))
+            self.assertEqual(charts.latestText(12, "h", "2026-11", now), "12 h, this month")
+        finally:
+            if (saved is None):
+                del os.environ["TZ"]
+            else:
+                os.environ["TZ"] = saved
+            time.tzset()
 
     def testTheLatestFigureIsntCutShort(self):
         chart = self.make(charts.LineChart("Charging Speed", "min per 10%", charts.CHARGING_EMPTY))

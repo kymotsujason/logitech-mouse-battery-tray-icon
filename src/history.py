@@ -1031,10 +1031,11 @@ def spanSlots(db, mouseId, edges):
 
 def recentSlots(db, mouseId, now, count=SLOTS, seconds=SLOT_SECONDS):
     start = now - count * seconds
-    before = db.execute("select percent, level, millivolts from readings where mouseId = ? and at < ? and origin in (0, 1, 5) order by at desc, seq desc limit 1", (mouseId, start)).fetchone()
+    # a gap before the window means nothing is known at its start, the same as a gap inside it
+    before = db.execute("select origin, percent, level, millivolts from readings where mouseId = ? and at < ? and origin in (0, 1, 4, 5) order by at desc, seq desc limit 1", (mouseId, start)).fetchone()
     rows = db.execute("select at, origin, percent, level, millivolts from readings where mouseId = ? and at >= ? and at <= ? order by at, seq", (mouseId, start, now)).fetchall()
     charges = db.execute("select startAt, coalesce(endAt, ?) from sessions where mouseId = ? and kind = 1 and coalesce(endAt, ?) >= ?", (now, mouseId, now, start)).fetchall()
-    level = before
+    level = None if before is None or before[0] == ORIGIN_GAP else before[1:]
     slots = []
     index = 0
     for slot in range(count):

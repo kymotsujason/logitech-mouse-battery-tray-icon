@@ -90,6 +90,9 @@ class BatteryService(QDBusAbstractAdaptor):
         if (caller is None):
             self.refuse(message, CALLER_UNKNOWN, "Couldn't tell which account asked for the history.")
             return ""
+        if (len(key) > serviceState.MAX_KEY_LENGTH):
+            self.refuse(message, serviceState.INVALID_ARGS, "A key is at most " + str(serviceState.MAX_KEY_LENGTH) + " characters.")
+            return ""
         if (not self.takeFrom(self.historyBudgets, caller)):
             self.refuse(message, READ_ALL_LIMITED, "Each account gets " + str(READ_ALL_BURST) + " history reads at once and then one every " + str(READ_ALL_REFILL_SECONDS) + " seconds.")
             return ""
@@ -105,6 +108,9 @@ class BatteryService(QDBusAbstractAdaptor):
         caller = self.callerOf(message)
         if (caller is None):
             self.refuse(message, CALLER_UNKNOWN, "Couldn't tell which account asked for the levels.")
+            return ""
+        if (len(key) > serviceState.MAX_KEY_LENGTH):
+            self.refuse(message, serviceState.INVALID_ARGS, "A key is at most " + str(serviceState.MAX_KEY_LENGTH) + " characters.")
             return ""
         if (rangeName not in history.LEVEL_RANGES):
             self.refuse(message, serviceState.INVALID_ARGS, "The range is one of " + ", ".join(history.LEVEL_RANGES) + ".")

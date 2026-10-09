@@ -47,7 +47,8 @@ def labeledMonths(places):
 
 
 def latestText(value, unit, month, now):
-    if (month == time.strftime("%Y-%m", time.localtime(now))):
+    # the service groups the figures by UTC month, so this month is the UTC one too
+    if (month == time.strftime("%Y-%m", time.gmtime(now))):
         return str(round(value)) + " " + unit + ", this month"
     return str(round(value)) + " " + unit + ", " + time.strftime("%b %Y", time.strptime(month, "%Y-%m"))
 

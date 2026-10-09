@@ -103,7 +103,7 @@ def outlineRects(cells):
 def drawNumber(painter, state, size, baseColor):
     if (state.percent is None or size < NUMBER_MIN_SIZE):
         return
-    cells, plate = numberLayout(str(max(0, min(100, state.percent))), size)
+    cells = numberLayout(str(max(0, min(100, state.percent))), size)[0]
     # the outline clears the fill and track around each digit, so the fill line never runs through one
     painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationOut)
     for rect in outlineRects(cells):

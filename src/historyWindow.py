@@ -16,6 +16,7 @@ import hidpp
 import icon
 import mice
 import panelColor
+import serviceClient
 import serviceState
 
 PANE_WIDTH = 760
@@ -38,7 +39,8 @@ FIXED_HEIGHT = MARGIN + 20 + SEGMENT_HEIGHT + 14 + 16 + FORM_HEIGHT + MARGIN
 FETCH_GAP_SECONDS = 30
 STALE_SLOT_SECONDS = 2 * 60 * 60
 RETRY_MS = 30 * 1000
-BLUR_CHECK_MS = 100
+# KWin answered within 20 ms where it was measured, so the first check comes soon and a slower machine gets one more
+BLUR_CHECK_MS = (25, 100)
 CHART_FADE_MS = 180
 PANE_FADE_MS = 180
 THUMB_SLIDE_MS = 220
@@ -47,6 +49,7 @@ FROST_EVERY_MS = 50
 SLEEP_CHOICES = ((0, "Off"), (30, "Every 30 seconds"), (60, "Every minute"), (300, "Every 5 minutes"))
 # the button shows the choice short, so the label beside it fits, while its menu names each one in full
 SLEEP_SHORT = {0: "Off", 30: "30 s", 60: "1 min", 300: "5 min"}
+SLEEP_LABEL = "Check whether mice are asleep"
 CHOICE_ROW_HEIGHT = 26
 CHOICE_PADDING = 5
 CHOICE_TEXT_X = 26
@@ -64,6 +67,9 @@ RANGE_NAMES = ("day", "week", "month", "halfYear", "year", "all")
 RANGE_LABELS = ("D", "W", "M", "6M", "Y", "All")
 RANGE_WIDTHS = (30, 30, 30, 34, 30, 36)
 RANGE_HEIGHT = 22
+# an older service answers these the same way every time, so asking again changes nothing
+RESTART_LEVEL_ERRORS = (serviceState.UNKNOWN_METHOD, serviceState.ACCESS_DENIED, serviceState.INVALID_ARGS)
+FINAL_LEVEL_ERRORS = RESTART_LEVEL_ERRORS + (serviceClient.UNDECODABLE,)
 # a refused range waits out the refill of its budget before it's asked for again
 LEVEL_RETRY_MS = serviceState.LEVELS_REFILL_SECONDS * 1000
 NOT_REFRESHED_TEXT = "Couldn't refresh the history."
@@ -287,6 +293,7 @@ class ChoiceMenu(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAccessibleName(SLEEP_LABEL)
         self.hide()
 
     def open(self, choices, value, anchor, onPick):
@@ -382,6 +389,8 @@ class PopupButton(QWidget):
 
     def setSeconds(self, seconds):
         self.seconds = seconds
+        # painted instead of a QComboBox, so a screen reader gets its name and value from here
+        self.setAccessibleName(SLEEP_LABEL + ", " + self.text())
         self.update()
 
     def text(self):
@@ -501,6 +510,8 @@ class HistoryWindow(QWidget):
         self.levelRange = levelRange if levelRange in RANGE_NAMES else "week"
         # each mouse's slots per range, dropped with its history reply, since a new reply means new readings
         self.levels = {}
+        # the ranges asked for since each mouse's last history reply, while older slots stay drawn until their new answer
+        self.freshLevels = set()
         self.levelErrors = {}
         self.pendingLevels = set()
         self.selected = None
@@ -511,7 +522,8 @@ class HistoryWindow(QWidget):
         self.fetchTimer = mice.singleShotTimer(self, 1000, self.fetchSelected)
         self.retryTimer = mice.singleShotTimer(self, RETRY_MS, self.fetchSelected)
         self.levelRetryTimer = mice.singleShotTimer(self, LEVEL_RETRY_MS, self.retryLevels)
-        self.blurTimer = mice.singleShotTimer(self, BLUR_CHECK_MS, self.checkBlur)
+        self.blurTimer = mice.singleShotTimer(self, BLUR_CHECK_MS[0], self.checkBlur)
+        self.blurChecks = 0
         self.ageTimer = mice.singleShotTimer(self, 1000, self.fetchSelected)
         self.glowAnimation = QVariantAnimation(self)
         self.glowAnimation.setEasingCurve(QEasingCurve.Type.OutCubic)
@@ -559,6 +571,7 @@ class HistoryWindow(QWidget):
         self.rangeControl = SegmentedControl(self, RANGE_LABELS, RANGE_WIDTHS, RANGE_HEIGHT, 11, track=True, index=RANGE_NAMES.index(self.levelRange))
         self.rangeControl.setParent(self.pane)
         self.rangeControl.chosen.connect(lambda index: self.pickRange(RANGE_NAMES[index]))
+        self.nameRangeControl()
         self.chartFade = QGraphicsOpacityEffect(self.levelChart)
         self.chartAnimation = QVariantAnimation(self)
         self.chartAnimation.setEasingCurve(QEasingCurve.Type.OutCubic)
@@ -600,7 +613,8 @@ class HistoryWindow(QWidget):
                 self.blurred = desktopBlurAvailable()
                 if (not self.blurred):
                     # KWin's answer comes after the event loop has run once, measured at under 20 ms
-                    self.blurTimer.start()
+                    self.blurChecks = 0
+                    self.blurTimer.start(BLUR_CHECK_MS[0])
             else:
                 self.blurred = False
                 self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
@@ -613,6 +627,9 @@ class HistoryWindow(QWidget):
 
     def checkBlur(self):
         self.blurred = desktopBlurAvailable()
+        self.blurChecks += 1
+        if (not self.blurred and self.blurChecks < len(BLUR_CHECK_MS)):
+            self.blurTimer.start(BLUR_CHECK_MS[self.blurChecks])
         self.update()
 
     def readPortal(self):
@@ -683,11 +700,15 @@ class HistoryWindow(QWidget):
             self.paneFade.setEnabled(False)
         self.refresh()
 
+    def nameRangeControl(self):
+        self.rangeControl.setAccessibleName("Chart range, " + charts.RANGE_TITLES[self.levelRange].split(", ", 1)[1])
+
     def pickRange(self, rangeName):
         if (rangeName == self.levelRange):
             return
         self.levelRange = rangeName
         self.rangeControl.choose(RANGE_NAMES.index(rangeName))
+        self.nameRangeControl()
         self.levelRangeChanged.emit(rangeName)
         self.refresh()
 
@@ -704,25 +725,28 @@ class HistoryWindow(QWidget):
             return
         if (levels is not None):
             self.levels.setdefault(key, {})[rangeName] = levels["slots"]
+            self.freshLevels.add((key, rangeName))
             self.levelErrors.pop((key, rangeName), None)
         else:
             self.levelErrors[(key, rangeName)] = error
-            if (error not in (serviceState.UNKNOWN_METHOD, serviceState.ACCESS_DENIED)):
+            if (error not in FINAL_LEVEL_ERRORS):
                 self.levelRetryTimer.start(LEVEL_RETRY_MS if error == serviceState.READ_ALL_LIMITED else RETRY_MS)
         self.refresh()
 
     def retryLevels(self):
         for item, error in list(self.levelErrors.items()):
-            if (error not in (serviceState.UNKNOWN_METHOD, serviceState.ACCESS_DENIED)):
+            if (error not in FINAL_LEVEL_ERRORS):
                 del self.levelErrors[item]
         self.refresh()
 
     def forgetLevels(self, key=None):
         if (key is None):
             self.levels.clear()
+            self.freshLevels.clear()
             self.levelErrors.clear()
             return
-        self.levels.pop(key, None)
+        # the slots stay drawn until the new answer, so a new reading never blanks the chart
+        self.freshLevels = {item for item in self.freshLevels if item[0] != key}
         for item in [item for item in self.levelErrors if item[0] == key]:
             del self.levelErrors[item]
 
@@ -969,15 +993,15 @@ class HistoryWindow(QWidget):
         error = self.levelErrors.get((key, rangeName))
         if (slots is not None):
             self.levelChart.setSlots(slots, voltage, rangeName, rough=rough)
-        elif (error in (serviceState.UNKNOWN_METHOD, serviceState.ACCESS_DENIED)):
+        elif (error in RESTART_LEVEL_ERRORS):
             self.levelChart.setSlots([], voltage, rangeName, message=RANGE_RESTART_TEXT)
         elif (error is not None and error != serviceState.READ_ALL_LIMITED):
             self.levelChart.setSlots([], voltage, rangeName, message=RANGE_ERROR_TEXT)
         else:
             # set before the call, since a reply can come back inside it and fill the chart
             self.levelChart.setSlots([], voltage, rangeName, message=LOADING_TEXT)
-            if (error is None):
-                self.fetchLevels(key, rangeName)
+        if (error is None and (key, rangeName) not in self.freshLevels):
+            self.fetchLevels(key, rangeName)
 
     def fillForm(self, result):
         values = ("-", "-", "-") if result is None else (str(result.cycles), result.lastCharged or "-", result.chargingSpeed or "-")

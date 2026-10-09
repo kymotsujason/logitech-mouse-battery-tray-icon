@@ -19,6 +19,7 @@ import hidpp
 import historyWindow
 import history
 import mice
+import serviceClient
 import serviceState
 import tray
 from serviceState import ServiceEntry, ServiceState
@@ -298,6 +299,47 @@ class WindowTests(WindowCase):
         window.pickRange("all")
         self.assertEqual((window.levelChart.title, window.levelChart.emptyText()), ("Battery Level, All Time", historyWindow.LOADING_TEXT))
 
+    def testANewHistoryKeepsTheOldBarsWhileTheRangeReloads(self):
+        window = self.opened(entry())
+        window.pickRange("month")
+        before = window.levelChart.slots
+        self.watcher.holdLevels = True
+        window.lastFetch.clear()
+        self.state(entry(revision=2))
+        self.assertEqual((window.levelChart.slots, window.levelChart.message), (before, None))
+        self.assertEqual(self.watcher.levelAsks, [("02bc524c", "month")] * 2)
+
+    def testARefusedReloadKeepsTheOldBars(self):
+        window = self.opened(entry())
+        window.pickRange("month")
+        before = window.levelChart.slots
+        self.watcher.levelAnswers[("02bc524c", "month")] = (None, serviceState.READ_ALL_LIMITED)
+        window.lastFetch.clear()
+        self.state(entry(revision=2))
+        self.assertEqual((window.levelChart.slots, window.levelChart.message), (before, None))
+        self.assertTrue(window.levelRetryTimer.isActive())
+
+    def answerOnce(self, error):
+        self.watcher.levelAnswers[("02bc524c", "year")] = (None, error)
+        window = self.opened(entry())
+        window.pickRange("year")
+        return (window.levelChart.emptyText(), window.levelRetryTimer.isActive())
+
+    def testAnUndecodableRangeIsntAskedForAgain(self):
+        self.assertEqual(self.answerOnce(serviceClient.UNDECODABLE), (historyWindow.RANGE_ERROR_TEXT, False))
+
+    def testARangeTheServiceDoesntKnowSaysToRestart(self):
+        self.assertEqual(self.answerOnce(serviceState.INVALID_ARGS), (historyWindow.RANGE_RESTART_TEXT, False))
+
+    def testTheCustomControlsHaveNamesForScreenReaders(self):
+        window = self.opened(entry())
+        window.popup.setSeconds(60)
+        self.assertEqual(window.popup.accessibleName(), "Check whether mice are asleep, 1 min")
+        self.assertEqual(window.choiceMenu.accessibleName(), "Check whether mice are asleep")
+        self.assertEqual(window.rangeControl.accessibleName(), "Chart range, Last 7 Days")
+        window.pickRange("year")
+        self.assertEqual(window.rangeControl.accessibleName(), "Chart range, Last Year")
+
     def testAnOldServiceSaysToRestartForTheRange(self):
         self.watcher.levelAnswers[("02bc524c", "year")] = (None, serviceState.UNKNOWN_METHOD)
         window = self.opened(entry())
@@ -447,23 +489,33 @@ class WindowBlurTests(WindowCase):
     def openWithBlur(self, answers):
         library = mock.Mock()
         getattr(library, historyWindow.AVAILABLE_SYMBOL).side_effect = answers
+        intervals = []
         with mock.patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": "KDE"}), mock.patch.object(historyWindow.ctypes, "CDLL", return_value=library):
             window = self.opened(entry())
             self.assertFalse(window.blurred)
-            self.assertTrue(window.blurTimer.isActive())
-            window.blurTimer.stop()
-            window.blurTimer.timeout.emit()
+            while (window.blurTimer.isActive()):
+                intervals.append(window.blurTimer.interval())
+                window.blurTimer.stop()
+                window.blurTimer.timeout.emit()
         self.assertEqual(getattr(library, historyWindow.BLUR_SYMBOL).call_count, 1)
-        return window
+        return window, intervals
 
     def testTheBlurIsCheckedAgainOnceKWinHasAnswered(self):
         # KWin's blur manager is only bound after the event loop has run, so the check made as the window shows reads False
-        window = self.openWithBlur([False, True])
+        window, intervals = self.openWithBlur([False, True])
         self.assertTrue(window.blurred)
         self.assertTrue(window.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground))
+        self.assertEqual(intervals, [historyWindow.BLUR_CHECK_MS[0]])
+
+    def testTheBlurIsCheckedSoonAndOnceMoreLater(self):
+        # KWin answered within 20 ms on the machine it was measured on, so the first check comes soon and a slower one still gets a second
+        window, intervals = self.openWithBlur([False, False, True])
+        self.assertTrue(window.blurred)
+        self.assertEqual(intervals, list(historyWindow.BLUR_CHECK_MS))
+        self.assertLessEqual(historyWindow.BLUR_CHECK_MS[0], 30)
 
     def testABlurThatNeverComesKeepsTheBackdropOpaque(self):
-        window = self.openWithBlur([False, False])
+        window, intervals = self.openWithBlur([False, False, False])
         self.assertFalse(window.blurred)
 
 
