@@ -19,6 +19,8 @@ SHEEN_HEIGHT = 60
 GLOWS = ((150, 120, 330, 0.42, 0.38, "state"), (700, 520, 420, 0.16, 0.14, "blue"), (620, 60, 260, 0.10, 0.10, "state"))
 SHADOWS = ((10, 0.05), (6, 0.07), (3, 0.09))
 SHADOW_DROP = 6
+# a hand edited factor of a few million would make a duration past the C int setDuration takes, so motion goes no slower than ten times
+MAX_ANIMATION_FACTOR = 10.0
 
 
 @dataclass(frozen=True)
@@ -85,7 +87,7 @@ def animationFactor(configHome, reducedMotion):
         factor = float(groups.get("KDE", {}).get("AnimationDurationFactor", "1.0"))
     except ValueError:
         return 1.0
-    return max(0.0, factor) if math.isfinite(factor) else 1.0
+    return min(MAX_ANIMATION_FACTOR, max(0.0, factor)) if math.isfinite(factor) else 1.0
 
 
 def paintBackdrop(width, height, pane, color, theme, ratio=1.0):

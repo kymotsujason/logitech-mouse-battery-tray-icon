@@ -54,6 +54,17 @@ class ThemeTests(unittest.TestCase):
         finally:
             shutil.rmtree(folder)
 
+    def testAHugeAnimationSpeedIsCapped(self):
+        # a hand edited factor this large would make a duration past a C int, which setDuration can't take
+        folder = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(folder, "kdeglobals"), "w") as f:
+                f.write("[KDE]\nAnimationDurationFactor=1e8\n")
+            factor = glass.animationFactor(folder, False)
+            self.assertTrue(1.0 < factor <= 10.0, factor)
+        finally:
+            shutil.rmtree(folder)
+
 
 class PaintTests(unittest.TestCase):
     def testTheBackdropIsTheBaseWithAGlowBehindTheIcon(self):
