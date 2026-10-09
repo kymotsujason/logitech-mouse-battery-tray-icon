@@ -3,7 +3,7 @@ import os
 import time
 
 from PyQt6 import sip
-from PyQt6.QtCore import QElapsedTimer, QPoint, QPointF, QRectF, QSizeF, Qt, QTimer, QVariantAnimation, QEasingCurve, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QAbstractAnimation, QElapsedTimer, QPoint, QPointF, QRectF, QSizeF, Qt, QTimer, QVariantAnimation, QEasingCurve, pyqtSignal, pyqtSlot
 from PyQt6.QtDBus import QDBusMessage
 from PyQt6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPen, QRegion
 from PyQt6.QtWidgets import QApplication, QGraphicsOpacityEffect, QLabel, QWidget
@@ -133,6 +133,8 @@ def label(parent, size, weight=QFont.Weight.Normal, wrap=False):
     widget = QLabel(parent)
     widget.setFont(font(size, weight))
     widget.setWordWrap(wrap)
+    # a device supplies the mouse's name, and its angle brackets would otherwise be read as rich text
+    widget.setTextFormat(Qt.TextFormat.PlainText)
     widget.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
     return widget
 
@@ -602,7 +604,7 @@ class HistoryWindow(QWidget):
         return self.frostImage
 
     def open(self):
-        self.motionFactor = glass.animationFactor(self.configHome, False)
+        self.motionFactor = glass.animationFactor(self.configHome, self.reducedMotion == 1)
         self.readPortal()
         # shown before the refresh, since the window only asks for a history while it's visible
         if (not self.isVisible()):
@@ -659,6 +661,13 @@ class HistoryWindow(QWidget):
         else:
             self.reducedMotion = value
             self.motionFactor = glass.animationFactor(self.configHome, value == 1)
+            if (self.motionFactor == 0.0):
+                self.finishAnimations()
+
+    def finishAnimations(self):
+        for animation in (self.glowAnimation, self.paneAnimation, self.chartAnimation, self.segments.animation, self.rangeControl.animation):
+            if (animation.state() == QAbstractAnimation.State.Running):
+                animation.setCurrentTime(animation.duration())
 
     def onPaletteChanged(self, *args):
         self.applyTheme()
@@ -689,12 +698,14 @@ class HistoryWindow(QWidget):
         if (key == self.selected):
             return
         self.selected = key
-        duration = int(PANE_FADE_MS * self.motionFactor)
+        # a fade still running carries on from its opacity, over the share of the time that's left
+        start = self.paneFade.opacity() if self.paneAnimation.state() == QAbstractAnimation.State.Running else 0.0
+        duration = int(PANE_FADE_MS * self.motionFactor * (1.0 - start))
         self.paneAnimation.stop()
         if (duration > 0 and self.isVisible()):
-            self.paneFade.setOpacity(0.0)
+            self.paneFade.setOpacity(start)
             self.paneFade.setEnabled(True)
-            self.paneAnimation.setStartValue(0.0)
+            self.paneAnimation.setStartValue(start)
             self.paneAnimation.setEndValue(1.0)
             self.paneAnimation.setDuration(duration)
             self.paneAnimation.start()
@@ -755,14 +766,15 @@ class HistoryWindow(QWidget):
         for other in self.charts:
             if (other is not chart):
                 other.hide()
+        start = self.chartFade.opacity() if self.chartAnimation.state() == QAbstractAnimation.State.Running else 0.0
         self.chartFade = QGraphicsOpacityEffect(chart)
         chart.setGraphicsEffect(self.chartFade)
         chart.show()
-        duration = int(CHART_FADE_MS * self.motionFactor)
+        duration = int(CHART_FADE_MS * self.motionFactor * (1.0 - start))
         self.chartAnimation.stop()
         if (duration > 0):
-            self.chartFade.setOpacity(0.0)
-            self.chartAnimation.setStartValue(0.0)
+            self.chartFade.setOpacity(start)
+            self.chartAnimation.setStartValue(start)
             self.chartAnimation.setEndValue(1.0)
             self.chartAnimation.setDuration(duration)
             self.chartAnimation.start()

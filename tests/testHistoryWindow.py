@@ -8,7 +8,8 @@ from unittest import mock
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 from PyQt6 import sip
-from PyQt6.QtCore import QObject, QPoint, QPointF, QRectF, Qt, pyqtSignal
+from PyQt6.QtCore import QAbstractAnimation, QObject, QPoint, QPointF, QRectF, Qt, pyqtSignal
+from PyQt6.QtDBus import QDBusMessage
 from PyQt6.QtGui import QColor, QPalette
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QMenu, QWidget
@@ -19,6 +20,7 @@ import hidpp
 import historyWindow
 import history
 import mice
+import panelColor
 import serviceClient
 import serviceState
 import tray
@@ -28,8 +30,8 @@ app = QApplication.instance() or QApplication([])
 NOW = time.time()
 
 
-def entry(key="02bc524c", name="PRO X3 SUPERSTRIKE", reading=hidpp.BatteryReading(62, 0), asleep=False, pathKey=False, revision=1):
-    return ServiceEntry(key, pathKey, name, "/dev/hidraw4", reading, asleep, NOW, NOW, True, True, revision)
+def entry(key="02bc524c", name="PRO X3 SUPERSTRIKE", reading=hidpp.BatteryReading(62, 0), asleep=False, pathKey=False, revision=1, lastRead=NOW):
+    return ServiceEntry(key, pathKey, name, "/dev/hidraw4", reading, asleep, lastRead, NOW, True, True, revision)
 
 
 def reply(key):
@@ -159,7 +161,8 @@ class WindowTests(WindowCase):
     def testTheStatusWordsFollowTheState(self):
         window = self.opened(entry(reading=hidpp.BatteryReading(45, hidpp.CHARGING_CHARGING)))
         self.assertEqual(window.statusLabel.text(), "Charging")
-        self.state(entry(asleep=True))
+        # built now, since NOW is from when the suite loaded and a suite that crosses local midnight would put it on another day
+        self.state(entry(asleep=True, lastRead=time.time()))
         self.assertTrue(window.statusLabel.text().startswith("Asleep, read at "))
 
     def testTheSidebarComesWithTwoMiceAndGoesWithOne(self):
@@ -383,6 +386,136 @@ class WindowTests(WindowCase):
         self.assertFalse(window.rangeControl.isVisibleTo(window))
         window.segments.choose(0, animate=False)
         self.assertTrue(window.rangeControl.isVisibleTo(window))
+
+    def testALabelNeverReadsTheMouseNameAsRichText(self):
+        window = self.opened(entry(name="<b>X</b>"))
+        self.assertEqual(window.nameLabel.text(), "<B>X</B>")
+        labels = window.findChildren(historyWindow.QLabel)
+        self.assertTrue(labels)
+        for each in labels:
+            self.assertEqual(each.textFormat(), Qt.TextFormat.PlainText)
+
+    def testAWaitingNotRefreshedLineKeepsTheOldLines(self):
+        window = self.opened(entry())
+        before = [each.text() for each in window.lineLabels]
+        self.watcher.answers["02bc524c"] = (None, serviceState.HISTORY_UNAVAILABLE)
+        window.lastFetch.clear()
+        self.state(entry(revision=2))
+        self.assertEqual(len(self.watcher.asked), 2)
+        self.assertEqual(window.refreshLabel.text(), historyWindow.NOT_REFRESHED_TEXT)
+        self.assertEqual([each.text() for each in window.lineLabels], before)
+        self.assertFalse(window.message.isVisibleTo(window))
+        del self.watcher.answers["02bc524c"]
+        window.lastFetch.clear()
+        self.state(entry(revision=3))
+        self.assertEqual(window.refreshLabel.text(), "")
+
+    def testAReplyOlderThanTwoHoursIsAskedForAgain(self):
+        old = reply("02bc524c")
+        old["recent"] = [[time.time() - 3 * 60 * 60, 62, None, None, False]]
+        self.watcher.answers["02bc524c"] = (old, None)
+        window = self.opened(entry())
+        self.assertEqual(self.watcher.asked, ["02bc524c"])
+        self.assertFalse(window.ageTimer.isActive())
+        self.assertTrue(window.fetchTimer.isActive())
+        window.lastFetch.clear()
+        self.watcher.answers["02bc524c"] = (reply("02bc524c"), None)
+        window.refresh()
+        self.assertEqual(self.watcher.asked, ["02bc524c"] * 2)
+        # the fresh reply waits for its own two hours, and not a second less than the clock allows
+        self.assertTrue(window.ageTimer.isActive())
+        self.assertGreater(window.ageTimer.interval(), (historyWindow.STALE_SLOT_SECONDS - 60) * 1000)
+        self.assertLessEqual(window.ageTimer.interval(), historyWindow.STALE_SLOT_SECONDS * 1000)
+        window.lastFetch.clear()
+        window.refresh()
+        self.assertEqual(len(self.watcher.asked), 2)
+
+    def testThePortalsDarkChoiceWinsOverALightPalette(self):
+        saved = QPalette(app.palette())
+        light = QPalette(saved)
+        light.setColor(QPalette.ColorRole.Window, QColor("#F6F6F6"))
+        app.setPalette(light)
+        try:
+            window = self.opened(entry())
+            window.setPortal("color-scheme", 0)
+            self.assertIs(window.theme, glass.LIGHT)
+            window.setPortal("color-scheme", panelColor.PREFER_DARK)
+            self.assertIs(window.theme, glass.DARK)
+        finally:
+            app.setPalette(saved)
+
+    def portalSignal(self, key, value):
+        message = QDBusMessage.createSignal("/org/freedesktop/portal/desktop", panelColor.SETTINGS_INTERFACE, "SettingChanged")
+        message.setArguments([panelColor.APPEARANCE, key, value])
+        return message
+
+    def testTheReducedMotionChoiceTurnsTheFadesOff(self):
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))
+        self.assertEqual(window.motionFactor, 1.0)
+        window.onPortalSetting(self.portalSignal("reduced-motion", 1))
+        self.assertEqual(window.motionFactor, 0.0)
+        window.pick("11111111")
+        self.assertEqual((window.paneAnimation.state(), window.paneFade.isEnabled()), (QAbstractAnimation.State.Stopped, False))
+
+    def testAKnownReducedMotionSurvivesAReopen(self):
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))
+        window.setPortal("reduced-motion", 1)
+        window.close()
+        window.open()
+        self.assertEqual(window.motionFactor, 0.0)
+        window.pick("11111111")
+        self.assertEqual(window.paneAnimation.state(), QAbstractAnimation.State.Stopped)
+        window.setPortal("reduced-motion", 0)
+        self.assertEqual(window.motionFactor, 1.0)
+
+    def testTurningMotionOffFinishesWhatIsRunning(self):
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S", reading=hidpp.BatteryReading(18, 0)))
+        window.motionFactor = 1.0
+        # the glow only fades once a first paint has made the backdrop
+        window.grab()
+        window.pick("11111111")
+        window.segments.choose(2)
+        window.setGlow(QColor("#FF0000"))
+        running = (window.paneAnimation, window.chartAnimation, window.segments.animation, window.glowAnimation)
+        for animation in running:
+            self.assertEqual(animation.state(), QAbstractAnimation.State.Running)
+        window.setPortal("reduced-motion", 1)
+        for animation in running:
+            self.assertEqual(animation.state(), QAbstractAnimation.State.Stopped)
+        self.assertEqual((window.paneFade.opacity(), window.paneFade.isEnabled(), window.chartFade.isEnabled()), (1.0, False, False))
+        self.assertEqual(window.segments.thumbX, window.segments.segmentX(2))
+        self.assertEqual(window.glow, QColor("#FF0000"))
+
+    def testAPickDuringAFadePicksUpWhereItIs(self):
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"), )
+        window.motionFactor = 1.0
+        window.pick("11111111")
+        self.assertEqual(window.paneAnimation.startValue(), 0.0)
+        window.paneAnimation.setCurrentTime(window.paneAnimation.duration() // 2)
+        halfway = window.paneFade.opacity()
+        self.assertGreater(halfway, 0.3)
+        window.pick("02bc524c")
+        self.assertAlmostEqual(window.paneFade.opacity(), halfway)
+        self.assertAlmostEqual(window.paneAnimation.startValue(), halfway)
+        self.assertLess(window.paneAnimation.duration(), historyWindow.PANE_FADE_MS)
+        self.assertTrue(window.paneFade.isEnabled())
+        self.assertEqual(window.paneAnimation.state(), QAbstractAnimation.State.Running)
+        window.paneAnimation.setCurrentTime(window.paneAnimation.duration())
+        window.pick("11111111")
+        self.assertEqual(window.paneAnimation.startValue(), 0.0)
+        self.assertEqual(window.paneAnimation.duration(), historyWindow.PANE_FADE_MS)
+
+    def testAChartSwitchDuringAFadePicksUpWhereItIs(self):
+        window = self.opened(entry())
+        window.motionFactor = 1.0
+        window.showChart(1)
+        window.chartAnimation.setCurrentTime(window.chartAnimation.duration() // 2)
+        halfway = window.chartFade.opacity()
+        self.assertGreater(halfway, 0.3)
+        window.showChart(2)
+        self.assertAlmostEqual(window.chartFade.opacity(), halfway)
+        self.assertAlmostEqual(window.chartAnimation.startValue(), halfway)
+        self.assertLess(window.chartAnimation.duration(), historyWindow.CHART_FADE_MS)
 
     def testTheRangeControlSitsInTheChartBoxsTopRightCorner(self):
         window = self.opened(entry())
