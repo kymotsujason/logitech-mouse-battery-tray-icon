@@ -9,7 +9,7 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 from PyQt6 import sip
 from PyQt6.QtCore import QAbstractAnimation, QObject, QPoint, QPointF, QRectF, QSizeF, Qt, pyqtSignal
-from PyQt6.QtDBus import QDBusVariant
+from PyQt6.QtDBus import QDBusPendingCall, QDBusVariant
 from PyQt6.QtGui import QColor, QPalette
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QMenu, QWidget
@@ -27,6 +27,7 @@ import settings
 import tray
 import upower
 from serviceState import ServiceEntry, ServiceState
+from tests.fakes.recordingBus import RecordingBus
 
 app = QApplication.instance() or QApplication([])
 NOW = time.time()
@@ -86,6 +87,19 @@ class FakeWatcher(QObject):
 class FakeUPower(QObject):
     mouseChanged = pyqtSignal(object)
     mouseRemoved = pyqtSignal(str)
+
+
+class PortalBus(RecordingBus):
+    # answers each portal read by its key with a number or an error name
+    def __init__(self, answers):
+        super().__init__()
+        self.answers = answers
+
+    def asyncCall(self, message, timeout=None):
+        answer = self.answers[message.arguments()[1]]
+        if (isinstance(answer, str)):
+            return QDBusPendingCall.fromCompletedCall(message.createErrorReply(answer, "failed on purpose"))
+        return QDBusPendingCall.fromCompletedCall(message.createReply([QDBusVariant(answer)]))
 
 
 class WindowCase(unittest.TestCase):
@@ -556,6 +570,34 @@ class WindowTests(WindowCase):
     def portalSignal(self, key, value):
         # a stand-in, since PyQt6 unwraps a variant when it reads a real message's arguments, and the unwrap in onPortalSetting would never be tested
         return mock.Mock(arguments=lambda: [panelColor.APPEARANCE, key, QDBusVariant(value)])
+
+    def openWithPortal(self, answers, scheme=0, motion=0):
+        bus = PortalBus(answers)
+        self.window.sessionBus = bus
+        self.window.portalScheme = scheme
+        self.window.reducedMotion = motion
+        self.state(entry())
+        self.window.open()
+        QTest.qWait(50)
+        return bus
+
+    def testTheWindowWatchesThePortalAndReadsBothSettings(self):
+        bus = self.openWithPortal({"color-scheme": panelColor.PREFER_DARK, "reduced-motion": 1})
+        self.assertEqual(bus.subscriptions, [(panelColor.PORTAL_SERVICE, panelColor.PORTAL_PATH, panelColor.SETTINGS_INTERFACE, "SettingChanged")])
+        self.assertEqual((self.window.portalScheme, self.window.reducedMotion, self.window.motionFactor), (panelColor.PREFER_DARK, 1, 0.0))
+
+    def testAPortalThatTimesOutKeepsWhatTheWindowKnew(self):
+        noReply = "org.freedesktop.DBus.Error.NoReply"
+        self.openWithPortal({"color-scheme": noReply, "reduced-motion": noReply}, panelColor.PREFER_DARK, 1)
+        self.assertEqual((self.window.portalScheme, self.window.reducedMotion, self.window.motionFactor), (panelColor.PREFER_DARK, 1, 0.0))
+
+    def testAPortalWithoutTheKeyResetsIt(self):
+        self.openWithPortal({"color-scheme": panelColor.NOT_FOUND, "reduced-motion": panelColor.UNKNOWN_METHOD}, panelColor.PREFER_DARK, 1)
+        self.assertEqual((self.window.portalScheme, self.window.reducedMotion, self.window.motionFactor), (0, 0, 1.0))
+
+    def testOneFailedReadDoesntHoldBackTheOther(self):
+        self.openWithPortal({"color-scheme": "org.freedesktop.DBus.Error.NoReply", "reduced-motion": 1}, panelColor.PREFER_DARK, 0)
+        self.assertEqual((self.window.portalScheme, self.window.reducedMotion), (panelColor.PREFER_DARK, 1))
 
     def testTheReducedMotionChoiceTurnsTheFadesOff(self):
         window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))

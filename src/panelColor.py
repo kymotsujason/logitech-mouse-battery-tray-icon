@@ -10,6 +10,7 @@ PORTAL_SERVICE = "org.freedesktop.portal.Desktop"
 PORTAL_PATH = "/org/freedesktop/portal/desktop"
 SETTINGS_INTERFACE = "org.freedesktop.portal.Settings"
 UNKNOWN_METHOD = "org.freedesktop.DBus.Error.UnknownMethod"
+NOT_FOUND = "org.freedesktop.portal.Error.NotFound"
 APPEARANCE = "org.freedesktop.appearance"
 PREFER_DARK = 1
 PREFER_LIGHT = 2

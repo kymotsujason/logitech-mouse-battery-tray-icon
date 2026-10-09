@@ -671,9 +671,13 @@ class HistoryWindow(QWidget):
         if (not self.watchingPortal):
             self.watchingPortal = True
             self.sessionBus.connect(panelColor.PORTAL_SERVICE, panelColor.PORTAL_PATH, panelColor.SETTINGS_INTERFACE, "SettingChanged", self.onPortalSetting)
-        panelColor.askPortalSetting(self.sessionBus, self, "color-scheme", lambda value, error: self.setPortal("color-scheme", value if error is None else 0))
-        # a portal older than the key answers with an error, and then motion follows AnimationDurationFactor alone
-        panelColor.askPortalSetting(self.sessionBus, self, "reduced-motion", lambda value, error: self.setPortal("reduced-motion", value if error is None else 0))
+        panelColor.askPortalSetting(self.sessionBus, self, "color-scheme", lambda value, error: self.onPortalRead("color-scheme", value, error))
+        panelColor.askPortalSetting(self.sessionBus, self, "reduced-motion", lambda value, error: self.onPortalRead("reduced-motion", value, error))
+
+    def onPortalRead(self, key, value, error):
+        # a read that timed out says nothing about the setting, while a portal older than the key answers with an error that does, and then motion follows AnimationDurationFactor alone
+        if (error is None or error in (panelColor.NOT_FOUND, panelColor.UNKNOWN_METHOD)):
+            self.setPortal(key, value if error is None else 0)
 
     @pyqtSlot(QDBusMessage)
     def onPortalSetting(self, message):
