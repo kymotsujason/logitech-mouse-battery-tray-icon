@@ -672,6 +672,38 @@ class WindowTests(WindowCase):
         self.assertTrue(menu.rowRect(2).contains(QPointF(menu.rowRect(2).center().x(), button.y())))
         self.assertTrue(QRectF(window.rect()).contains(menu.panel))
 
+    def buttonCenter(self, window):
+        return window.popup.mapTo(window, window.popup.rect().center())
+
+    def testADoubleClickOnTheSleepButtonPicksNothing(self):
+        window = self.opened(entry())
+        QTest.qWaitForWindowExposed(window)
+        picked = []
+        window.sleepCheckChanged.connect(picked.append)
+        for seconds in (0, 30):
+            window.choiceMenu.hide()
+            window.popup.setSeconds(seconds)
+            # sent through the window, so the press opens the menu and the double click lands on whatever then covers the button
+            QTest.mouseDClick(window.windowHandle(), Qt.MouseButton.LeftButton, pos=self.buttonCenter(window))
+            self.assertEqual((picked, window.choiceMenu.isVisibleTo(window)), ([], True), seconds)
+
+    def testASecondClickOnTheSleepButtonClosesTheMenuWithoutAPick(self):
+        for seconds in (0, 30):
+            window, menu = self.openMenu(seconds)
+            picked = []
+            window.sleepCheckChanged.connect(picked.append)
+            QTest.mouseClick(menu, Qt.MouseButton.LeftButton, pos=menu.mapFrom(window, self.buttonCenter(window)))
+            self.assertEqual((picked, menu.isVisibleTo(window)), ([], False), seconds)
+            window.sleepCheckChanged.disconnect(picked.append)
+
+    def testOnlyTheMarkedChoiceEverSitsUnderTheButton(self):
+        for seconds, name in historyWindow.SLEEP_CHOICES:
+            window, menu = self.openMenu(seconds)
+            under = menu.rowAt(QPointF(menu.mapFrom(window, self.buttonCenter(window))))
+            self.assertIn(under, (None, menu.marked), name)
+            self.assertTrue(QRectF(menu.rect()).contains(menu.panel), name)
+            QTest.keyClick(menu, Qt.Key.Key_Escape)
+
     def testClickingAChoicePicksOnlyThatOne(self):
         window, menu = self.openMenu()
         picked = []

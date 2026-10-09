@@ -58,6 +58,7 @@ CHOICE_PADDING = 5
 CHOICE_TEXT_X = 26
 CHOICE_RADIUS = 10
 CHOICE_MARGIN = 8
+CHOICE_GAP = 4
 SEGMENTS = ("Level", "Hours per Charge", "Charging")
 LOADING_TEXT = "Loading"
 NO_SERVICE_TEXT = "Can't reach the battery service."
@@ -293,6 +294,7 @@ class ChoiceMenu(QWidget):
         self.marked = 0
         self.hover = 0
         self.onPick = None
+        self.pressed = False
         self.panel = QRectF()
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setMouseTracking(True)
@@ -305,6 +307,7 @@ class ChoiceMenu(QWidget):
         self.marked = next((index for index, (choice, name) in enumerate(choices) if choice == value), 0)
         self.hover = self.marked
         self.onPick = onPick
+        self.pressed = False
         self.setGeometry(self.owner.rect())
         width = max(anchor.width(), CHOICE_TEXT_X + max(QFontMetricsF(font(13)).horizontalAdvance(name) for choice, name in choices) + CHOICE_PADDING * 3)
         height = len(choices) * CHOICE_ROW_HEIGHT + 2 * CHOICE_PADDING
@@ -313,6 +316,10 @@ class ChoiceMenu(QWidget):
         top = min(max(top, CHOICE_MARGIN), self.height() - CHOICE_MARGIN - height)
         left = min(max(anchor.right() - width, CHOICE_MARGIN), self.width() - CHOICE_MARGIN - width)
         self.panel = QRectF(left, top, width, height)
+        under = self.rowAt(anchor.center())
+        if (under is not None and under != self.marked):
+            # kept inside the window the panel put another choice under the button, where a second click would pick it, so it opens above the button instead
+            self.panel.moveBottom(max(anchor.top() - CHOICE_GAP, CHOICE_MARGIN + height))
         self.show()
         self.raise_()
         self.setFocus()
@@ -337,8 +344,18 @@ class ChoiceMenu(QWidget):
     def mousePressEvent(self, event):
         if (not self.panel.contains(event.position())):
             self.hide()
+            return
+        self.pressed = True
+
+    def mouseDoubleClickEvent(self, event):
+        # the only double click an open menu gets is the second half of the one on the button that opened it
+        pass
 
     def mouseReleaseEvent(self, event):
+        # a release picks only after a press inside the open menu, so the release that ends a double click on the button never does
+        if (not self.pressed):
+            return
+        self.pressed = False
         index = self.rowAt(event.position())
         if (index is not None and self.isVisible()):
             self.choose(index)
