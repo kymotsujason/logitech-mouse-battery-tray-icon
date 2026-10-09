@@ -105,6 +105,8 @@ class FoundMouse:
     wakeIndex: int | None = None
     # whether the device answered the wireless status lookup, since an index of None from a lookup that failed says nothing about the feature
     wakeAnswered: bool = False
+    # whether the lookup was sent at all, since an identify that ran out of budget stops before it
+    wakeAsked: bool = False
 
 
 @dataclass(frozen=True)
@@ -386,7 +388,7 @@ def identifySlot(node, slot, deadline=None):
         return (FOUND, FoundMouse(slot, unitId, None, feature, None, ERROR))
     wakeAnswered, wakeIndex = findWakeIndex(node, slot, deadline)
     name = readName(node, slot, deadline)
-    return (FOUND, FoundMouse(slot, unitId, name, feature, reading, outcome, readAt, wakeIndex, wakeAnswered))
+    return (FOUND, FoundMouse(slot, unitId, name, feature, reading, outcome, readAt, wakeIndex, wakeAnswered, wakeAsked=True))
 
 
 def findWakeIndex(node, deviceIndex, deadline=None):

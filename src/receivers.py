@@ -30,7 +30,7 @@ IDENTIFY_GAP_MS = 1000
 GONE_ERRNOS = (errno.ENODEV, errno.EIO, errno.ESHUTDOWN, errno.EBADF, errno.ENXIO, errno.ENOENT)
 TRANSIENT_ERROR_LIMIT = 3
 STOP_WAIT_SECONDS = 1.0
-# a wake lookup that keeps failing is asked again at once a few times and then after waits that double up to an hour, while every identify still asks
+# a failed wake lookup is asked again with the mouse's next read or battery event, held back after a few failures by waits that double up to an hour, while an identify that gets that far always asks
 WAKE_LOOKUP_FREE_TRIES = 3
 WAKE_LOOKUP_WAIT_MS = 60 * 1000
 WAKE_LOOKUP_WAIT_MAX_MS = 60 * 60 * 1000
@@ -688,7 +688,9 @@ class ReceiverList(QObject):
         else:
             # nothing says the mouse lacks the feature, so its saved flag stands until a lookup answers
             mouse.wakeLookupDue = True
-            self.wakeLookupFailed(mouse)
+            # an identify that ran out of budget never sent the lookup, so there's no failure to count or hold the next one back for
+            if (found.wakeAsked):
+                self.wakeLookupFailed(mouse)
             supported = None
         self.recorder.setWakeSupport(key, supported, pathKey=mouse.pathKey)
         # the service may have missed something before a mouse it hadn't seen, one that moved, or one whose link came back

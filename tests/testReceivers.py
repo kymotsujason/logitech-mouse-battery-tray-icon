@@ -1783,6 +1783,18 @@ class ReceiverHistoryTests(unittest.TestCase):
             self.mice.registerFound(state, found)
         self.assertEqual((self.mouse().wakeIndex, self.recorder.entries[self.mouse().key].track.wakeSupport, self.savedWakeSupport()), (23, True, 1))
 
+    def testAnIdentifyOutOfBudgetCountsNoFailedLookupAndTheNextReadAsks(self):
+        def outOfBudget(node, slot, deadline=None):
+            return (hidpp.FOUND, hidpp.FoundMouse(slot, "02bc524c", None, FEATURE, None, hidpp.ERROR))
+        with mock.patch.object(hidpp, "identifySlot", outOfBudget):
+            receiver = self.start()
+        self.mouse().wakeTimer.stop()
+        self.assertEqual((self.mouse().wakeLookupFailures, self.mouse().wakeLookupDue, self.mouse().wakeLookupAfter, self.lookups(receiver)), (0, True, None, 0))
+        self.assertNotIn("Wireless status lookup", self.errors.getvalue())
+        self.assertEqual(self.lookUpOnce(receiver), 1)
+        self.assertEqual((self.mouse().wakeIndex, self.mouse().wakeLookupDue, self.mouse().wakeLookupFailures), (23, False, 0))
+        self.assertNotIn("Wireless status lookup", self.errors.getvalue())
+
     def testAFirstLookupThatFailsKeepsTheSavedWakeSupportAndTheNextReadAsksAgain(self):
         earlier = history.Recorder(self.folder, timers=False)
         earlier.setWakeSupport("02bc524c", True)
