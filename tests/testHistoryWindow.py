@@ -427,6 +427,17 @@ class WindowTests(WindowCase):
         self.watcher.serviceRestarted.emit()
         self.assertEqual(len(self.watcher.asked), 2)
 
+    def testAServiceRestartWaitsOutTheSettleTimeForAUPowerMouse(self):
+        # the new service writes a UPower mouse's first row only after its hold, so a fetch at the restart would miss it
+        window = self.opened(entry())
+        self.upowerChange()
+        self.settle(window)
+        window.lastFetch.clear()
+        self.watcher.asked.clear()
+        self.watcher.serviceRestarted.emit()
+        self.assertEqual(self.watcher.asked, [])
+        self.assertGreater(window.fetchTimer.remainingTime(), (historyWindow.UPOWER_SETTLE_SECONDS - 1) * 1000)
+
     def testAStateChangeWhileClosedKeepsTheSidebarsWidth(self):
         two = (entry(), entry(key="11111111", name="MX Master 3S", reading=hidpp.BatteryReading(18, 0)))
         window = self.opened(*two)

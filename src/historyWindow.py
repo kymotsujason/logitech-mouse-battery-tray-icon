@@ -713,6 +713,10 @@ class HistoryWindow(QWidget):
         self.replies.clear()
         self.errors.clear()
         self.notRefreshed.clear()
+        # the new service writes a UPower mouse's first row after its hold, so the first fetch waits as it does after a UPower change
+        now = time.monotonic()
+        for key in self.upowerSeen:
+            self.upowerChangedAt[key] = now
         self.forgetLevels()
         self.refresh()
 
