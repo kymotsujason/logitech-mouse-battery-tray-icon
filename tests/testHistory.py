@@ -676,6 +676,14 @@ class RecorderTests(RecorderCase):
         self.assertTrue(self.recorder.store.brokenThisRun)
         self.assertFalse(self.recorder.available())
 
+    def testAReloadedVoltageOnlySessionEndsAtItsLastReading(self):
+        self.event(0, None, power=None, millivolts=3900)
+        self.event(400, None, power=None, millivolts=3850)
+        self.recorder.stop()
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False)
+        self.event(1200, None, charging=1, power=None, millivolts=4000)
+        self.assertEqual([(s[0], s[1], s[2]) for s in self.sessions()], [(0, 0, 400), (1, 1200, None)])
+
     def testWithNoFolderTheRulesStillRunInMemory(self):
         recorder = history.Recorder(None, self.clock, timers=False)
         recorder.setWakeSupport(KEY, True)

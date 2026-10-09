@@ -860,9 +860,13 @@ class Recorder(QObject):
             session.powers[power] = readingCount
         # a charge a code started is the only kind a code 0 ends, and a saved charge that isn't inferred was started by one
         session.fromCode = (kind == CHARGE and not inferred)
-        last = db.execute("select at, percent from readings where mouseId = ? and at >= ? and percent is not null order by at desc, seq desc limit 1", (mouseId, startAt)).fetchone()
-        if (last is not None):
-            session.lastAt, session.lastPercent = last
+        # a mouse that reports only voltage or a rough level has no percent, so the last time comes from any reading
+        lastAt = db.execute("select at from readings where mouseId = ? and at >= ? and origin in (0, 1, 5) order by at desc, seq desc limit 1", (mouseId, startAt)).fetchone()
+        if (lastAt is not None):
+            session.lastAt = lastAt[0]
+        lastPercent = db.execute("select percent from readings where mouseId = ? and at >= ? and percent is not null order by at desc, seq desc limit 1", (mouseId, startAt)).fetchone()
+        if (lastPercent is not None):
+            session.lastPercent = lastPercent[0]
         session.lowest = db.execute("select min(percent) from readings where mouseId = ? and at >= ?", (mouseId, startAt)).fetchone()[0]
         return session
 
