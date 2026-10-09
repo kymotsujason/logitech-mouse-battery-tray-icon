@@ -23,6 +23,7 @@ import mice
 import panelColor
 import serviceClient
 import serviceState
+import settings
 import tray
 import upower
 from serviceState import ServiceEntry, ServiceState
@@ -750,6 +751,10 @@ class WindowTests(WindowCase):
             QTest.mouseClick(menu, Qt.MouseButton.LeftButton, pos=menu.mapFrom(window, self.buttonCenter(window)))
             self.assertEqual((picked, menu.isVisibleTo(window)), ([], False), seconds)
             window.sleepCheckChanged.disconnect(picked.append)
+
+    def testTheThreeSleepCheckTablesListTheSameChoices(self):
+        self.assertEqual(tuple(seconds for seconds, name in historyWindow.SLEEP_CHOICES), settings.SLEEP_CHECK_CHOICES)
+        self.assertEqual(tuple(historyWindow.SLEEP_SHORT), settings.SLEEP_CHECK_CHOICES)
 
     def testOnlyTheMarkedChoiceEverSitsUnderTheButton(self):
         for seconds, name in historyWindow.SLEEP_CHOICES:
