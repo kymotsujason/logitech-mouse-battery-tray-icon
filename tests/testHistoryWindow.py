@@ -479,7 +479,10 @@ class WindowTests(WindowCase):
         self.assertFalse(window.ageTimer.isActive())
         self.assertTrue(window.fetchTimer.isActive())
         window.lastFetch.clear()
-        self.watcher.answers["02bc524c"] = (reply("02bc524c"), None)
+        fresh = reply("02bc524c")
+        # built now, since NOW is from when the suite loaded and the cap check fails once it is two minutes old
+        fresh["recent"] = [[time.time() + 60, 62, None, None, False]]
+        self.watcher.answers["02bc524c"] = (fresh, None)
         window.refresh()
         self.assertEqual(self.watcher.asked, ["02bc524c"] * 2)
         # the fresh reply waits for its own two hours, and not a second less than the clock allows
