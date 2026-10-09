@@ -1,8 +1,11 @@
+import ctypes
+import os
 import time
 
+from PyQt6 import sip
 from PyQt6.QtCore import QElapsedTimer, QPointF, QRectF, Qt, QTimer, QVariantAnimation, QEasingCurve, pyqtSignal, pyqtSlot
 from PyQt6.QtDBus import QDBusMessage
-from PyQt6.QtGui import QColor, QFont, QPainter, QPen
+from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QRegion
 from PyQt6.QtWidgets import QApplication, QGraphicsOpacityEffect, QLabel, QMenu, QWidget
 
 import charts
@@ -61,6 +64,28 @@ def font(size, weight=QFont.Weight.Normal):
 
 def capitalized(text):
     return text[:1].upper() + text[1:]
+
+
+BLUR_SYMBOL = "_ZN14KWindowEffects16enableBlurBehindEP7QWindowbRK7QRegion"
+
+
+def enableDesktopBlur(widget):
+    # KWin blurs what's behind a window that asks through KWindowSystem, which has no Python bindings, so it's called through ctypes, and any failure leaves the painted backdrop alone
+    if ("KDE" not in panelColor.desktopNames(os.environ)):
+        return False
+    try:
+        library = ctypes.CDLL("libKF6WindowSystem.so.6")
+        enable = getattr(library, BLUR_SYMBOL)
+    except (OSError, AttributeError):
+        return False
+    handle = widget.windowHandle()
+    if (handle is None):
+        return False
+    enable.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.c_void_p]
+    enable.restype = None
+    region = QRegion()
+    enable(sip.unwrapinstance(handle), True, sip.unwrapinstance(region))
+    return True
 
 
 def label(parent, size, weight=QFont.Weight.Normal, wrap=False):
@@ -356,6 +381,7 @@ class HistoryWindow(QWidget):
             upowerWatcher.mouseChanged.connect(self.onUPowerMouse)
         QApplication.instance().paletteChanged.connect(self.onPaletteChanged)
         self.watchingPortal = False
+        self.blurred = False
 
     def makeParts(self, sleepCheckSeconds):
         self.sidebar = Sidebar(self)
@@ -412,7 +438,16 @@ class HistoryWindow(QWidget):
         self.motionFactor = glass.animationFactor(self.configHome, False)
         self.readPortal()
         # shown before the refresh, since the window only asks for a history while it's visible
-        self.show()
+        if (not self.isVisible()):
+            self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+            self.show()
+            # the blur is asked for once the window has a handle, and a window without it keeps its painted backdrop opaque
+            self.blurred = enableDesktopBlur(self)
+            if (not self.blurred):
+                self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+                self.update()
+        else:
+            self.show()
         self.refresh()
         self.raise_()
         self.activateWindow()
@@ -821,7 +856,11 @@ class HistoryWindow(QWidget):
         self.ensureFrost()
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if (self.blurred):
+            # the desktop shows through, blurred by KWin, under the glows at three quarters
+            painter.setOpacity(0.75)
         painter.drawImage(QRectF(0, 0, self.width(), self.height()), self.backdrop)
+        painter.setOpacity(1.0)
         theme = self.theme
         if (self.sidebar.isVisible()):
             sidebar = QRectF(8, 8, SIDEBAR_WIDTH - 16, self.height() - 16)

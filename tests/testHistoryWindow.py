@@ -11,7 +11,7 @@ from PyQt6 import sip
 from PyQt6.QtCore import QObject, pyqtSignal
 from PyQt6.QtGui import QColor, QPalette
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QWidget
 
 import glass
 import health
@@ -241,6 +241,16 @@ class FrostTests(unittest.TestCase):
             sip.delete(mouseList)
             shutil.rmtree(folder)
 
+
+
+class DesktopBlurTests(unittest.TestCase):
+    def testOutsideKdeTheBlurIsntAskedFor(self):
+        with mock.patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": "GNOME"}):
+            self.assertFalse(historyWindow.enableDesktopBlur(QWidget()))
+
+    def testAMissingLibraryLeavesThePaintedBackdrop(self):
+        with mock.patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": "KDE"}), mock.patch.object(historyWindow.ctypes, "CDLL", side_effect=OSError("missing")):
+            self.assertFalse(historyWindow.enableDesktopBlur(QWidget()))
 
 if (__name__ == "__main__"):
     unittest.main()
