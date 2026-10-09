@@ -1,6 +1,9 @@
+import json
+
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal, pyqtSlot
 from PyQt6.QtDBus import QDBusConnection, QDBusError, QDBusMessage, QDBusServiceWatcher
 
+import dbusCalls
 import serviceState
 from exceptionHooks import printLine
 
@@ -10,6 +13,24 @@ RETRY_MS = 5 * 1000
 RETRY_MAX_MS = 60 * 1000
 # a retry doesn't start the service, so its NameHasNoOwner says the same as the first call's ServiceUnknown
 ABSENT_ERRORS = ("org.freedesktop.DBus.Error.ServiceUnknown", "org.freedesktop.DBus.Error.NameHasNoOwner")
+# a big history takes the service a moment to put together, while a window waiting longer than this is better told it failed
+HISTORY_TIMEOUT_MS = 10 * 1000
+READ_ALL = "ReadAll"
+READ_SILENT = "ReadSilent"
+UNDECODABLE = "undecodable"
+
+
+def historyFrom(reply, key):
+    arguments = reply.arguments()
+    if (not arguments or not isinstance(arguments[0], str)):
+        return None
+    try:
+        summary = json.loads(arguments[0])
+    except ValueError:
+        return None
+    if (not isinstance(summary, dict) or summary.get("version") != 1 or summary.get("key") != key):
+        return None
+    return summary
 
 
 def stateFrom(message):
@@ -21,6 +42,8 @@ def stateFrom(message):
 
 class ServiceWatcher(QObject):
     stateChanged = pyqtSignal(object)
+    # a new owner is a service that started again, whose history revisions start over
+    serviceRestarted = pyqtSignal()
 
     def __init__(self, bus=None):
         super().__init__()
@@ -31,7 +54,9 @@ class ServiceWatcher(QObject):
         self.retryTimer.timeout.connect(self.getState)
         self.readRetryTimer = QTimer(self)
         self.readRetryTimer.setSingleShot(True)
-        self.readRetryTimer.timeout.connect(self.readOnItsOwn)
+        self.readRetryTimer.timeout.connect(self.retryRead)
+        # a refused read is asked again with the method that was refused, and a refused ReadAll covers a refused ReadSilent
+        self.retryMethod = READ_ALL
         self.ownerWatcher = None
         self.readSent = False
         # each kind of trouble is printed once until the service answers again, so a retry loop stays quiet in the journal
@@ -76,6 +101,41 @@ class ServiceWatcher(QObject):
     def readOnItsOwn(self):
         self.readAll(False)
 
+    def readSilent(self, activate=False):
+        if (not self.callService(READ_SILENT, self.onReadSilentDone, self.onReadSilentFailed, activate)):
+            self.getState()
+
+    def retryRead(self):
+        if (self.retryMethod == READ_SILENT):
+            self.readSilent(False)
+        else:
+            self.readAll(False)
+
+    def scheduleRetry(self, method):
+        # every refusal before the refill folds into the one read asked for then
+        if (method == READ_ALL):
+            self.retryMethod = READ_ALL
+        elif (not self.readRetryTimer.isActive()):
+            self.retryMethod = READ_SILENT
+        if (not self.readRetryTimer.isActive()):
+            self.readRetryTimer.start(int(serviceState.READ_ALL_REFILL_SECONDS * 1000))
+
+    def getHistory(self, key, onAnswer):
+        # onAnswer gets the summary and None, or None and the error name, from the event loop
+        message = QDBusMessage.createMethodCall(serviceState.SERVICE_NAME, serviceState.OBJECT_PATH, serviceState.INTERFACE, "GetHistory")
+        message.setArguments([key])
+        message.setAutoStartService(False)
+
+        def onReply(reply):
+            error = dbusCalls.failure(reply)
+            if (error is not None):
+                onAnswer(None, error)
+                return
+            summary = historyFrom(reply, key)
+            onAnswer(summary, None if summary is not None else UNDECODABLE)
+
+        dbusCalls.callLater(self.bus, message, onReply, self, HISTORY_TIMEOUT_MS)
+
     def fail(self):
         self.stateChanged.emit(None)
         if (not self.retryTimer.isActive()):
@@ -109,13 +169,33 @@ class ServiceWatcher(QObject):
         self.readRetryTimer.stop()
         self.readProblems.clear()
 
+    @pyqtSlot(QDBusMessage)
+    def onReadSilentDone(self, message):
+        # a ReadAll still waiting to be asked again reads more than this one did, so only its own retry ends here
+        if (self.retryMethod == READ_SILENT):
+            self.readRetryTimer.stop()
+        self.readProblems.clear()
+
+    @pyqtSlot(QDBusError, QDBusMessage)
+    def onReadSilentFailed(self, error, message):
+        # a 1.1.1 service doesn't have it, and a bus still on 1.1.1's policy turns it away, so the read goes out as a ReadAll
+        if (error.name() in (serviceState.UNKNOWN_METHOD, serviceState.ACCESS_DENIED)):
+            self.readAll(False)
+            return
+        if (error.name() == serviceState.READ_ALL_LIMITED):
+            self.scheduleRetry(READ_SILENT)
+            return
+        self.reportReadProblem(error)
+
     @pyqtSlot(QDBusError, QDBusMessage)
     def onReadAllFailed(self, error, message):
         if (error.name() == serviceState.READ_ALL_LIMITED):
-            # the account has a read again by the refill time, and every refusal before then folds into the one read asked for then
-            if (not self.readRetryTimer.isActive()):
-                self.readRetryTimer.start(int(serviceState.READ_ALL_REFILL_SECONDS * 1000))
+            # the account has a read again by the refill time
+            self.scheduleRetry(READ_ALL)
             return
+        self.reportReadProblem(error)
+
+    def reportReadProblem(self, error):
         if (error.name() not in self.readProblems):
             self.readProblems.add(error.name())
             printLine("Couldn't ask the battery service for a fresh reading: " + error.name() + ": " + error.message())
@@ -140,4 +220,5 @@ class ServiceWatcher(QObject):
             return
         self.retryTimer.stop()
         self.retryMs = RETRY_MS
+        self.serviceRestarted.emit()
         self.getState()

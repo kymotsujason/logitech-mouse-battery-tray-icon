@@ -60,9 +60,18 @@ def readAllAnswer():
         return ""
 
 
+def methodAnswer(method):
+    # a file named for one method answers only that method, such as UnknownMethod for ReadSilent alone
+    try:
+        with open(stateFile + ".answer." + method) as f:
+            return f.read().strip()
+    except OSError:
+        return readAllAnswer()
+
+
 def onCall(conn, sender, path, interface, method, params, invocation):
     log(method)
-    answer = readAllAnswer()
+    answer = methodAnswer(method)
     if (answer == "hang"):
         # held so the call stays unanswered for as long as the fake runs
         held.append(invocation)

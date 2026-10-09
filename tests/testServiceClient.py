@@ -200,6 +200,106 @@ class ServiceWatcherTests(unittest.TestCase):
         self.assertEqual(self.privateBus.lines(log).count("ReadAll"), 4)
         self.assertEqual(self.errorLines(), [])
 
+    def setMethodAnswer(self, method, answer):
+        with open(self.stateFile + ".answer." + method, "w") as f:
+            f.write(answer)
+
+    def testAReadSilentReachesTheService(self):
+        self.privateBus = PrivateBus()
+        log = self.startFake()
+        self.startWatcher()
+        self.watcher.readSilent()
+        self.assertTrue(waitUntil(lambda: "ReadSilent" in self.privateBus.lines(log)))
+
+    def testAReadSilentTheServiceDoesntHaveGoesOutAsAReadAll(self):
+        self.privateBus = PrivateBus()
+        self.setMethodAnswer("ReadSilent", serviceState.UNKNOWN_METHOD)
+        log = self.startFake()
+        self.startWatcher()
+        self.assertTrue(waitUntil(lambda: self.privateBus.lines(log).count("ReadAll") == 1))
+        self.watcher.readSilent()
+        self.assertTrue(waitUntil(lambda: self.privateBus.lines(log).count("ReadAll") == 2))
+        self.assertEqual(self.errorLines(), [])
+
+    def testAReadSilentTheBusTurnsAwayGoesOutAsAReadAll(self):
+        self.privateBus = PrivateBus()
+        self.setMethodAnswer("ReadSilent", serviceState.ACCESS_DENIED)
+        log = self.startFake()
+        self.startWatcher()
+        self.assertTrue(waitUntil(lambda: self.privateBus.lines(log).count("ReadAll") == 1))
+        self.watcher.readSilent()
+        self.assertTrue(waitUntil(lambda: self.privateBus.lines(log).count("ReadAll") == 2))
+
+    def testARefusedReadSilentIsAskedAgainAsAReadSilent(self):
+        self.privateBus = PrivateBus()
+        log = self.startFake()
+        refillSeconds = 2
+        with mock.patch.object(serviceState, "READ_ALL_REFILL_SECONDS", refillSeconds):
+            self.startWatcher()
+            self.assertTrue(waitUntil(lambda: self.privateBus.lines(log).count("ReadAll") == 1))
+            self.setMethodAnswer("ReadSilent", serviceState.READ_ALL_LIMITED)
+            self.watcher.readSilent()
+            self.assertTrue(waitUntil(lambda: self.privateBus.lines(log).count("ReadSilent") == 1))
+            os.remove(self.stateFile + ".answer.ReadSilent")
+            self.assertTrue(waitUntil(lambda: self.privateBus.lines(log).count("ReadSilent") == 2, timeout=refillSeconds + 3.0))
+        self.assertEqual(self.privateBus.lines(log).count("ReadAll"), 1)
+
+    def testARefusedReadAllWinsOverARefusedReadSilent(self):
+        self.privateBus = PrivateBus()
+        self.setAnswer(serviceState.READ_ALL_LIMITED)
+        log = self.startFake()
+        refillSeconds = 2
+        with mock.patch.object(serviceState, "READ_ALL_REFILL_SECONDS", refillSeconds):
+            self.startWatcher()
+            self.assertTrue(waitUntil(lambda: self.privateBus.lines(log).count("ReadAll") == 1))
+            self.watcher.readSilent()
+            self.assertTrue(waitUntil(lambda: self.privateBus.lines(log).count("ReadSilent") == 1))
+            self.setAnswer(None)
+            self.assertTrue(waitUntil(lambda: self.privateBus.lines(log).count("ReadAll") == 2, timeout=refillSeconds + 3.0))
+        self.assertEqual(self.privateBus.lines(log).count("ReadSilent"), 1)
+
+    def testGetHistoryHandsOverTheDecodedSummary(self):
+        self.privateBus = PrivateBus()
+        with open(self.stateFile + ".history", "w") as f:
+            f.write('{"version": 1, "key": "02bc524c", "sessions": []}')
+        self.startFake()
+        self.startWatcher()
+        answers = []
+        self.watcher.getHistory("02bc524c", lambda summary, error: answers.append((summary, error)))
+        self.assertTrue(waitUntil(lambda: answers))
+        self.assertEqual(answers, [({"version": 1, "key": "02bc524c", "sessions": []}, None)])
+
+    def testGetHistoryHandsOverTheErrorName(self):
+        self.privateBus = PrivateBus()
+        self.startFake()
+        self.startWatcher()
+        answers = []
+        self.watcher.getHistory("02bc524c", lambda summary, error: answers.append((summary, error)))
+        self.assertTrue(waitUntil(lambda: answers))
+        self.assertEqual(answers, [(None, serviceState.HISTORY_UNAVAILABLE)])
+
+    def testAHistoryForAnotherKeyDoesntDecode(self):
+        self.privateBus = PrivateBus()
+        with open(self.stateFile + ".history", "w") as f:
+            f.write('{"version": 1, "key": "ffffffff"}')
+        self.startFake()
+        self.startWatcher()
+        answers = []
+        self.watcher.getHistory("02bc524c", lambda summary, error: answers.append((summary, error)))
+        self.assertTrue(waitUntil(lambda: answers))
+        self.assertEqual(answers, [(None, serviceClient.UNDECODABLE)])
+
+    def testANewOwnerSaysTheServiceRestarted(self):
+        self.privateBus = PrivateBus()
+        self.startFake()
+        self.startWatcher()
+        restarts = []
+        self.watcher.serviceRestarted.connect(lambda: restarts.append(1))
+        self.assertTrue(waitUntil(lambda: self.goodStates()))
+        self.stopFake()
+        self.startFake()
+        self.assertTrue(waitUntil(lambda: restarts))
+
     def testAReadAllTheServiceDoesntAnswerSendsNone(self):
         self.privateBus = PrivateBus()
         self.startFake()
