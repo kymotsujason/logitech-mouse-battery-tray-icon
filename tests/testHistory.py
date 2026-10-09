@@ -204,10 +204,25 @@ class StoreTests(RecorderCase):
         self.assertTrue(os.path.exists(os.path.join(self.folder, history.INTEGRITY_FLAG)))
         self.recorder.stop()
         again = history.Recorder(self.folder, self.clock, timers=False)
-        with mock.patch.object(again.store, "openOnce", wraps=again.store.openOnce):
-            self.assertTrue(again.available())
+        self.assertEqual(self.checksOpening(again), ["pragma integrity_check"])
         self.assertFalse(os.path.exists(os.path.join(self.folder, history.INTEGRITY_FLAG)))
         again.stop()
+        # the flag is gone, so the start after that goes back to the quick check
+        last = history.Recorder(self.folder, self.clock, timers=False)
+        self.assertEqual(self.checksOpening(last), ["pragma quick_check"])
+        last.stop()
+
+    def checksOpening(self, recorder):
+        statements = []
+        real = sqlite3.connect
+
+        def tracing(*args, **kwargs):
+            db = real(*args, **kwargs)
+            db.set_trace_callback(statements.append)
+            return db
+        with mock.patch.object(sqlite3, "connect", tracing):
+            self.assertTrue(recorder.available())
+        return [sql for sql in statements if sql in ("pragma integrity_check", "pragma quick_check")]
 
     def testCorruptionFoundByASummaryStopsTheHistory(self):
         self.event(0, 50)
