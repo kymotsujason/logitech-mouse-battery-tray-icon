@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 import autostart
 import dbusCalls
 import hidpp
+import historyWindow
 import mice
 import panelColor
 import settings
@@ -131,6 +132,7 @@ class MouseBatteryApp(QObject):
         self.colorErrors = set()
         self.cachedColor = None
         self.aboutBox = None
+        self.historyWindow = None
         self.noticeErrors = set()
         self.mouseList = mice.MouseList(settings.loadSleepCheck(self.configHome))
         self.mouseList.changed.connect(self.updateTray)
@@ -152,6 +154,7 @@ class MouseBatteryApp(QObject):
         self.menu = QMenu()
         self.menu.aboutToShow.connect(self.onMenuShown)
         self.separator = self.menu.addSeparator()
+        self.menu.addAction("Battery Health").triggered.connect(lambda: self.showHistory())
         self.loginAction = self.menu.addAction("Open at Login")
         self.loginAction.setCheckable(True)
         self.loginAction.setChecked(autostart.isEnabled(self.configHome))
@@ -179,6 +182,8 @@ class MouseBatteryApp(QObject):
         self.upower.stop()
         self.portalTimer.stop()
         self.colorTimer.stop()
+        if (self.historyWindow is not None):
+            self.historyWindow.close()
         self.serviceWatcher.stop()
         self.mouseList.stop()
 
@@ -215,6 +220,19 @@ class MouseBatteryApp(QObject):
     def onActivated(self, reason):
         if (reason == QSystemTrayIcon.ActivationReason.Trigger):
             self.mouseList.readAll()
+            self.showHistory()
+
+    def showHistory(self):
+        # one window, raised again by a second click instead of opening another
+        if (self.historyWindow is None):
+            self.historyWindow = historyWindow.HistoryWindow(self.mouseList, self.serviceWatcher, self.upower, self.configHome, self.sessionBus, mouseLine, iconStateFor, self.mouseList.sleepCheckSeconds)
+            self.historyWindow.sleepCheckChanged.connect(self.onSleepCheckChanged)
+        self.historyWindow.open()
+
+    def onSleepCheckChanged(self, seconds):
+        if (not settings.saveSleepCheck(self.configHome, seconds)):
+            printLine("Couldn't save the sleep check setting to " + settings.settingsPath(self.configHome))
+        self.mouseList.setSleepCheck(seconds)
 
     def onLoginToggled(self, checked):
         enabled, error = self.setOpenAtLogin(checked)

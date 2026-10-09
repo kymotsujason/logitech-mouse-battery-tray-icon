@@ -14,7 +14,7 @@ sha256sums=('SKIP')
 package() {
     cd "$pkgname-$pkgver"
     install -Dm755 packaging/logitech-mouse-battery "$pkgdir/usr/bin/logitech-mouse-battery"
-    install -Dm644 -t "$pkgdir/usr/share/$pkgname" src/autostart.py src/charts.py src/check.py src/clearAccess.py src/dbusCalls.py src/exceptionHooks.py src/glass.py src/health.py src/hidDescriptor.py src/hidpp.py src/history.py src/icon.py src/installWatch.py src/isHidpp.py src/lowBattery.py src/mice.py src/notify.py src/panelColor.py src/receivers.py src/service.py src/serviceClient.py src/serviceState.py src/settings.py src/tray.py src/trayHost.py src/upower.py src/version.py
+    install -Dm644 -t "$pkgdir/usr/share/$pkgname" src/autostart.py src/charts.py src/check.py src/clearAccess.py src/dbusCalls.py src/exceptionHooks.py src/glass.py src/health.py src/hidDescriptor.py src/hidpp.py src/history.py src/historyWindow.py src/icon.py src/installWatch.py src/isHidpp.py src/lowBattery.py src/mice.py src/notify.py src/panelColor.py src/receivers.py src/service.py src/serviceClient.py src/serviceState.py src/settings.py src/tray.py src/trayHost.py src/upower.py src/version.py
     install -Dm644 packaging/logitech-mouse-battery.desktop "$pkgdir/usr/share/applications/logitech-mouse-battery.desktop"
     install -Dm644 packaging/autostart/logitech-mouse-battery.desktop "$pkgdir/etc/xdg/autostart/logitech-mouse-battery.desktop"
     install -Dm644 packaging/70-logitech-mouse-battery.rules "$pkgdir/usr/lib/udev/rules.d/70-logitech-mouse-battery.rules"

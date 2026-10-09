@@ -639,6 +639,26 @@ class AppTests(unittest.TestCase):
         self.assertEqual(sent, ["MX Master 3 has 9% left.", "MX Master 3 has 5% left."])
         self.assertEqual([line for line in errors.getvalue().splitlines() if "low battery" in line], ["The low battery notice for MX Master 3 got no answer in 5 s, so it may not have shown"])
 
+    def testALeftClickOpensOneHistoryWindow(self):
+        mouseApp = self.makeApp(True)
+        mouseApp.onActivated(QSystemTrayIcon.ActivationReason.Trigger)
+        first = mouseApp.historyWindow
+        self.assertTrue(first.isVisible())
+        mouseApp.onActivated(QSystemTrayIcon.ActivationReason.Trigger)
+        self.assertIs(mouseApp.historyWindow, first)
+
+    def testTheMenuHasBatteryHealth(self):
+        mouseApp = self.makeApp(True)
+        action = next(action for action in mouseApp.menu.actions() if action.text() == "Battery Health")
+        action.trigger()
+        self.assertTrue(mouseApp.historyWindow.isVisible())
+
+    def testAChosenSleepCheckIsSavedAndApplied(self):
+        mouseApp = self.makeApp(True)
+        mouseApp.showHistory()
+        mouseApp.historyWindow.popup.pick(60)
+        self.assertEqual((settings.loadSleepCheck(self.temp.name), mouseApp.mouseList.sleepCheckSeconds), (60, 60))
+
     def testTheMenuALeftClickAndTheTimerEachAskTheServiceToRead(self):
         with mock.patch.object(serviceClient.ServiceWatcher, "readAll") as readAll:
             mouseApp = self.makeApp(True)
