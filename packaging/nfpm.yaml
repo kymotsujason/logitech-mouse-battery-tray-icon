@@ -108,6 +108,10 @@ contents:
     dst: /usr/share/logitech-mouse-battery/history.py
     file_info:
       mode: 0644
+  - src: src/settings.py
+    dst: /usr/share/logitech-mouse-battery/settings.py
+    file_info:
+      mode: 0644
   - src: src/version.py
     dst: /usr/share/logitech-mouse-battery/version.py
     file_info:

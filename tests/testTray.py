@@ -29,6 +29,7 @@ import mice
 import notify
 import panelColor
 import serviceClient
+import settings
 import tray
 import trayHost
 import upower
@@ -526,17 +527,35 @@ class AppTests(unittest.TestCase):
         # KDE's helper shows a box of its own, and closing that one from its title bar never closed the app's box
         self.assertEqual(cycles["shown"], [1, 1, 1, 1])
 
-    def testTheBaseColorIsCachedUntilTheReadTimerFires(self):
-        mouseApp = self.makeApp(True)
+    def testTheBaseColorIsCachedUntilTheColorTimerFires(self):
+        with mock.patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": "KDE"}):
+            mouseApp = self.makeApp(True)
+        self.assertEqual((mouseApp.colorTimer.isActive(), mouseApp.colorTimer.interval()), (True, tray.COLOR_CHECK_MS))
         with mock.patch.object(tray.panelColor, "baseColor", return_value=QColor("#102030")) as baseColor:
             mouseApp.clearColor()
             mouseApp.updateTray()
             mouseApp.updateTray()
             self.assertEqual(baseColor.call_count, 1)
-            mouseApp.mouseList.readTimer.start(10)
+            mouseApp.colorTimer.start(10)
             QTest.qWait(100)
-            mouseApp.mouseList.readTimer.stop()
+            mouseApp.colorTimer.stop()
         self.assertGreater(baseColor.call_count, 1)
+
+    def testTheColorTimerRunsOnlyUnderKde(self):
+        mouseApp = self.makeApp(True)
+        self.assertFalse(mouseApp.colorTimer.isActive())
+
+    def testTheSavedSleepCheckReachesTheMouseListAtStart(self):
+        settings.saveSleepCheck(self.temp.name, 60)
+        mouseApp = self.makeApp(True)
+        self.assertEqual(mouseApp.mouseList.sleepCheckSeconds, 60)
+
+    def testATimedSilentReadAsksTheServiceForReadSilent(self):
+        # the signal is connected when the app is made, so the method is replaced before that
+        with mock.patch.object(serviceClient.ServiceWatcher, "readSilent") as readSilent:
+            mouseApp = self.makeApp(True)
+            mouseApp.mouseList.readSilentRequested.emit(False)
+        readSilent.assert_called_once_with(False)
 
     def testAPortalThatDoesntAnswerYetIsAskedOnceMore(self):
         mouseApp = self.makeApp(True)

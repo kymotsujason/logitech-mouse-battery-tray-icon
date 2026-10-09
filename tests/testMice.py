@@ -22,9 +22,9 @@ OTHER_NODE = "/dev/hidraw10"
 UPOWER_PATH = "/org/freedesktop/UPower/devices/mouse_hidpp_battery_0"
 
 
-def entry(key="02bc524c", percent=81, asleep=False, lastRead=1000.0, wokeAt=900.0, source=RECEIVER, name=NAME, pathKey=False):
+def entry(key="02bc524c", percent=81, asleep=False, lastRead=1000.0, wokeAt=900.0, source=RECEIVER, name=NAME, pathKey=False, reportsItself=False, historyRevision=0):
     reading = None if percent is None else hidpp.BatteryReading(percent, 0)
-    return ServiceEntry(key, pathKey, name, source, reading, asleep, lastRead, wokeAt)
+    return ServiceEntry(key, pathKey, name, source, reading, asleep, lastRead, wokeAt, reportsItself, False, historyRevision)
 
 
 def state(*entries, searching=False, nodes=(RECEIVER,), denied=(), busy=False):
@@ -367,3 +367,65 @@ class MouseListTests(unittest.TestCase):
 
 if (__name__ == "__main__"):
     unittest.main()
+
+
+class TimedReadTests(unittest.TestCase):
+    def setUp(self):
+        self.mice = mice.MouseList()
+        self.reads = []
+        self.mice.readRequested.connect(lambda activate: self.reads.append((mice.READ_ALL, activate)))
+        self.mice.readSilentRequested.connect(lambda activate: self.reads.append((mice.READ_SILENT, activate)))
+        self.mice.start()
+
+    def tearDown(self):
+        self.mice.stop()
+        sip.delete(self.mice)
+
+    def timer(self):
+        return (self.mice.readTimer.isActive(), self.mice.readTimer.interval() if self.mice.readTimer.isActive() else None, self.mice.timedMethod)
+
+    def testBeforeTheServiceAnswersTheTimerReadsEverythingEveryFiveMinutes(self):
+        self.assertEqual(self.timer(), (True, mice.READ_INTERVAL_MS, mice.READ_ALL))
+
+    def testAMouseThatDoesntReportOnItsOwnGetsASilentRead(self):
+        self.mice.applyService(state(entry(reportsItself=False)))
+        self.assertEqual(self.timer(), (True, mice.READ_INTERVAL_MS, mice.READ_SILENT))
+
+    def testEveryMouseReportingOnItsOwnStopsTheTimer(self):
+        self.mice.applyService(state(entry(reportsItself=True)))
+        self.assertEqual(self.timer(), (False, None, None))
+
+    def testALostServiceGoesBackToReadingEverything(self):
+        self.mice.applyService(state(entry(reportsItself=True)))
+        self.mice.applyService(None)
+        self.assertEqual(self.timer(), (True, mice.READ_INTERVAL_MS, mice.READ_ALL))
+
+    def testAServiceWithNoMiceStillReadsEverything(self):
+        self.mice.applyService(state())
+        self.assertEqual(self.timer(), (True, mice.READ_INTERVAL_MS, mice.READ_ALL))
+
+    def testTheSettingReadsEverythingAtItsInterval(self):
+        self.mice.applyService(state(entry(reportsItself=True)))
+        self.mice.setSleepCheck(30)
+        self.assertEqual(self.timer(), (True, 30000, mice.READ_ALL))
+        self.mice.setSleepCheck(0)
+        self.assertEqual(self.timer(), (False, None, None))
+
+    def testAStreamOfStatesDoesntPushTheReadOut(self):
+        self.mice.applyService(state(entry(reportsItself=False)))
+        QTest.qWait(50)
+        before = self.mice.readTimer.remainingTime()
+        self.mice.applyService(state(entry(reportsItself=False, percent=80)))
+        self.assertLessEqual(self.mice.readTimer.remainingTime(), before)
+
+    def testATickSendsTheTimedMethod(self):
+        self.mice.applyService(state(entry(reportsItself=False)))
+        self.mice.readOnTimer()
+        self.assertEqual(self.reads[-1][0], mice.READ_SILENT)
+        self.mice.setSleepCheck(60)
+        self.mice.readOnTimer()
+        self.assertEqual(self.reads[-1][0], mice.READ_ALL)
+
+    def testTheEntrysFlagsReachTheMouse(self):
+        self.mice.applyService(state(entry(reportsItself=True, historyRevision=4)))
+        self.assertEqual((self.mice.mice[0].reportsItself, self.mice.mice[0].historyRevision), (True, 4))

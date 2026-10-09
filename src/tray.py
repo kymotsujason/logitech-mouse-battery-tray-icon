@@ -6,7 +6,7 @@ import sys
 import time
 
 from PyQt6 import sip
-from PyQt6.QtCore import QFileSystemWatcher, QObject, Qt, pyqtSlot
+from PyQt6.QtCore import QFileSystemWatcher, QObject, Qt, QTimer, pyqtSlot
 from PyQt6.QtDBus import QDBusConnection, QDBusMessage
 from PyQt6.QtGui import QAction, QIcon, QPalette, QSessionManager
 from PyQt6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
@@ -16,6 +16,7 @@ import dbusCalls
 import hidpp
 import mice
 import panelColor
+import settings
 from exceptionHooks import installExceptionHooks, printLine
 from icon import IconState, makeIcon
 from installWatch import InstallWatcher
@@ -31,6 +32,8 @@ LOCK_NAME = "logitech-mouse-battery.lock"
 TARGET_NICENESS = 10
 PROJECT_URL = "https://github.com/kymotsujason/logitech-mouse-battery-tray-icon"
 PORTAL_RETRY_MS = 10 * 1000
+# under KDE the panel color comes from plasmarc and the theme's colors file, which this looks at again in case either was made or changed after the app started
+COLOR_CHECK_MS = 300 * 1000
 
 
 def iconStateFor(mouse):
@@ -129,15 +132,14 @@ class MouseBatteryApp(QObject):
         self.cachedColor = None
         self.aboutBox = None
         self.noticeErrors = set()
-        self.mouseList = mice.MouseList()
+        self.mouseList = mice.MouseList(settings.loadSleepCheck(self.configHome))
         self.mouseList.changed.connect(self.updateTray)
         self.mouseList.lowBattery.connect(self.onLowBattery)
-        # the 300 s read also looks at the panel color again, which catches a plasmarc made after the app started
-        self.mouseList.readTimer.timeout.connect(self.onColorsChanged)
         # the tray reads HID++ mice only through the service, which alone may open the receivers
         self.serviceWatcher = ServiceWatcher(self.systemBus)
         self.serviceWatcher.stateChanged.connect(self.mouseList.applyService)
         self.mouseList.readRequested.connect(self.serviceWatcher.readAll)
+        self.mouseList.readSilentRequested.connect(self.serviceWatcher.readSilent)
         self.upower = UPowerWatcher(self.systemBus)
         self.upower.mouseChanged.connect(self.mouseList.applyUPower)
         self.upower.mouseRemoved.connect(self.mouseList.removeUPower)
@@ -158,6 +160,9 @@ class MouseBatteryApp(QObject):
         self.menu.addAction("Quit").triggered.connect(lambda: self.quitApp())
         self.plasmarcWatcher = QFileSystemWatcher(self)
         self.portalTimer = mice.singleShotTimer(self, PORTAL_RETRY_MS, self.onPortalRetry)
+        self.colorTimer = QTimer(self)
+        self.colorTimer.setInterval(COLOR_CHECK_MS)
+        self.colorTimer.timeout.connect(self.onColorsChanged)
         self.updateTray()
 
     def start(self):
@@ -173,6 +178,7 @@ class MouseBatteryApp(QObject):
         self.trayHost.stop()
         self.upower.stop()
         self.portalTimer.stop()
+        self.colorTimer.stop()
         self.serviceWatcher.stop()
         self.mouseList.stop()
 
@@ -315,6 +321,9 @@ class MouseBatteryApp(QObject):
         self.app.paletteChanged.connect(self.onColorsChanged)
         self.plasmarcWatcher.fileChanged.connect(self.onColorsChanged)
         self.watchPlasmarc()
+        # only KDE's color comes from files that can change without a signal, so no other desktop needs the timer
+        if ("KDE" in panelColor.desktopNames(os.environ)):
+            self.colorTimer.start()
         if ("GNOME" in panelColor.desktopNames(os.environ)):
             self.sessionBus.connect(panelColor.PORTAL_SERVICE, panelColor.PORTAL_PATH, panelColor.SETTINGS_INTERFACE, "SettingChanged", self.onPortalSetting)
             panelColor.askPortalColorScheme(self.sessionBus, self, lambda scheme, error: self.onPortalScheme(scheme, error, True))

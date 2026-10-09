@@ -5,6 +5,8 @@ from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 from lowBattery import LowBatteryWarner
 
 READ_INTERVAL_MS = 300 * 1000
+READ_ALL = "ReadAll"
+READ_SILENT = "ReadSilent"
 # a timed read may start the service this often, long past the unit's 60 s start limit, so a service that hit the limit for a cause that passed comes back without anyone opening the menu
 TIMED_START_INTERVAL_S = 60 * 60
 DEFAULT_NAME = "Logitech mouse"
@@ -63,6 +65,8 @@ class Mouse:
         self.lastRead = None
         self.wokeAt = None
         self.readFromUPower = False
+        self.reportsItself = False
+        self.historyRevision = 0
 
 
 class MouseList(QObject):
@@ -70,9 +74,13 @@ class MouseList(QObject):
     lowBattery = pyqtSignal(str, str, int)
     # the flag says the read may start the service, which a person's read always may and a timed read only once an hour
     readRequested = pyqtSignal(bool)
+    readSilentRequested = pyqtSignal(bool)
 
-    def __init__(self):
+    def __init__(self, sleepCheckSeconds=0):
         super().__init__()
+        self.sleepCheckSeconds = sleepCheckSeconds
+        self.started = False
+        self.timedMethod = None
         self.mice = []
         self.warner = LowBatteryWarner()
         self.answered = False
@@ -85,10 +93,41 @@ class MouseList(QObject):
         self.lastStartingRead = time.monotonic()
 
     def start(self):
-        self.readTimer.start()
+        self.started = True
+        self.updateTimer()
 
     def stop(self):
+        self.started = False
         self.readTimer.stop()
+
+    def setSleepCheck(self, seconds):
+        self.sleepCheckSeconds = seconds
+        self.updateTimer()
+
+    def timedRead(self):
+        if (self.sleepCheckSeconds > 0):
+            return (self.sleepCheckSeconds * 1000, READ_ALL)
+        hidppMice = [mouse for mouse in self.mice if mouse.nodePath is not None]
+        # with the service gone or no mouse listed, the timed read keeps bringing a stopped service back within the hour and searching a new receiver
+        if (self.serviceState is None or not hidppMice):
+            return (READ_INTERVAL_MS, READ_ALL)
+        if (any(not mouse.reportsItself for mouse in hidppMice)):
+            return (READ_INTERVAL_MS, READ_SILENT)
+        return (None, None)
+
+    def updateTimer(self):
+        if (not self.started):
+            return
+        interval, method = self.timedRead()
+        self.timedMethod = method
+        if (interval is None):
+            self.readTimer.stop()
+            return
+        # a timer already running at this interval keeps its place, so a stream of states doesn't push the read out forever
+        if (self.readTimer.isActive() and self.readTimer.interval() == interval):
+            return
+        self.readTimer.setInterval(interval)
+        self.readTimer.start()
 
     def readAll(self):
         self.lastStartingRead = time.monotonic()
@@ -96,11 +135,13 @@ class MouseList(QObject):
 
     def readOnTimer(self):
         now = time.monotonic()
-        if (now - self.lastStartingRead < TIMED_START_INTERVAL_S):
-            self.readRequested.emit(False)
-            return
-        self.lastStartingRead = now
-        self.readRequested.emit(True)
+        activate = now - self.lastStartingRead >= TIMED_START_INTERVAL_S
+        if (activate):
+            self.lastStartingRead = now
+        if (self.timedMethod == READ_SILENT):
+            self.readSilentRequested.emit(activate)
+        else:
+            self.readRequested.emit(activate)
 
     def applyService(self, state):
         self.answered = True
@@ -112,6 +153,7 @@ class MouseList(QObject):
                 if (mouse.nodePath is not None and mouse.upowerPath is None):
                     mouse.asleep = True
                     mouse.stale = True
+            self.updateTimer()
             self.changed.emit()
             return
         listed = set()
@@ -129,11 +171,14 @@ class MouseList(QObject):
                 continue
             self.appliedEntries.pop(mouse.key, None)
             self.detachHidpp(mouse)
+        self.updateTimer()
         self.changed.emit()
 
     def copyEntry(self, entry):
         mouse = self.mouseFor(entry.key, pathKey=entry.pathKey)
         mouse.stale = False
+        mouse.reportsItself = entry.reportsItself
+        mouse.historyRevision = entry.historyRevision
         if (entry.name):
             mouse.name = entry.name
         mouse.nodePath = entry.source
