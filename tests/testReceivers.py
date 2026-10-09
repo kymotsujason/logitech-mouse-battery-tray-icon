@@ -1839,6 +1839,70 @@ class ReceiverHistoryTests(unittest.TestCase):
         self.assertTrue(waitUntil(lambda: not self.mice.isBusy() and not self.mice.nodes[RECEIVER].pendingWakeLookups))
         return self.lookups(receiver) - before
 
+    def testALookupThatFailsAgainOnItsRetryStaysDue(self):
+        earlier = history.Recorder(self.folder, timers=False)
+        earlier.setWakeSupport("02bc524c", True)
+        earlier.stop()
+        answer = mouseHandler(features=WIRELESS_FEATURES)
+
+        def handle(request):
+            if (isWakeLookup(request)):
+                return [deviceError(request)]
+            return answer(request)
+        receiver = self.start(handle)
+        state = self.mice.nodes[RECEIVER]
+        # the identify's lookup and the one the quick retry read brings both answer with an error
+        self.assertTrue(waitUntil(lambda: self.lookups(receiver) == 2 and not state.pendingWakeLookups and not self.mice.isBusy()))
+        self.assertEqual((self.savedWakeSupport(), self.mouse().wakeLookupDue, self.mouse().wakeIndex), (1, True, None))
+        self.assertEqual(self.lookUpOnce(receiver), 1)
+
+    def testAWakeLookupThatRaisesIsAskedAgain(self):
+        receiver = self.startWithFailingLookups([])
+        real = hidpp.findWakeIndex
+        raised = []
+
+        def raiseOnce(node, slot, deadline=None):
+            if (not raised):
+                raised.append(True)
+                raise OSError(errno.EAGAIN, "Resource temporarily unavailable")
+            return real(node, slot, deadline)
+        receiver.handler = mouseHandler(features=WIRELESS_FEATURES)
+        with mock.patch.object(hidpp, "findWakeIndex", raiseOnce):
+            self.mice.readAll()
+            self.assertTrue(waitUntil(lambda: raised and not self.mice.isBusy() and not self.mice.nodes[RECEIVER].pendingWakeLookups))
+            self.assertEqual((self.mouse().wakeLookupDue, self.mouse().wakeIndex), (True, None))
+            self.assertEqual(self.lookUpOnce(receiver), 1)
+        self.assertEqual((self.mouse().wakeLookupDue, self.mouse().wakeIndex), (False, 23))
+
+    def testTheQuickRetryReadAloneBringsTheIndexBack(self):
+        answer = mouseHandler(features=WIRELESS_FEATURES)
+        failed = []
+
+        def handle(request):
+            if (isWakeLookup(request) and not failed):
+                failed.append(True)
+                return [deviceError(request)]
+            return answer(request)
+        self.start(handle)
+        self.assertTrue(self.mouse().wakeLookupDue)
+        self.assertTrue(waitUntil(lambda: self.mouse().wakeIndex == 23))
+
+    def testAStaleLookupAfterAnIdentifyAnsweredChangesNothing(self):
+        answer = mouseHandler(features=WIRELESS_FEATURES)
+        # the search's lookup fails, the link up's identify finds the index, and the lookup the battery event queued behind it says there's none
+        replies = [lambda request: [deviceError(request)], answer, lambda request: [reply(request, [0])]]
+
+        def handle(request):
+            if (isWakeLookup(request) and replies):
+                return replies.pop(0)(request)
+            return answer(request)
+        receiver = self.start(handle)
+        self.mouse().wakeTimer.stop()
+        receiver.send(LINK_UP)
+        receiver.send(bytes([0x11, 1, 5, 0x00, 64, 0x04, 0, 0]).ljust(20, b"\x00"))
+        self.assertTrue(waitUntil(lambda: not replies and not self.mice.isBusy() and not self.mice.nodes[RECEIVER].pendingWakeLookups))
+        self.assertEqual((self.mouse().wakeIndex, self.mouse().wakeLookupDue, self.recorder.entries[self.mouse().key].track.wakeSupport), (23, False, True))
+
     def testALookupThatKeepsFailingWaitsLongerEachTime(self):
         answering = []
         with mock.patch.object(receivers, "WAKE_LOOKUP_WAIT_MS", 400):
