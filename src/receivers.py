@@ -674,10 +674,12 @@ class ReceiverList(QObject):
         if (isNew or moved or linkUp):
             self.recorder.addMarker(key, history.ORIGIN_GAP, pathKey=mouse.pathKey)
         reading = found.reading
+        arrived = found.readAt
         if (found.outcome == hidpp.ANSWER and found.readAt is not None and mouse.batteryEventAt is not None and mouse.batteryEventAt > found.readAt and mouse.reading is not None):
             # a battery event the worker read after this reading has already reached the mouse, so the older reading doesn't replace it
             reading = mouse.reading
-        self.applyOutcome(mouse, found.outcome, reading, queuedAt, woke=(moved or linkUp))
+            arrived = mouse.batteryEventAt
+        self.applyOutcome(mouse, found.outcome, reading, queuedAt, woke=(moved or linkUp), arrived=arrived)
         if (mouse.wakeLookupDue and found.outcome == hidpp.ANSWER):
             # the mouse answered its battery read, so the read this brings asks for the index again instead of leaving it until the next link up
             self.retryLater(mouse)
@@ -706,7 +708,7 @@ class ReceiverList(QObject):
         if (mouse in self.mice):
             self.mice.remove(mouse)
 
-    def applyReading(self, mouse, reading, woke=False, origin=history.ORIGIN_READ):
+    def applyReading(self, mouse, reading, woke=False, origin=history.ORIGIN_READ, arrived=None):
         now = time.time()
         mouse.errorRetries = 0
         if (reading is None):
@@ -717,17 +719,17 @@ class ReceiverList(QObject):
         mouse.reading = reading
         mouse.asleep = False
         mouse.lastRead = now
-        self.recorder.addReading(mouse.key, reading, origin, name=mouse.name, pathKey=mouse.pathKey)
+        self.recorder.addReading(mouse.key, reading, origin, name=mouse.name, pathKey=mouse.pathKey, arrived=arrived)
         mouse.reportsItself = self.recorder.reportsItself(mouse.key)
 
-    def markAsleep(self, mouse):
+    def markAsleep(self, mouse, arrived=None):
         # a mouse already marked asleep adds no more rows, so a switched off mouse under timed reads adds nothing
         if (not mouse.asleep):
-            self.recorder.addMarker(mouse.key, history.ORIGIN_ASLEEP, pathKey=mouse.pathKey)
+            self.recorder.addMarker(mouse.key, history.ORIGIN_ASLEEP, pathKey=mouse.pathKey, arrived=arrived)
         mouse.asleep = True
 
-    def markWake(self, mouse):
-        self.recorder.addMarker(mouse.key, history.ORIGIN_WAKE, pathKey=mouse.pathKey)
+    def markWake(self, mouse, arrived=None):
+        self.recorder.addMarker(mouse.key, history.ORIGIN_WAKE, pathKey=mouse.pathKey, arrived=arrived)
         mouse.wokeAt = time.time()
 
     def onHistoryChanged(self, key):
@@ -739,9 +741,9 @@ class ReceiverList(QObject):
                 if ((mouse.historyRevision, mouse.reportsItself) != before):
                     self.changed.emit()
 
-    def applyOutcome(self, mouse, outcome, reading, queuedAt, woke=False):
+    def applyOutcome(self, mouse, outcome, reading, queuedAt, woke=False, arrived=None):
         if (outcome == hidpp.ANSWER):
-            self.applyReading(mouse, reading, woke=woke)
+            self.applyReading(mouse, reading, woke=woke, arrived=arrived)
         elif (outcome == hidpp.ERROR):
             # the device answered with an error, such as a busy receiver, so it's there and its last reading stands, and a few quick reads follow before it waits for its next event or the timed read
             if (mouse.errorRetries < ERROR_RETRY_LIMIT):
@@ -912,23 +914,23 @@ class ReceiverList(QObject):
         before = (mouse.reading, mouse.asleep, mouse.lastRead, mouse.wokeAt)
         if (kind == hidpp.EVENT_BATTERY):
             mouse.batteryEventAt = receivedAt
-            self.applyReading(mouse, reading, origin=history.ORIGIN_EVENT)
+            self.applyReading(mouse, reading, origin=history.ORIGIN_EVENT, arrived=receivedAt)
             # a mouse the tray's silent reads skip still sends these, and it's awake to answer
             self.lookUpWake(state, mouse)
         elif (kind == hidpp.EVENT_LINK_DOWN):
-            self.markAsleep(mouse)
+            self.markAsleep(mouse, arrived=receivedAt)
         elif (kind == hidpp.EVENT_LINK_UP):
-            self.markWake(mouse)
+            self.markWake(mouse, arrived=receivedAt)
             self.requestIdentify(state, mouse.slot)
         elif (kind == hidpp.EVENT_WAKE):
             # the wireless status event is a wake whatever the service thought, and the battery event in the same wake set carries the level, so only a mouse marked asleep is read
-            self.markWake(mouse)
+            self.markWake(mouse, arrived=receivedAt)
             if (mouse.asleep):
                 self.onWake(mouse)
         elif (kind == hidpp.EVENT_OTHER and mouse.asleep):
             # a mouse without the wireless status feature keeps the old rule, where any report while asleep is a wake
             if (mouse.wakeIndex is None):
-                self.markWake(mouse)
+                self.markWake(mouse, arrived=receivedAt)
             self.onWake(mouse)
         # most reports from an awake mouse change nothing, while a battery report that repeats its reading still moves lastRead, which the tray needs to tell which path read last
         if ((mouse.reading, mouse.asleep, mouse.lastRead, mouse.wokeAt) != before):

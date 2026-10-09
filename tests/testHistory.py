@@ -409,6 +409,13 @@ class TraceTests(RecorderCase):
         self.recorder.addMarker(KEY, history.ORIGIN_WAKE)
         self.assertEqual([row[:3] for row in self.rows()], [(100, 0, 57), (102, 2, None)])
 
+    def testAReadingStampedBeforeAWakeSetStaysOutOfIt(self):
+        self.assertTrue(self.recorder.available())
+        self.clock.now = START + 100
+        self.recorder.addReading(KEY, battery(57), history.ORIGIN_EVENT, arrived=self.clock.monotonic() - 2.5)
+        self.recorder.addMarker(KEY, history.ORIGIN_WAKE, arrived=self.clock.monotonic())
+        self.assertEqual([row[:3] for row in self.rows()], [(100, 0, 57), (100, 2, None)])
+
 class HoldTests(RecorderCase):
     def testAReadingInsideTenSecondsIsHeldAndWrittenWhenTheyreUp(self):
         self.event(0, 50)
@@ -447,6 +454,22 @@ class HoldTests(RecorderCase):
         self.event(3, 49)
         self.marker(6, history.ORIGIN_ASLEEP)
         self.assertEqual([row[:3] for row in self.rows()], [(0, 0, 50), (3, 0, 49), (6, 3, None)])
+
+    def testAWakeSetsReadingDoesntShortenTheNextHold(self):
+        self.event(0, 50)
+        self.clock.now = START + 100
+        self.recorder.addReading(KEY, battery(49), history.ORIGIN_EVENT)
+        self.clock.now = START + 101
+        self.recorder.addMarker(KEY, history.ORIGIN_WAKE)
+        self.clock.now = START + 104
+        self.recorder.addReading(KEY, battery(48), history.ORIGIN_EVENT)
+        self.at(106)
+        self.assertIsNotNone(self.recorder.entries[KEY].held)
+        # the hold counts from the wake row's write, not from the earlier arrival of the reading saved with it
+        self.at(110.5)
+        self.assertIsNotNone(self.recorder.entries[KEY].held)
+        self.at(111)
+        self.assertIsNone(self.recorder.entries[KEY].held)
 
     def testTheFirstReadingAfterAMarkerIsWrittenEvenUnchanged(self):
         self.event(0, 50)

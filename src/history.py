@@ -724,15 +724,17 @@ class Recorder(QObject):
         if ("reportsItselfSince" in entry.pendingFlags):
             DbWriter(db, entry.mouseId).updateReportsItself(entry.pendingFlags["reportsItselfSince"])
 
-    def addReading(self, key, reading, origin, name=None, source=SOURCE_HIDPP, pathKey=False, at=None):
+    def addReading(self, key, reading, origin, name=None, source=SOURCE_HIDPP, pathKey=False, at=None, arrived=None):
         at = self.clock() if at is None else at
+        # a report carries the moment the worker read it, which can be well before the Qt thread gets to it
+        arrived = self.monotonic() if arrived is None else arrived
         entry = self.entryFor(key, pathKey)
         if (not self.claim(entry, source)):
             return
         if (name and name != entry.name):
             entry.name = name
             entry.nameChanged = True
-        row = readingRow(reading, origin, at, self.monotonic())
+        row = readingRow(reading, origin, at, arrived)
         if (origin == ORIGIN_READ):
             self.checkMissedStep(entry, row)
         entry.latest = row
@@ -770,9 +772,9 @@ class Recorder(QObject):
         entry.pendingFlags["reportsItselfSince"] = None
         self.saveFlags(entry)
 
-    def addMarker(self, key, origin, source=SOURCE_HIDPP, pathKey=False, at=None):
+    def addMarker(self, key, origin, source=SOURCE_HIDPP, pathKey=False, at=None, arrived=None):
         at = int(self.clock() if at is None else at)
-        arrived = self.monotonic()
+        arrived = self.monotonic() if arrived is None else arrived
         entry = self.entryFor(key, pathKey)
         if (not self.claim(entry, source)):
             return
@@ -952,7 +954,7 @@ class Recorder(QObject):
             entry.pendingFlags = {}
             entry.track = track
             entry.revision += 1
-            entry.lastWriteAt = row.arrived
+            self.noteWrite(entry, row)
             self.changed.emit(entry.key)
             return
         if (entry.persist and entry.loaded):
@@ -965,10 +967,15 @@ class Recorder(QObject):
         if (flagChanged and entry.persist):
             entry.pendingFlags["reportsItselfSince"] = track.reportsItselfSince
         entry.track = track
-        entry.lastWriteAt = row.arrived
+        self.noteWrite(entry, row)
         # nothing was saved, so the revision stays, but the service still has to pick up the new flag
         if (flagChanged):
             self.changed.emit(entry.key)
+
+    def noteWrite(self, entry, row):
+        # a wake set's reading or a search's reading can have come in before the row written last, and the hold still counts from the latest write
+        if (entry.lastWriteAt is None or row.arrived > entry.lastWriteAt):
+            entry.lastWriteAt = row.arrived
 
     def apply(self, track, row, writer):
         if (row.origin in MARKER_ORIGINS):

@@ -1846,6 +1846,16 @@ class ReceiverHistoryTests(unittest.TestCase):
         self.assertTrue(waitUntil(lambda: batteryReads(receiver) > before))
         self.assertIn(history.ORIGIN_WAKE, self.origins())
 
+    def testABatteryEventReadBeforeAWakeSetStaysOutOfItHoweverLateItsHandled(self):
+        self.start()
+        self.settle()
+        state = self.mice.nodes[RECEIVER]
+        now = time.monotonic()
+        # the worker read the event 2.5 s before the wake, while the Qt thread handles the two together
+        self.mice.onReport(state, bytes([0x11, 1, 5, 0x00, 64, 0x04, 0, 0]).ljust(20, b"\x00"), now - 2.5)
+        self.mice.onReport(state, WAKE_REPORT, now)
+        self.assertEqual(self.origins()[-2:], [history.ORIGIN_EVENT, history.ORIGIN_WAKE])
+
     def testALinkUpWritesItsWakeThenTheIdentifysGap(self):
         receiver = self.start()
         self.settle()
