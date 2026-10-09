@@ -266,6 +266,18 @@ class RetryTests(unittest.TestCase):
             waitFor(lambda: len(bus.calls) >= 4 and not watcher.enumerateDue)
         self.assertEqual(errors.getvalue(), "UPower answered org.freedesktop.DBus.Error.NoReply\n" * 2)
 
+    def testADeviceErrorThatComesBackAfterItsGetAllAnsweredIsPrintedAgain(self):
+        errors = io.StringIO()
+        answers = [failWith("org.freedesktop.DBus.Error.NoReply"), lambda message: message.createReply([mouseProperties()]), failWith("org.freedesktop.DBus.Error.NoReply")]
+        with contextlib.redirect_stderr(errors):
+            bus, watcher = self.makeWatcher(lambda message: answers.pop(0)(message))
+            for asked in (1, 2, 3):
+                watcher.retryTimer.stop()
+                watcher.refresh(PATH)
+                self.assertTrue(waitFor(lambda: len(bus.calls) == asked and not watcher.refreshing))
+        self.assertEqual(errors.getvalue(), "UPower answered org.freedesktop.DBus.Error.NoReply\n" * 2)
+        self.assertEqual(len(self.changed), 1)
+
     def testFailedCallsAreRetriedWhenTheirPrintFails(self):
         hooked = []
         with mock.patch.object(sys, "stderr", BrokenStream()), mock.patch.object(sys, "excepthook", lambda *info: hooked.append(info[1])):
