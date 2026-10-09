@@ -13,6 +13,7 @@ import dbusCalls
 import glass
 import health
 import hidpp
+import history
 import icon
 import mice
 import panelColor
@@ -37,6 +38,8 @@ CHART_MIN_HEIGHT = 160
 # the layout's fixed parts, top margin to bottom margin, around the top row and the chart
 FIXED_HEIGHT = MARGIN + 20 + SEGMENT_HEIGHT + 14 + 16 + FORM_HEIGHT + MARGIN
 FETCH_GAP_SECONDS = 30
+# the service writes a UPower reading only once its wake set wait is over, so a fetch after a change waits that long and a bit for the GetAll each side makes
+UPOWER_SETTLE_SECONDS = history.WAKE_SET_SECONDS + 3
 STALE_SLOT_SECONDS = 2 * 60 * 60
 RETRY_MS = 30 * 1000
 # KWin answered within 20 ms where it was measured, so the first check comes soon and a slower machine gets one more
@@ -148,11 +151,10 @@ def statusWords(mouse):
 
 
 class Reply:
-    def __init__(self, summary, revision):
+    def __init__(self, summary, revision, askedAt):
         self.summary = summary
         self.revision = revision
-        # a UPower mouse has no revision, so a change the tray's own watcher saw marks its reply old instead
-        self.upowerChanged = False
+        self.askedAt = askedAt
         recent = summary.get("recent") or []
         self.newestSlot = recent[-1][0] if recent else time.time()
 
@@ -507,6 +509,7 @@ class HistoryWindow(QWidget):
         self.notRefreshed = set()
         self.pending = set()
         self.lastFetch = {}
+        self.upowerChangedAt = {}
         self.levelRange = levelRange if levelRange in RANGE_NAMES else "week"
         # each mouse's slots per range, dropped with its history reply, since a new reply means new readings
         self.levels = {}
@@ -677,9 +680,8 @@ class HistoryWindow(QWidget):
         self.refresh()
 
     def onUPowerMouse(self, upowerMouse):
-        reply = self.replies.get(upowerMouse.key)
-        if (reply is not None):
-            reply.upowerChanged = True
+        # kept by key, so an answer to a fetch still on its way when the change came is old too
+        self.upowerChangedAt[upowerMouse.key] = time.monotonic()
         if (upowerMouse.key == self.selected):
             self.refresh()
 
@@ -824,7 +826,10 @@ class HistoryWindow(QWidget):
         self.requestFetch(mouse.key)
 
     def isOld(self, mouse, reply):
-        return mouse.historyRevision != reply.revision or reply.upowerChanged or reply.newestSlot + STALE_SLOT_SECONDS <= time.time()
+        # a UPower mouse has no revision, so a reply asked for before the service saved the change the tray's own watcher saw is old instead
+        changedAt = self.upowerChangedAt.get(mouse.key)
+        upowerOld = changedAt is not None and reply.askedAt < changedAt + UPOWER_SETTLE_SECONDS
+        return mouse.historyRevision != reply.revision or upowerOld or reply.newestSlot + STALE_SLOT_SECONDS <= time.time()
 
     def scheduleAge(self, reply):
         # the 7 day chart and the 7 day checks keep moving, so a reply goes old two hours after its newest slot
@@ -834,11 +839,19 @@ class HistoryWindow(QWidget):
 
     def requestFetch(self, key):
         now = time.monotonic()
+        due = now
         last = self.lastFetch.get(key)
         # at most once every 30 s, so an open window stays inside the GetHistory budget
-        if (last is not None and now - last < FETCH_GAP_SECONDS):
-            if (not self.fetchTimer.isActive()):
-                self.fetchTimer.start(max(1, int((last + FETCH_GAP_SECONDS - now) * 1000)))
+        if (last is not None):
+            due = max(due, last + FETCH_GAP_SECONDS)
+        changedAt = self.upowerChangedAt.get(key)
+        if (changedAt is not None):
+            due = max(due, changedAt + UPOWER_SETTLE_SECONDS)
+        if (due > now):
+            wait = max(1, int((due - now) * 1000))
+            # one timer serves every mouse, so the shown mouse's shorter wait replaces another's longer one
+            if (not self.fetchTimer.isActive() or self.fetchTimer.remainingTime() > wait):
+                self.fetchTimer.start(wait)
             return
         mouse = next((each for each in self.mouseList.mice if each.key == key), None)
         if (mouse is None):
@@ -846,17 +859,17 @@ class HistoryWindow(QWidget):
         self.lastFetch[key] = now
         self.pending.add(key)
         revision = mouse.historyRevision
-        self.serviceWatcher.getHistory(key, lambda summary, error: self.onHistory(key, revision, summary, error))
+        self.serviceWatcher.getHistory(key, lambda summary, error: self.onHistory(key, revision, now, summary, error))
 
     def fetchSelected(self):
         mouse = self.selectedMouse()
         if (mouse is not None and self.isVisible()):
             self.considerFetch(mouse)
 
-    def onHistory(self, key, revision, summary, error):
+    def onHistory(self, key, revision, askedAt, summary, error):
         self.pending.discard(key)
         if (summary is not None):
-            self.replies[key] = Reply(summary, revision)
+            self.replies[key] = Reply(summary, revision, askedAt)
             self.forgetLevels(key)
             self.errors.pop(key, None)
             self.notRefreshed.discard(key)

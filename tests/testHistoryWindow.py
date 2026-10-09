@@ -194,14 +194,55 @@ class WindowTests(WindowCase):
         self.assertEqual(self.watcher.asked, ["02bc524c"])
         self.assertTrue(window.fetchTimer.isActive())
 
-    def testAUPowerChangeMakesTheReplyOld(self):
+    def upowerChange(self, key="02bc524c"):
+        class UPowerMouse:
+            pass
+        changed = UPowerMouse()
+        changed.key = key
+        self.upower.mouseChanged.emit(changed)
+
+    def settle(self, window, key="02bc524c"):
+        window.upowerChangedAt[key] -= historyWindow.UPOWER_SETTLE_SECONDS
+        window.fetchTimer.stop()
+        window.fetchTimer.timeout.emit()
+
+    def testAUPowerChangeWaitsForTheServiceToSaveIt(self):
+        # the service holds a reading for its wake set before it writes it, so a fetch at once would come back without it
+        self.assertGreater(historyWindow.UPOWER_SETTLE_SECONDS, history.WAKE_SET_SECONDS + 1)
         window = self.opened(entry())
         window.lastFetch.clear()
-
-        class UPowerMouse:
-            key = "02bc524c"
-        self.upower.mouseChanged.emit(UPowerMouse())
+        self.upowerChange()
+        self.assertEqual(self.watcher.asked, ["02bc524c"])
+        self.assertTrue(window.fetchTimer.isActive())
+        self.assertGreater(window.fetchTimer.remainingTime(), (historyWindow.UPOWER_SETTLE_SECONDS - 1) * 1000)
+        self.settle(window)
         self.assertEqual(self.watcher.asked, ["02bc524c", "02bc524c"])
+        window.lastFetch.clear()
+        window.refresh()
+        self.assertEqual(len(self.watcher.asked), 2)
+
+    def testAUPowerChangeDuringAFetchMakesItsAnswerOld(self):
+        self.watcher.hold = True
+        window = self.opened(entry())
+        self.upowerChange()
+        key, onAnswer = self.watcher.waiting.pop()
+        onAnswer(reply(key), None)
+        self.assertFalse(window.message.isVisibleTo(window))
+        self.watcher.hold = False
+        window.lastFetch.clear()
+        self.settle(window)
+        self.assertEqual(self.watcher.asked, ["02bc524c", "02bc524c"])
+
+    def testTheShownMousesShorterWaitTakesTheTimer(self):
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))
+        window.pick("11111111")
+        window.pick("02bc524c")
+        self.state(entry(revision=2), entry(key="11111111", name="MX Master 3S", revision=2))
+        self.assertGreater(window.fetchTimer.remainingTime(), 25 * 1000)
+        window.lastFetch["11111111"] -= historyWindow.FETCH_GAP_SECONDS - 5
+        window.pick("11111111")
+        # a coarse Qt timer may fire up to 5% late, which remainingTime counts
+        self.assertLess(window.fetchTimer.remainingTime(), 10 * 1000)
 
     def testAnErrorThatWontChangeIsntAskedForAgain(self):
         for error in historyWindow.FINAL_ERRORS:
@@ -464,7 +505,7 @@ class WindowTests(WindowCase):
         summary["lastError"] = NOW
         summary["lastCharge"] = {"kind": 1, "startAt": NOW, "endAt": NOW, "startPercent": 20, "endPercent": 80, "power": 1, "readingCount": 10, "slowCount": 9, "errorCount": 1, "inferred": 0}
         summary["drain"]["buckets"] = [{"bucket": top, "sessions": 42, "first": 30.0, "last": [24.0, 24.0, 24.0]} for top in (80, 70, 60)] + [{"bucket": top, "sessions": 0, "first": None, "last": None} for top in (50, 40, 30)]
-        window.replies["02bc524c"] = historyWindow.Reply(summary, 1)
+        window.replies["02bc524c"] = historyWindow.Reply(summary, 1, time.monotonic())
         window.refresh()
         self.assertEqual(len(window.health.lines), 2)
         self.assertGreater(window.height(), historyWindow.BASE_HEIGHT)
