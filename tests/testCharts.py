@@ -7,7 +7,7 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 from PyQt6 import sip
 from PyQt6.QtCore import QPointF
-from PyQt6.QtGui import QImage
+from PyQt6.QtGui import QFont, QFontMetrics, QImage
 from PyQt6.QtWidgets import QApplication
 
 import charts
@@ -92,6 +92,28 @@ class LineChartTests(ChartCase):
         self.assertEqual(chart.months(), ["2026-09", "2026-10"])
         rendered(chart)
 
+
+    def testMonthLabelsThinOutSoTheyDontOverlap(self):
+        # 40 months across 600 px put the labels about 15 px apart
+        places = [index * 600 / 39 for index in range(40)]
+        picked = charts.labeledMonths(places)
+        self.assertIn(39, picked)
+        self.assertTrue(all(abs(places[a] - places[b]) >= charts.MONTH_LABEL_WIDTH for a, b in zip(picked, picked[1:])))
+        self.assertEqual(charts.labeledMonths([0, 300, 600]), [0, 1, 2])
+
+    def testTheLatestFigureNamesAMonthThatIsntThisOne(self):
+        now = time.mktime((2026, 10, 9, 12, 0, 0, 0, 0, -1))
+        self.assertEqual(charts.latestText(41.6, "h", "2026-10", now), "42 h, this month")
+        self.assertEqual(charts.latestText(41.6, "h", "2026-03", now), "42 h, Mar 2026")
+
+    def testTheLatestFigureIsntCutShort(self):
+        chart = self.make(charts.LineChart("Charging Speed", "min per 10%", charts.CHARGING_EMPTY))
+        chart.setSeries({"charger 1": [(time.strftime("%Y-%m"), 4.0)]})
+        image = rendered(chart)
+        inked = [x for x in range(image.width()) for y in range(30, 43) if image.pixelColor(x, y).alpha() > 100]
+        # the text's width depends on the font each system falls back to, so the box it must fit is measured too
+        width = QFontMetrics(charts.font(22, QFont.Weight.Bold)).horizontalAdvance("4 min per 10%, this month")
+        self.assertGreater(max(inked), 16 + min(width, chart.width() - 32 - charts.AXIS_WIDTH) - 8)
 
 if (__name__ == "__main__"):
     unittest.main()

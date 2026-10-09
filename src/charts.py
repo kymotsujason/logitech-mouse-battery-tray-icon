@@ -17,6 +17,7 @@ TITLE_SIZE = 12
 AXIS_WIDTH = 44
 TOP = 30
 BOTTOM = 24
+MONTH_LABEL_WIDTH = 40
 
 
 def font(size, weight=QFont.Weight.Normal):
@@ -24,6 +25,21 @@ def font(size, weight=QFont.Weight.Normal):
     chosen.setPixelSize(size)
     chosen.setWeight(weight)
     return chosen
+
+
+def labeledMonths(places):
+    # walked from the latest month, so the newest one always has its name
+    picked = []
+    for index in reversed(range(len(places))):
+        if (not picked or places[picked[-1]] - places[index] >= MONTH_LABEL_WIDTH):
+            picked.append(index)
+    return list(reversed(picked))
+
+
+def latestText(value, unit, month, now):
+    if (month == time.strftime("%Y-%m", time.localtime(now))):
+        return str(round(value)) + " " + unit + ", this month"
+    return str(round(value)) + " " + unit + ", " + time.strftime("%b %Y", time.strptime(month, "%Y-%m"))
 
 
 def slotValue(slot):
@@ -210,10 +226,10 @@ class LineChart(Chart):
             positions = [QPointF(area.x() + area.width() * (months.index(month) / max(1, len(months) - 1) if len(months) > 1 else 0.5), area.bottom() - (value - low) / (high - low) * area.height()) for month, value in points]
             self.paintLine(painter, area, positions, color, fade=len(self.series) == 1)
             legend.append((label, color))
-        latest = self.series[sorted(self.series)[0]][-1][1]
+        latestMonth, latest = self.series[sorted(self.series)[0]][-1]
         painter.setFont(font(22, QFont.Weight.Bold))
         painter.setPen(QColor(self.theme.text))
-        painter.drawText(QRectF(16, TOP - 2, 200, 26), int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), str(round(latest)) + " " + self.unit + ", this month")
+        painter.drawText(QRectF(16, TOP - 2, self.width() - 32 - AXIS_WIDTH, 26), int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), latestText(latest, self.unit, latestMonth, time.time()))
         if (len(legend) > 1):
             self.paintLegend(painter, legend)
         self.paintMonths(painter, area, months)
@@ -262,7 +278,7 @@ class LineChart(Chart):
     def paintMonths(self, painter, area, months):
         painter.setFont(font(LABEL_SIZE))
         painter.setPen(QColor(self.theme.secondary))
-        for index, month in enumerate(months):
-            x = area.x() + area.width() * (index / max(1, len(months) - 1) if len(months) > 1 else 0.5)
-            name = time.strftime("%b", time.strptime(month, "%Y-%m"))
-            painter.drawText(QRectF(x - 20, area.bottom() + 6, 40, 16), int(Qt.AlignmentFlag.AlignCenter), name)
+        places = [area.x() + area.width() * (index / max(1, len(months) - 1) if len(months) > 1 else 0.5) for index in range(len(months))]
+        for index in labeledMonths(places):
+            name = time.strftime("%b", time.strptime(months[index], "%Y-%m"))
+            painter.drawText(QRectF(places[index] - MONTH_LABEL_WIDTH / 2, area.bottom() + 6, MONTH_LABEL_WIDTH, 16), int(Qt.AlignmentFlag.AlignCenter), name)
