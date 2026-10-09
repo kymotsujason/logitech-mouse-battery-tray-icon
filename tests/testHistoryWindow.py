@@ -8,7 +8,7 @@ from unittest import mock
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 from PyQt6 import sip
-from PyQt6.QtCore import QObject, pyqtSignal
+from PyQt6.QtCore import QObject, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QPalette
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QWidget
@@ -61,7 +61,7 @@ class FakeUPower(QObject):
     mouseChanged = pyqtSignal(object)
 
 
-class WindowTests(unittest.TestCase):
+class WindowCase(unittest.TestCase):
     def setUp(self):
         self.folder = tempfile.mkdtemp()
         self.watcher = FakeWatcher()
@@ -85,6 +85,8 @@ class WindowTests(unittest.TestCase):
         self.window.open()
         return self.window
 
+
+class WindowTests(WindowCase):
     def testAnOpenWindowShowsTheMouseAndItsVerdictLine(self):
         window = self.opened(entry())
         self.assertEqual((window.nameLabel.text(), window.levelLabel.text(), window.statusLabel.text()), ("PRO X3 SUPERSTRIKE", "62%", "In use"))
@@ -196,6 +198,22 @@ class WindowTests(unittest.TestCase):
         self.watcher.serviceRestarted.emit()
         self.assertEqual(len(self.watcher.asked), 2)
 
+    def testAStateChangeWhileClosedKeepsTheSidebarsWidth(self):
+        two = (entry(), entry(key="11111111", name="MX Master 3S", reading=hidpp.BatteryReading(18, 0)))
+        window = self.opened(*two)
+        window.close()
+        self.state(*two)
+        self.assertEqual(window.width(), historyWindow.PANE_WIDTH + historyWindow.SIDEBAR_WIDTH)
+
+    def testAReopenedWindowStartsOnTheTraysMouse(self):
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S", reading=hidpp.BatteryReading(18, 0)))
+        shown = self.mouseList.shownMouse().key
+        other = "11111111" if shown == "02bc524c" else "02bc524c"
+        window.pick(other)
+        window.close()
+        window.open()
+        self.assertEqual(window.selected, shown)
+
     def testTheSettingButtonSendsTheChoiceAndShowsItShort(self):
         window = self.opened(entry())
         picked = []
@@ -251,6 +269,41 @@ class DesktopBlurTests(unittest.TestCase):
     def testAMissingLibraryLeavesThePaintedBackdrop(self):
         with mock.patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": "KDE"}), mock.patch.object(historyWindow.ctypes, "CDLL", side_effect=OSError("missing")):
             self.assertFalse(historyWindow.enableDesktopBlur(QWidget()))
+    def testABlurKWinWontDrawIsntCountedAsAvailable(self):
+        library = mock.Mock()
+        getattr(library, historyWindow.AVAILABLE_SYMBOL).return_value = False
+        with mock.patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": "KDE"}), mock.patch.object(historyWindow.ctypes, "CDLL", return_value=library):
+            self.assertFalse(historyWindow.desktopBlurAvailable())
+        getattr(library, historyWindow.AVAILABLE_SYMBOL).assert_called_once_with(historyWindow.BLUR_BEHIND)
+
+    def testOutsideKdeTheBlurIsntAvailable(self):
+        with mock.patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": "GNOME"}):
+            self.assertFalse(historyWindow.desktopBlurAvailable())
+
+
+class WindowBlurTests(WindowCase):
+    def openWithBlur(self, answers):
+        library = mock.Mock()
+        getattr(library, historyWindow.AVAILABLE_SYMBOL).side_effect = answers
+        with mock.patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": "KDE"}), mock.patch.object(historyWindow.ctypes, "CDLL", return_value=library):
+            window = self.opened(entry())
+            self.assertFalse(window.blurred)
+            self.assertTrue(window.blurTimer.isActive())
+            window.blurTimer.stop()
+            window.blurTimer.timeout.emit()
+        self.assertEqual(getattr(library, historyWindow.BLUR_SYMBOL).call_count, 1)
+        return window
+
+    def testTheBlurIsCheckedAgainOnceKWinHasAnswered(self):
+        # KWin's blur manager is only bound after the event loop has run, so the check made as the window shows reads False
+        window = self.openWithBlur([False, True])
+        self.assertTrue(window.blurred)
+        self.assertTrue(window.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground))
+
+    def testABlurThatNeverComesKeepsTheBackdropOpaque(self):
+        window = self.openWithBlur([False, False])
+        self.assertFalse(window.blurred)
+
 
 if (__name__ == "__main__"):
     unittest.main()

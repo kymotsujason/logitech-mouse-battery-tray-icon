@@ -38,6 +38,7 @@ FIXED_HEIGHT = MARGIN + 20 + SEGMENT_HEIGHT + 14 + 16 + FORM_HEIGHT + MARGIN
 FETCH_GAP_SECONDS = 30
 STALE_SLOT_SECONDS = 2 * 60 * 60
 RETRY_MS = 30 * 1000
+BLUR_CHECK_MS = 100
 CHART_FADE_MS = 180
 PANE_FADE_MS = 180
 THUMB_SLIDE_MS = 220
@@ -67,16 +68,34 @@ def capitalized(text):
 
 
 BLUR_SYMBOL = "_ZN14KWindowEffects16enableBlurBehindEP7QWindowbRK7QRegion"
+AVAILABLE_SYMBOL = "_ZN14KWindowEffects17isEffectAvailableENS_6EffectE"
+# KWindowEffects::BlurBehind in kwindoweffects.h
+BLUR_BEHIND = 7
+
+
+def windowSystemCall(symbol):
+    # KWin blurs what's behind a window that asks through KWindowSystem, which has no Python bindings, so it's called through ctypes, and any failure leaves the painted backdrop alone
+    if ("KDE" not in panelColor.desktopNames(os.environ)):
+        return None
+    try:
+        return getattr(ctypes.CDLL("libKF6WindowSystem.so.6"), symbol)
+    except (OSError, AttributeError):
+        return None
+
+
+def desktopBlurAvailable():
+    # with KWin's blur effect turned off the window would show the desktop sharp, so it keeps its opaque backdrop
+    available = windowSystemCall(AVAILABLE_SYMBOL)
+    if (available is None):
+        return False
+    available.argtypes = [ctypes.c_int]
+    available.restype = ctypes.c_bool
+    return bool(available(BLUR_BEHIND))
 
 
 def enableDesktopBlur(widget):
-    # KWin blurs what's behind a window that asks through KWindowSystem, which has no Python bindings, so it's called through ctypes, and any failure leaves the painted backdrop alone
-    if ("KDE" not in panelColor.desktopNames(os.environ)):
-        return False
-    try:
-        library = ctypes.CDLL("libKF6WindowSystem.so.6")
-        enable = getattr(library, BLUR_SYMBOL)
-    except (OSError, AttributeError):
+    enable = windowSystemCall(BLUR_SYMBOL)
+    if (enable is None):
         return False
     handle = widget.windowHandle()
     if (handle is None):
@@ -370,6 +389,7 @@ class HistoryWindow(QWidget):
         self.makeParts(sleepCheckSeconds)
         self.fetchTimer = mice.singleShotTimer(self, 1000, self.fetchSelected)
         self.retryTimer = mice.singleShotTimer(self, RETRY_MS, self.fetchSelected)
+        self.blurTimer = mice.singleShotTimer(self, BLUR_CHECK_MS, self.checkBlur)
         self.ageTimer = mice.singleShotTimer(self, 1000, self.fetchSelected)
         self.glowAnimation = QVariantAnimation(self)
         self.glowAnimation.setEasingCurve(QEasingCurve.Type.OutCubic)
@@ -439,11 +459,19 @@ class HistoryWindow(QWidget):
         self.readPortal()
         # shown before the refresh, since the window only asks for a history while it's visible
         if (not self.isVisible()):
+            # a window opened from the tray starts on the tray's mouse
+            self.selected = None
+            self.wanted = None
             self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
             self.show()
             # the blur is asked for once the window has a handle, and a window without it keeps its painted backdrop opaque
-            self.blurred = enableDesktopBlur(self)
-            if (not self.blurred):
+            if (enableDesktopBlur(self)):
+                self.blurred = desktopBlurAvailable()
+                if (not self.blurred):
+                    # KWin's answer comes after the event loop has run once, measured at under 20 ms
+                    self.blurTimer.start()
+            else:
+                self.blurred = False
                 self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
                 self.update()
         else:
@@ -451,6 +479,10 @@ class HistoryWindow(QWidget):
         self.refresh()
         self.raise_()
         self.activateWindow()
+
+    def checkBlur(self):
+        self.blurred = desktopBlurAvailable()
+        self.update()
 
     def readPortal(self):
         if (self.sessionBus is None):
@@ -539,7 +571,7 @@ class HistoryWindow(QWidget):
         self.replies.clear()
         self.errors.clear()
         self.notRefreshed.clear()
-        for timer in (self.fetchTimer, self.retryTimer, self.ageTimer):
+        for timer in (self.fetchTimer, self.retryTimer, self.ageTimer, self.blurTimer):
             timer.stop()
         event.accept()
 
@@ -777,11 +809,11 @@ class HistoryWindow(QWidget):
             child.update()
 
     def paneRect(self):
-        x = SIDEBAR_WIDTH if self.sidebar.isVisible() else 0
+        x = SIDEBAR_WIDTH if self.sidebar.isVisibleTo(self) else 0
         return QRectF(x, 0, self.width() - x, self.height())
 
     def ensureFrost(self):
-        key = (self.width(), self.height(), self.glow.name(), self.theme.dark, self.devicePixelRatioF(), self.sidebar.isVisible())
+        key = (self.width(), self.height(), self.glow.name(), self.theme.dark, self.devicePixelRatioF(), self.sidebar.isVisibleTo(self))
         if (self.backdrop is not None and key == self.frostKey):
             return
         self.backdrop = glass.paintBackdrop(self.width(), self.height(), self.paneRect(), self.glow, self.theme, self.devicePixelRatioF())
@@ -796,17 +828,17 @@ class HistoryWindow(QWidget):
         return max(HEALTH_MIN_HEIGHT, height)
 
     def layoutParts(self):
-        sidebarWidth = SIDEBAR_WIDTH if self.sidebar.isVisible() else 0
+        sidebarWidth = SIDEBAR_WIDTH if self.sidebar.isVisibleTo(self) else 0
         healthHeight = self.healthHeight() if "health" in self.panels else HEALTH_MIN_HEIGHT
         top = max(TOP_ROW, healthHeight)
         wantedHeight = min(MAX_HEIGHT, FIXED_HEIGHT + top + CHART_HEIGHT)
         self.setMinimumSize(sidebarWidth + PANE_WIDTH, max(BASE_HEIGHT, wantedHeight))
         if (self.width() < sidebarWidth + PANE_WIDTH or self.height() < wantedHeight):
             self.resize(max(self.width(), sidebarWidth + PANE_WIDTH) if self.width() >= sidebarWidth + PANE_WIDTH else sidebarWidth + PANE_WIDTH, max(self.height(), wantedHeight))
-        if (not self.sidebar.isVisible() and self.width() > PANE_WIDTH and self.minimumWidth() == PANE_WIDTH and self.property("hadSidebar")):
+        if (not self.sidebar.isVisibleTo(self) and self.width() > PANE_WIDTH and self.minimumWidth() == PANE_WIDTH and self.property("hadSidebar")):
             # the window shrinks back by the sidebar's width once the sidebar goes
             self.resize(self.width() - SIDEBAR_WIDTH, self.height())
-        self.setProperty("hadSidebar", self.sidebar.isVisible())
+        self.setProperty("hadSidebar", self.sidebar.isVisibleTo(self))
         self.sidebar.setGeometry(0, 0, SIDEBAR_WIDTH, self.height())
         width = self.width() - sidebarWidth
         self.pane.setGeometry(sidebarWidth, 0, width, self.height())
@@ -862,11 +894,11 @@ class HistoryWindow(QWidget):
         painter.drawImage(QRectF(0, 0, self.width(), self.height()), self.backdrop)
         painter.setOpacity(1.0)
         theme = self.theme
-        if (self.sidebar.isVisible()):
+        if (self.sidebar.isVisibleTo(self)):
             sidebar = QRectF(8, 8, SIDEBAR_WIDTH - 16, self.height() - 16)
             glass.paintShadow(painter, sidebar, 18, theme)
             glass.paintPanel(painter, sidebar, 18, self.frostImage, theme)
-        offset = SIDEBAR_WIDTH if self.sidebar.isVisible() else 0
+        offset = SIDEBAR_WIDTH if self.sidebar.isVisibleTo(self) else 0
         rects = {"health": (getattr(self, "healthRect", None), 18), "segments": (getattr(self, "segmentRect", None), SEGMENT_HEIGHT / 2), "chart": (getattr(self, "chartRect", None), 18), "form": (getattr(self, "formRect", None), 18)}
         for name in self.panels:
             rect, radius = rects[name]
