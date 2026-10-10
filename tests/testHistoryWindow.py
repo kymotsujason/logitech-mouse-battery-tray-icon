@@ -1048,7 +1048,45 @@ class WindowTests(WindowCase):
         window = self.opened(entry())
         self.watcher.holdLevels = True
         window.pickRange("all")
+        window.showLoading()
         self.assertEqual((window.levelChart.title, window.levelChart.emptyText()), ("Battery Level, All Time", historyWindow.LOADING_TEXT))
+
+    def testARangeSwitchKeepsTheOldBarsUntilTheNewOnesCome(self):
+        window = self.opened(entry())
+        self.watcher.holdLevels = True
+        window.pickRange("month")
+        self.assertEqual((window.levelChart.rangeName, window.levelChart.message), ("week", None))
+        self.assertTrue(window.loadingTimer.isActive())
+        key, rangeName, answer = self.watcher.waitingLevels.pop()
+        answer(levelsReply(key, rangeName), None)
+        self.assertEqual((window.levelChart.rangeName, window.levelChart.message), ("month", None))
+        self.assertEqual(window.levelChart.slots, levelsReply(key, "month")["slots"])
+        self.assertFalse(window.loadingTimer.isActive())
+
+    def testARangeThatTakesLongerThanTheDelayShowsLoading(self):
+        window = self.opened(entry())
+        self.watcher.holdLevels = True
+        window.pickRange("month")
+        window.showLoading()
+        self.assertEqual((window.levelChart.rangeName, window.levelChart.emptyText()), ("month", historyWindow.LOADING_TEXT))
+
+    def testANewMouseShowsLoadingAtOnce(self):
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S", reading=hidpp.BatteryReading(18, 0)))
+        window.pickRange("month")
+        shown = window.selected
+        other = "11111111" if shown == "02bc524c" else "02bc524c"
+        self.watcher.holdLevels = True
+        window.pick(other)
+        self.assertEqual((window.levelChart.rangeName, window.levelChart.emptyText()), ("month", historyWindow.LOADING_TEXT))
+        self.assertFalse(window.loadingTimer.isActive())
+
+    def testARangeSwitchCrossfadesFromTheOldBars(self):
+        window = self.opened(entry())
+        window.motionFactor = 1.0
+        window.pickRange("month")
+        self.assertTrue(window.chartCrossfade.isVisible())
+        self.assertIsNotNone(window.chartCrossfade.picture)
+        self.assertTrue(window.chartFade.isEnabled())
 
     def testANewHistoryKeepsTheOldBarsWhileTheRangeReloads(self):
         window = self.opened(entry())

@@ -52,6 +52,8 @@ RETRY_MS = 30 * 1000
 BLUR_CHECK_MS = (25, 100)
 CHART_FADE_MS = 200
 PANE_FADE_MS = 200
+# a reply from the service usually comes well inside this, so most range switches never show the word at all
+LOADING_DELAY_MS = 300
 THUMB_SLIDE_MS = 250
 GLOW_FADE_MS = 400
 FROST_EVERY_MS = 50
@@ -815,6 +817,10 @@ class HistoryWindow(QWidget):
         self.fetchTimer = mice.singleShotTimer(self, 1000, self.fetchSelected)
         self.retryTimer = mice.singleShotTimer(self, RETRY_MS, self.fetchSelected)
         self.levelRetryTimer = mice.singleShotTimer(self, LEVEL_RETRY_MS, self.retryLevels)
+        self.loadingTimer = mice.singleShotTimer(self, LOADING_DELAY_MS, self.showLoading)
+        # the mouse the level chart's content belongs to, and the (mouse, range) the loading delay already ran out for
+        self.levelChartKey = None
+        self.loadingShown = None
         self.blurTimer = mice.singleShotTimer(self, BLUR_CHECK_MS[0], self.checkBlur)
         self.blurChecks = 0
         self.ageTimer = mice.singleShotTimer(self, 1000, self.fetchSelected)
@@ -1023,6 +1029,8 @@ class HistoryWindow(QWidget):
         if (key == self.selected):
             return
         self.selected = key
+        self.loadingTimer.stop()
+        self.loadingShown = None
         duration = int(PANE_FADE_MS * self.motionFactor) if self.isVisible() else 0
         self.paneCrossfade.start(self.content, duration, self.paneFade)
         self.refresh()
@@ -1072,6 +1080,10 @@ class HistoryWindow(QWidget):
                 self.levelReloadFailed.add((key, rangeName))
             if (error not in FINAL_ERRORS):
                 self.levelRetryTimer.start(LEVEL_RETRY_MS if error == serviceState.READ_ALL_LIMITED else RETRY_MS)
+        self.refresh()
+
+    def showLoading(self):
+        self.loadingShown = (self.selected, self.levelRange)
         self.refresh()
 
     def retryLevels(self):
@@ -1127,8 +1139,9 @@ class HistoryWindow(QWidget):
         # the window is kept for the next click, and so are its replies, its ranges, and any answer still on its way, so the next open shows them and isOld decides what to fetch, while an error gets one more try then
         self.errors.clear()
         self.levelErrors.clear()
+        self.loadingShown = None
         self.choiceMenu.hide()
-        for timer in (self.fetchTimer, self.retryTimer, self.ageTimer, self.blurTimer, self.levelRetryTimer):
+        for timer in (self.fetchTimer, self.retryTimer, self.ageTimer, self.blurTimer, self.levelRetryTimer, self.loadingTimer):
             timer.stop()
         event.accept()
 
@@ -1381,20 +1394,42 @@ class HistoryWindow(QWidget):
         if (rangeName == "week"):
             # the history reply already holds the week, so the default range costs no call
             self.levelChart.setSlots(summary.get("recent") or [], voltage, rangeName, rough=rough)
+            self.levelChartKey = key
             return
         slots = self.levels.get(key, {}).get(rangeName)
         error = self.levelErrors.get((key, rangeName))
         if (slots is not None):
+            if (self.loadingTimer.isActive() or (self.levelChartKey == key and self.levelChart.rangeName != rangeName)):
+                self.crossfadeLevelChart()
+            self.loadingTimer.stop()
             self.levelChart.setSlots(slots, voltage, rangeName, rough=rough)
+            self.levelChartKey = key
         elif (error in RESTART_LEVEL_ERRORS):
             self.levelChart.setSlots([], voltage, rangeName, message=RANGE_RESTART_TEXT)
+            self.levelChartKey = key
         elif (error is not None and error != serviceState.READ_ALL_LIMITED):
             self.levelChart.setSlots([], voltage, rangeName, message=RANGE_ERROR_TEXT)
+            self.levelChartKey = key
+        elif (error is None and self.levelChartKey == key and self.levelChart.rangeName != rangeName and self.loadingShown != (key, rangeName)):
+            # the old bars stay up for a moment, since the reply usually comes before the word would be worth showing
+            if (not self.loadingTimer.isActive()):
+                self.loadingTimer.start()
         else:
             # set before the call, since a reply can come back inside it and fill the chart
             self.levelChart.setSlots([], voltage, rangeName, message=LOADING_TEXT)
+            self.levelChartKey = key
         if (error is None and (key, rangeName) not in self.freshLevels):
             self.fetchLevels(key, rangeName)
+
+    def crossfadeLevelChart(self):
+        if (not self.levelChart.isVisible()):
+            return
+        # a new effect on the chart replaces the old one, so a fade still running ends before that
+        self.chartCrossfade.finish()
+        if (self.levelChart.graphicsEffect() is not self.chartFade):
+            self.chartFade = QGraphicsOpacityEffect(self.levelChart)
+            self.levelChart.setGraphicsEffect(self.chartFade)
+        self.chartCrossfade.start(self.levelChart, int(CHART_FADE_MS * self.motionFactor), self.chartFade)
 
     def fillForm(self, result):
         values = ("-", "-", "-") if result is None else (str(result.cycles), result.lastCharged or "-", result.chargingSpeed or "-")
