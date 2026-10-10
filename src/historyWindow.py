@@ -938,6 +938,7 @@ class HistoryWindow(QWidget):
         # the mouse the level chart's content belongs to, and the (mouse, range) the loading delay already ran out for
         self.levelChartKey = None
         self.levelChartWasShown = False
+        self.pickingRange = False
         self.loadingShown = None
         self.blurTimer = mice.singleShotTimer(self, BLUR_CHECK_MS[0], self.checkBlur)
         self.blurChecks = 0
@@ -1173,7 +1174,11 @@ class HistoryWindow(QWidget):
         self.rangeControl.choose(RANGE_NAMES.index(rangeName))
         self.nameRangeControl()
         self.levelRangeChanged.emit(rangeName)
-        self.refresh()
+        self.pickingRange = True
+        try:
+            self.refresh()
+        finally:
+            self.pickingRange = False
 
     def fetchLevels(self, key, rangeName):
         if ((key, rangeName) in self.pendingLevels or not self.isVisible()):
@@ -1560,7 +1565,8 @@ class HistoryWindow(QWidget):
             self.fetchLevels(key, rangeName)
 
     def crossfadeLevelChart(self):
-        if (not self.levelChart.isVisible()):
+        # a range the user picks fades in even during the quiet after an open, while an answer that lands then swaps the bars at once
+        if (not self.levelChart.isVisible() or (self.isQuiet() and not self.pickingRange)):
             return
         # a new effect on the chart replaces the old one, so a fade still running ends before that
         self.chartCrossfade.finish()

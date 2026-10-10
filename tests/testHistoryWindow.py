@@ -605,6 +605,40 @@ class WindowTests(WindowCase):
         self.assertEqual(self.watcher.levelAsks, [("02bc524c", "month")])
         self.assertEqual(window.levelChart.slots, levelsReply("02bc524c", "month")["slots"])
 
+    def testARangeAnswerInTheQuietAfterAReopenSwapsTheBarsAtOnce(self):
+        for rangeName in ("month", "day"):
+            with self.subTest(rangeName=rangeName):
+                window = self.opened(entry())
+                window.pickRange("week")
+                window.forgetLevels()
+                self.watcher.holdLevels = True
+                window.pickRange(rangeName)
+                window.close()
+                window.lastFetch.clear()
+                window.open()
+                self.assertTrue(window.isQuiet())
+                self.assertGreater(window.motionFactor, 0.0)
+                key, asked, onAnswer = self.watcher.waitingLevels.pop()
+                self.watcher.holdLevels = False
+                onAnswer(levelsReply(key, asked), None)
+                self.assertEqual(window.levelChart.slots, levelsReply(key, rangeName)["slots"])
+                self.assertEqual(window.chartCrossfade.animation.state(), QAbstractAnimation.State.Stopped)
+                self.assertFalse(window.chartCrossfade.isVisible())
+                self.assertIsNone(window.chartCrossfade.picture)
+                window.close()
+
+    def testARangeAnswerPastTheQuietStillCrossfades(self):
+        window = self.opened(entry())
+        self.watcher.holdLevels = True
+        window.pickRange("month")
+        window.close()
+        window.lastFetch.clear()
+        window.open()
+        self.pastOpen(window)
+        key, asked, onAnswer = self.watcher.waitingLevels.pop()
+        onAnswer(levelsReply(key, asked), None)
+        self.assertEqual(window.chartCrossfade.animation.state(), QAbstractAnimation.State.Running)
+
     def testAReopenDoesntAskAgainForARangeOnItsWay(self):
         window = self.opened(entry())
         self.watcher.holdLevels = True
