@@ -68,6 +68,8 @@ class Mouse:
         self.lastRead = None
         self.wokeAt = None
         self.readFromUPower = False
+        # when the tray last heard UPower change this mouse's reading, on the monotonic clock, since the device's own UpdateTime can be old or missing
+        self.upowerHeardAt = None
         self.reportsItself = False
         self.historyRevision = 0
 
@@ -261,6 +263,8 @@ class MouseList(QObject):
             self.changed.emit()
             return
         mouse.readFromUPower = True
+        if (mouse.upowerHeardAt is None or mouse.reading != upowerMouse.reading):
+            mouse.upowerHeardAt = time.monotonic()
         # UPower sends no sleep signal, so a changed reading is the only sign the mouse is in use
         self.applyReading(mouse, upowerMouse.reading, woke=(mouse.reading != upowerMouse.reading), readAt=readAt)
         self.changed.emit()
@@ -273,6 +277,7 @@ class MouseList(QObject):
 
     def dropUPowerHalf(self, mouse):
         mouse.upowerPath = None
+        mouse.upowerHeardAt = None
         if (mouse.nodePath is None):
             self.removeMouse(mouse)
         else:
