@@ -362,7 +362,8 @@ class TraceTests(RecorderCase):
         self.event(89, 23, charging=1, power=2)
         self.event(115, 24, charging=1, power=2)
         self.assertEqual(self.sessions(), [(0, 0, 0, 21, 21, 0, 1, 0, 0, 0), (1, 70, None, 22, None, 2, 3, 0, 0, 0)])
-        self.assertEqual(self.steps(), [(1, 89, round(19 / 60, 3), 22, 23, 2, 1), (1, 115, round(26 / 60, 3), 23, 24, 2, 1)])
+        # these came in the charge's first 2 minutes, which a cable charge on 2026-10-09 showed can rise faster than the battery fills, so they aren't measured even though these two were real
+        self.assertEqual(self.steps(), [(1, 89, round(19 / 60, 3), 22, 23, 2, 0), (1, 115, round(26 / 60, 3), 23, 24, 2, 0)])
 
     def testLiftingOffThePadEndsTheChargeAtItsLastReading(self):
         self.event(0, 21)
@@ -1092,6 +1093,34 @@ class RecorderTests(RecorderCase):
         key = "%08x" % history.NEW_MICE_BURST
         self.recorder.forget(key)
         self.assertNotIn(key, self.recorder.entries)
+
+    def testAChargesFirstTwoMinutesGiveNoWholeSteps(self):
+        # the X3's first cable charge on 2026-10-09 rose a point every few seconds for about a minute before it settled
+        self.recorder.setWakeSupport(KEY, True)
+        self.event(0, 68)
+        for seconds, percent in ((600, 68), (612, 69), (624, 70), (636, 71), (648, 72), (760, 73), (800, 74), (840, 75)):
+            self.event(seconds, percent, charging=1, power=1)
+        rises = [(row[3], row[6]) for row in self.steps() if row[0] == history.CHARGE]
+        self.assertEqual(rises, [(68, 0), (69, 0), (70, 0), (71, 0), (72, 0), (73, 1), (74, 1)])
+
+    def testADischargesStartFollowsAFallInItsFirstMinute(self):
+        # on 2026-10-09 the X3 read 100% full as it went from the cable onto the pad, then counted down to its real level
+        self.event(0, 85, charging=1, power=1)
+        self.event(600, 100, charging=3, power=2)
+        for seconds, percent in ((601, 99), (612, 90), (625, 84), (700, 83)):
+            self.event(seconds, percent)
+        self.event(4000, 60, charging=1, power=2)
+        discharges = [row for row in self.sessions() if row[0] == history.DISCHARGE]
+        self.assertEqual(discharges[0][3], 84)
+
+    def testARealFullStartsItsDischargeAtFull(self):
+        self.event(0, 95, charging=1, power=1)
+        self.event(600, 100, charging=3, power=1)
+        self.event(700, 100)
+        self.event(2000, 99)
+        self.event(5000, 60, charging=1, power=1)
+        discharges = [row for row in self.sessions() if row[0] == history.DISCHARGE]
+        self.assertEqual(discharges[0][3], 100)
 
     def flapCharging(self, seconds, count):
         # every reading comes in at the same moment, as a device flooding the node would send them

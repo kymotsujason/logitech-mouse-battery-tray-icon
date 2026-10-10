@@ -22,6 +22,9 @@ HOLD_SECONDS = 10
 WRITE_BURST = 30
 WRITE_REFILL_SECONDS = HOLD_SECONDS
 # a mouse's row in mice is made the first time it's seen, so a device that names a new unit id at each identify would add one a second without a limit of its own
+# measured on the X3 on 2026-10-09: one cable charge rose a point every few seconds for about a minute before it settled, and a full reading on going from the cable to the pad counted down to the real level within about 20 s
+CHARGE_SETTLE_SECONDS = 2 * 60
+DISCHARGE_SETTLE_SECONDS = 60
 NEW_MICE_BURST = 10
 NEW_MICE_REFILL_SECONDS = 5 * 60
 # the probe saw a wake's battery event come with or after its wireless status event, but only on two wakes, so a reading this close before a wake counts as part of it
@@ -298,7 +301,7 @@ class DbWriter:
         return cursor.lastrowid
 
     def updateSession(self, session):
-        self.db.execute("update sessions set endAt = ?, endPercent = ?, power = ?, readingCount = ?, slowCount = ?, errorCount = ? where id = ?", (session.endAt, session.endPercent, session.power(), session.readingCount, session.slowCount, session.errorCount, session.id))
+        self.db.execute("update sessions set startPercent = ?, endAt = ?, endPercent = ?, power = ?, readingCount = ?, slowCount = ?, errorCount = ? where id = ?", (session.startPercent, session.endAt, session.endPercent, session.power(), session.readingCount, session.slowCount, session.errorCount, session.id))
 
     def insertStep(self, kind, at, minutesPerPercent, fromPercent, toPercent, power, unbroken, sessionId):
         self.db.execute("insert into steps (mouseId, kind, at, seq, minutesPerPercent, fromPercent, toPercent, power, unbroken, session) values (?, ?, ?, (select coalesce(max(seq) + 1, 0) from steps where mouseId = ? and kind = ? and at = ?), ?, ?, ?, ?, ?, ?)", (self.mouseId, kind, at, self.mouseId, kind, at, minutesPerPercent, fromPercent, toPercent, power, int(unbroken), sessionId))
@@ -530,6 +533,9 @@ class Track:
         session = self.session
         lowestBefore = session.lowest
         session.count(row)
+        # a reading that fell in a discharge's first minute shows its start was the level settling, such as a full reading counting down to the real one, so the start follows it
+        if (session.kind == DISCHARGE and row.percent is not None and session.startPercent is not None and row.percent < session.startPercent and row.at - session.startAt <= DISCHARGE_SETTLE_SECONDS):
+            session.startPercent = row.percent
         writer.updateSession(session)
         if (row.percent is None):
             return
@@ -559,7 +565,8 @@ class Track:
             unbroken = whole and self.seesWakes() and newLow and not step.power
             kind = DISCHARGE
         else:
-            unbroken = whole
+            # a charge's first minutes can rise faster than the battery fills while the level catches up, so those steps aren't measured
+            unbroken = whole and step.startAt - session.startAt >= CHARGE_SETTLE_SECONDS
             kind = CHARGE
         writer.insertStep(kind, row.at, minutes / abs(moved), step.startPercent, row.percent, step.power, unbroken, session.id)
 
