@@ -871,6 +871,32 @@ class WindowTests(WindowCase):
         segments.animation.setCurrentTime(segments.animation.duration())
         self.assertEqual(segments.underThumb(), 2)
 
+    def testThePillSlidesBetweenMice(self):
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))
+        window.motionFactor = 1.0
+        sidebar = window.sidebar
+        window.pick("11111111")
+        sidebar.pillAnimation.setCurrentTime(sidebar.pillAnimation.duration() // 2)
+        self.assertTrue(sidebar.rowRect(0).y() < sidebar.pill.y() < sidebar.rowRect(1).y(), sidebar.pill.y())
+        sidebar.pillAnimation.setCurrentTime(sidebar.pillAnimation.duration())
+        self.assertEqual(sidebar.pill, sidebar.rowRect(1))
+
+    def testThePillJumpsWhenMotionIsOff(self):
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))
+        window.motionFactor = 0.0
+        window.pick("11111111")
+        self.assertEqual(window.sidebar.pill, window.sidebar.rowRect(1))
+
+    def testNewTextForTheSameMouseDoesNotRestartTheSlide(self):
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))
+        window.motionFactor = 1.0
+        sidebar = window.sidebar
+        window.pick("11111111")
+        sidebar.pillAnimation.setCurrentTime(100)
+        sidebar.setRows([(row[0], row[1], "50%") + row[3:] for row in sidebar.rows], sidebar.selected)
+        self.assertEqual(sidebar.pillAnimation.state(), QAbstractAnimation.State.Running)
+        self.assertEqual(sidebar.pillAnimation.currentTime(), 100)
+
     def testAPickDuringAFadePicksUpWhereItIs(self):
         window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"), )
         window.motionFactor = 1.0

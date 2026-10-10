@@ -570,11 +570,53 @@ class Sidebar(QWidget):
         self.owner = window
         self.rows = []
         self.selected = None
+        self.pill = None
+        self.pillAnimation = QVariantAnimation(self)
+        self.pillAnimation.setEasingCurve(glass.easeOut())
+        self.pillAnimation.valueChanged.connect(self.onPillSlide)
         self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self.keyFocus = False
 
+    def onPillSlide(self, value):
+        self.pill = QRectF(value)
+        self.update()
+
+    def slidePill(self, rows, selected):
+        index = next((i for i, row in enumerate(rows) if row[0] == selected), None)
+        if (index is None):
+            self.pillAnimation.stop()
+            self.pill = None
+            return
+        target = self.rowRect(index)
+        # new text for the mouse already being slid to must not restart the slide
+        if (self.pillAnimation.state() == QAbstractAnimation.State.Running and self.pillAnimation.endValue() == target):
+            return
+        duration = int(THUMB_SLIDE_MS * self.owner.motionFactor)
+        self.pillAnimation.stop()
+        if (self.pill is None or selected == self.selected or not self.isVisible() or duration <= 0):
+            self.pill = target
+            return
+        self.pillAnimation.setStartValue(QRectF(self.pill))
+        self.pillAnimation.setEndValue(target)
+        self.pillAnimation.setDuration(duration)
+        self.pillAnimation.start()
+
+    def resizeEvent(self, event):
+        index = self.selectedIndex()
+        if (index is not None and event.size().width() != event.oldSize().width()):
+            self.pillAnimation.stop()
+            self.pill = self.rowRect(index)
+        super().resizeEvent(event)
+
+    def hideEvent(self, event):
+        # a pill left behind would slide from a stale row when the sidebar comes back
+        self.pillAnimation.stop()
+        self.pill = None
+        super().hideEvent(event)
+
     def setRows(self, rows, selected):
         # each row is (key, name, second line, capsule fill from 0 to 1 or None, color name of the second line)
+        self.slidePill(rows, selected)
         self.rows = rows
         self.selected = selected
         # painted instead of a list view, so a screen reader gets the chosen mouse and its line from here
@@ -626,10 +668,10 @@ class Sidebar(QWidget):
         painter.setPen(QColor(theme.secondary))
         painter.drawText(QRectF(20, 12, 200, 20), int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), "Mice")
         frost = self.owner.frost()
+        if (self.pill is not None and frost is not None):
+            glass.paintPanel(painter, self.pill, self.pill.height() / 2, frost, theme, strong=True, offset=QPointF(self.mapTo(self.owner, self.rect().topLeft())))
         for index, (key, name, second, fill, secondColor) in enumerate(self.rows):
             rect = self.rowRect(index)
-            if (key == self.selected and frost is not None):
-                glass.paintPanel(painter, rect, rect.height() / 2, frost, theme, strong=True, offset=QPointF(self.mapTo(self.owner, self.rect().topLeft())))
             self.paintCapsule(painter, QRectF(rect.x() + 12, rect.y() + 10, 22, 11), fill, theme, secondColor)
             painter.setFont(font(13, QFont.Weight.Medium))
             painter.setPen(QColor(theme.text))
@@ -876,7 +918,7 @@ class HistoryWindow(QWidget):
                 self.finishAnimations()
 
     def finishAnimations(self):
-        for animation in (self.glowAnimation, self.paneAnimation, self.chartAnimation, self.segments.animation, self.rangeControl.animation):
+        for animation in (self.glowAnimation, self.paneAnimation, self.chartAnimation, self.segments.animation, self.rangeControl.animation, self.sidebar.pillAnimation):
             if (animation.state() == QAbstractAnimation.State.Running):
                 animation.setCurrentTime(animation.duration())
 
