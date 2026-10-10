@@ -21,10 +21,10 @@ HOLD_SECONDS = 10
 # the hold already keeps a change of percent alone to one row per 10 s, so this only bites on codes, power, and markers that flood in
 WRITE_BURST = 30
 WRITE_REFILL_SECONDS = HOLD_SECONDS
-# a mouse's row in mice is made the first time it's seen, so a device that names a new unit id at each identify would add one a second without a limit of its own
 # measured on the X3 on 2026-10-09: one cable charge rose a point every few seconds for about a minute before it settled, and a full reading on going from the cable to the pad counted down to the real level within about 20 s
 CHARGE_SETTLE_SECONDS = 2 * 60
 DISCHARGE_SETTLE_SECONDS = 60
+# a mouse's row in mice is made the first time it's seen, so a device that names a new unit id at each identify would add one a second without a limit of its own
 NEW_MICE_BURST = 10
 NEW_MICE_REFILL_SECONDS = 5 * 60
 # the probe saw a wake's battery event come with or after its wireless status event, but only on two wakes, so a reading this close before a wake counts as part of it
@@ -1124,7 +1124,7 @@ def bucketEntries(rows, bucketOf, buckets):
 
 
 def bucketEntry(bucket, figures):
-    # the baseline is the first 20 sessions, and the three windows of the last 20 end at the newest session and the two before it, so none of them overlap
+    # the baseline is the first 20 sessions, and the three windows of 20 end at the newest session and the two before it, so they overlap each other but never the baseline
     first = statistics.median(figures[:BASELINE_SESSIONS]) if len(figures) >= BASELINE_SESSIONS else None
     last = None
     if (len(figures) >= BASELINE_SESSIONS + WINDOW_SESSIONS + WINDOWS - 1):
