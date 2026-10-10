@@ -202,7 +202,7 @@ class StoreTests(RecorderCase):
         with self.db() as db:
             self.assertEqual(db.execute("pragma user_version").fetchone()[0], 1)
             tables = {name for (name,) in db.execute("select name from sqlite_master where type = 'table'")}
-        self.assertEqual(tables, {"mice", "readings", "steps", "sessions", "heartbeat"})
+        self.assertEqual(tables, {"mice", "readings", "steps", "sessions", "heartbeat", "tracks"})
 
     @unittest.skipUnless(sys.version_info >= (3, 13), "sqlite3 warns about unclosed connections only from Python 3.13")
     def testTheHelpersCloseTheirConnections(self):
@@ -940,6 +940,80 @@ class ClockFrameTests(RecorderCase):
             self.event(3600 + 1800 * index - 6 * 60 * 60, 78 - index)
         opened = self.recorder.summary(KEY)["open"]
         self.assertEqual((opened["kind"], opened["startAt"], opened["count"], opened["median"]), (history.DISCHARGE, START - 6 * 60 * 60, 5, 30.0))
+
+    def testARestartAfterARebootWithTheClockBehindKeepsTheChargesNewerReadings(self):
+        # the charge's first reading was saved on a boot whose clock stayed two hours ahead until it ended, and the next boot's clock was right
+        self.clock.jump(7200)
+        self.event(7200, 50, charging=1, power=1)
+        self.restart()
+        self.clock.jump(-7200)
+        self.event(600, 51, charging=1, power=2)
+        self.event(1200, 52, charging=1, power=2)
+        self.restart()
+        self.event(1800, 52, charging=0, power=None)
+        self.assertEqual(self.sessions()[0][:7], (history.CHARGE, 7200, 1200, 50, 52, 2, 3))
+
+    def testTheOpenSummaryAfterARebootWithTheClockBehindKeepsItsSteps(self):
+        self.recorder.setWakeSupport(KEY, True)
+        ahead = 6 * 60 * 60
+        self.clock.jump(ahead)
+        self.event(ahead, 80)
+        self.event(ahead + 1800, 79)
+        self.restart()
+        self.clock.jump(-ahead)
+        for index in range(5):
+            self.event(3600 + 1800 * index, 78 - index)
+        opened = self.recorder.summary(KEY)["open"]
+        self.assertEqual((opened["startAt"], opened["count"], opened["median"]), (START + ahead, 3, 30.0))
+
+    def testARestartAfterARebootWithTheClockBehindComparesWithTheNewestReading(self):
+        self.clock.jump(7200)
+        self.event(7200, 50)
+        self.restart()
+        self.clock.jump(-7200)
+        self.event(600, 40)
+        self.restart()
+        # five points up from the newest reading, across the restart's gap, is a charge done while nothing watched
+        self.event(1200, 45)
+        self.assertIn((history.CHARGE, 600, 1200, 40, 45), [s[:5] for s in self.sessions()])
+
+    def testTheLastChargeAfterARebootWithTheClockBehindIsTheNewestOne(self):
+        self.clock.jump(7200)
+        self.event(7200, 50, charging=1, power=1)
+        self.event(7800, 50, charging=0, power=0)
+        self.restart()
+        self.clock.jump(-7800)
+        self.event(600, 50, charging=1, power=2)
+        self.assertEqual(self.recorder.summary(KEY)["lastCharge"]["power"], 2)
+
+    def testAKillAfterARebootWithTheClockBehindGapsWhereTheRunWasLastSeen(self):
+        self.clock.jump(7200)
+        self.event(7200, 80)
+        self.restart()
+        self.clock.jump(-7200)
+        self.event(600, 79)
+        self.at(610 + history.HEARTBEAT_SECONDS)
+        with self.db() as db:
+            beat = db.execute("select at - ? from heartbeat", (START,)).fetchone()[0]
+        self.assertEqual(beat, 610 + history.HEARTBEAT_SECONDS)
+        self.kill()
+        self.clock.now = START + 5000
+        self.assertTrue(self.recorder.available())
+        gaps = [row[0] for row in self.rows() if row[1] == history.ORIGIN_GAP]
+        self.assertIn(beat, gaps)
+        self.assertNotIn(5000, gaps)
+
+    def testASavedStateAnOlderReleaseLeftBehindIsntUsed(self):
+        self.event(0, 50, charging=1, power=1)
+        self.recorder.stop()
+        # an older release added two readings to the open charge without knowing the saved state
+        with self.db() as db:
+            for seconds, percent in ((600, 53), (1200, 54)):
+                db.execute("insert into readings (mouseId, at, seq, percent, charging, power, origin) values (1, ?, 0, ?, 1, 2, 0)", (START + seconds, percent))
+            db.execute("update sessions set readingCount = 3, power = 1 where id = 1")
+        self.restart()
+        self.event(1800, 54, charging=0, power=None)
+        self.assertEqual(self.sessions()[0][:7], (history.CHARGE, 0, 1200, 50, 54, 2, 3))
 
     def chargeAcrossAReboot(self):
         # a charge saved while the clock was three hours ahead, and the machine rebooted before the clock was set, so no boot clock spans the two
@@ -2173,17 +2247,19 @@ class SummaryTests(RecorderCase):
         scans = [sql for sql in dict.fromkeys(statements) if any(row[3].startswith("SCAN") for row in self.database.execute("explain query plan " + sql))]
         self.assertEqual(scans, [])
 
-    def testTheOpenSessionsStepsAreARangeFromItsStart(self):
+    def testTheOpenSessionsStepsAreFoundByTheSessionOnTheMousesKey(self):
         session = self.addSession(history.DISCHARGE, 5000)
-        self.addStep(session, history.DISCHARGE, 5001, 30.0, 75, 74)
+        # a reboot that set the clock back dated this step before the session's start
+        self.addStep(session, history.DISCHARGE, 4000, 30.0, 75, 74)
         statements = []
         self.database.set_trace_callback(statements.append)
-        self.recorder.summary(KEY)
+        opened = self.recorder.summary(KEY)["open"]
         self.database.set_trace_callback(None)
+        self.assertEqual(opened["count"], 1)
         found = [sql for sql in statements if "from steps" in sql and "session = " in sql]
         self.assertEqual(len(found), 1)
         plan = " ".join(row[3] for row in self.database.execute("explain query plan " + found[0]))
-        self.assertIn("at>?", plan.replace(" ", ""))
+        self.assertIn("SEARCH steps USING PRIMARY KEY (mouseId=? AND kind=?)", plan)
 
     def testLastChargeAndLastError(self):
         self.addSession(history.CHARGE, 0, 500, 20, 80, power=2, readingCount=6, slowCount=4)

@@ -1,5 +1,6 @@
 import contextlib
 import copy
+import json
 import os
 import sqlite3
 import statistics
@@ -82,6 +83,8 @@ LEVELS_VERSION = 1
 # a reading's height on the chart, which is its percent, or its rough level's height, or its millivolts for a mouse that reports only voltage
 VALUE_SQL = "coalesce(percent, case level " + " ".join("when '" + name + "' then " + str(height) for name, height in hidpp.LEVEL_HEIGHTS.items()) + " end, millivolts)"
 SESSION_COLUMNS = ("kind", "startAt", "endAt", "startPercent", "endPercent", "power", "readingCount", "slowCount", "errorCount", "inferred")
+# a mouse's last reading from at to millivolts, its last power, what its open session's own row doesn't hold, and its newest row of any kind
+TRACK_COLUMNS = ("session", "readingCount", "at", "origin", "percent", "level", "charging", "power", "millivolts", "lastPower", "lastPercent", "lowest", "powers", "newestAt", "newestOrigin")
 
 SCHEMA = (
     "create table mice (id integer primary key, key text not null unique, name text, source text not null, firstSeen integer not null, reportsItselfSince integer, wakeSupport integer not null default 0)",
@@ -138,6 +141,26 @@ def secondsBetween(startAt, startElapsed, endAt, endElapsed):
 
 def bootClock():
     return time.clock_gettime(time.CLOCK_BOOTTIME)
+
+
+def savedTrack(db, mouseId):
+    # an older release writes rows without updating the saved state, which the open session's id and reading count then no longer match
+    found = db.execute("select " + ", ".join("tracks." + name for name in TRACK_COLUMNS) + " from tracks join sessions on sessions.id = tracks.session where tracks.mouseId = ? and sessions.endAt is null and sessions.readingCount = tracks.readingCount", (mouseId,)).fetchone()
+    if (found is None):
+        return None
+    saved = dict(zip(TRACK_COLUMNS, found))
+    try:
+        saved["powers"] = Counter({power: count for power, count in json.loads(saved["powers"])})
+    except (ValueError, TypeError):
+        return None
+    return saved
+
+
+def newestRow(db, mouseId):
+    saved = savedTrack(db, mouseId)
+    if (saved is not None):
+        return (saved["newestAt"], saved["newestOrigin"])
+    return db.execute("select at, origin from readings where mouseId = ? order by at desc, seq desc limit 1", (mouseId,)).fetchone()
 
 
 def differs(row, saved):
@@ -305,6 +328,8 @@ class Store:
             with self.transaction():
                 # a build from earlier in 1.2.0's work saved clock offsets here and moved a boot's rows by them at its next start, which would move rows saved since then a second time
                 self.db.execute("drop table if exists boots")
+                # older releases ignore a table they don't know, so this one comes without a new version, which would lock them out of the file
+                self.db.execute("create table if not exists tracks (mouseId integer primary key, session integer not null, readingCount integer not null, at integer not null, origin integer not null, percent integer, level text, charging integer, power integer, millivolts integer, lastPower integer, lastPercent integer, lowest integer, powers text not null, newestAt integer not null, newestOrigin integer not null)")
                 self.recover(int(self.clock()))
         except sqlite3.Error as error:
             if (isCorruption(error)):
@@ -327,11 +352,13 @@ class Store:
     def addRecoveryGaps(self, savedAt, now):
         # a run that ended without its gap rows, on a power loss or a kill, would leave each mouse's last level standing over the time nothing watched, so a gap goes where that run was last seen
         for (mouseId,) in self.db.execute("select id from mice").fetchall():
-            last = self.db.execute("select at, origin from readings where mouseId = ? order by at desc, seq desc limit 1", (mouseId,)).fetchone()
+            last = newestRow(self.db, mouseId)
             if (last is None or last[1] == ORIGIN_GAP):
                 continue
             # a heartbeat saved while the wall clock was ahead would put the gap after the rows this run saves
-            DbWriter(self.db, mouseId).insertReading(Row(min(max(savedAt, last[0]), now), ORIGIN_GAP))
+            at = min(max(savedAt, last[0]), now)
+            DbWriter(self.db, mouseId).insertReading(Row(at, ORIGIN_GAP))
+            self.db.execute("update tracks set newestAt = ?, newestOrigin = ? where mouseId = ?", (at, ORIGIN_GAP, mouseId))
 
     def beat(self):
         # the attempt counts even when it fails, so a full disk is tried only as often as a working one
@@ -421,6 +448,14 @@ class DbWriter:
     def updateReportsItself(self, since):
         self.db.execute("update mice set reportsItselfSince = ? where id = ?", (since, self.mouseId))
 
+    def saveTrack(self, track, newest):
+        # a reboot can set the clock back behind rows already saved, so loading takes the last reading and the open session from here instead of from the newest dates
+        session = track.session
+        last = track.last
+        if (session is None or last is None):
+            return
+        self.db.execute("insert or replace into tracks (mouseId, " + ", ".join(TRACK_COLUMNS) + ") values (?" + ", ?" * len(TRACK_COLUMNS) + ")", (self.mouseId, session.id, session.readingCount, last.at, last.origin, last.percent, last.level, last.charging, last.power, last.millivolts, track.lastPower, session.lastPercent, session.lowest, json.dumps(list(session.powers.items())), newest.at, newest.origin))
+
     def shift(self, since, moved):
         # each row goes to the next free seq of its new second in the order it was saved, so rows that land on one second keep their order
         for at, seq in self.db.execute("select at, seq from readings where mouseId = ? and at >= ? order by at, seq", (self.mouseId, since)).fetchall():
@@ -432,6 +467,8 @@ class DbWriter:
         self.db.execute("update sessions set endAt = endAt + ? where mouseId = ? and endAt >= ?", (moved, self.mouseId, since))
         self.db.execute("update mice set firstSeen = firstSeen + ? where id = ? and firstSeen >= ?", (moved, self.mouseId, since))
         self.db.execute("update mice set reportsItselfSince = reportsItselfSince + ? where id = ? and reportsItselfSince >= ?", (moved, self.mouseId, since))
+        self.db.execute("update tracks set at = at + ? where mouseId = ? and at >= ?", (moved, self.mouseId, since))
+        self.db.execute("update tracks set newestAt = newestAt + ? where mouseId = ? and newestAt >= ?", (moved, self.mouseId, since))
 
 
 class NullWriter:
@@ -1251,12 +1288,18 @@ class Recorder(QObject):
             with self.store.transaction():
                 db.execute("update mice set name = coalesce(?, name), source = ? where id = ?", (entry.name, entry.source, entry.mouseId))
                 self.writeFlags(db, entry)
-            last = db.execute("select at, origin, percent, level, charging, power, millivolts from readings where mouseId = ? and origin in (0, 1, 5) order by at desc, seq desc limit 1", (entry.mouseId,)).fetchone()
-            if (last is not None):
-                track.last = Row(*last)
-            power = db.execute("select power from readings where mouseId = ? and power is not null order by at desc, seq desc limit 1", (entry.mouseId,)).fetchone()
-            track.lastPower = None if power is None else power[0]
-            track.session = self.loadOpenSession(db, entry.mouseId, int(self.clock()), self.bootNow())
+            saved = savedTrack(db, entry.mouseId)
+            if (saved is not None):
+                track.last = Row(*(saved[name] for name in ("at", "origin", "percent", "level", "charging", "power", "millivolts")))
+                track.lastPower = saved["lastPower"]
+            else:
+                # a history an older release wrote last has no saved state to trust, so the newest dates stand in for the order the rows were saved in
+                last = db.execute("select at, origin, percent, level, charging, power, millivolts from readings where mouseId = ? and origin in (0, 1, 5) order by at desc, seq desc limit 1", (entry.mouseId,)).fetchone()
+                if (last is not None):
+                    track.last = Row(*last)
+                power = db.execute("select power from readings where mouseId = ? and power is not null order by at desc, seq desc limit 1", (entry.mouseId,)).fetchone()
+                track.lastPower = None if power is None else power[0]
+            track.session = self.loadOpenSession(db, entry.mouseId, saved, int(self.clock()), self.bootNow())
             # a step during this run moves only rows it saves, so nothing older than the newest date saved before it
             entry.runSince = None
             entry.runAfter = db.execute("select max(at) from readings where mouseId = ?", (entry.mouseId,)).fetchone()[0]
@@ -1269,8 +1312,8 @@ class Recorder(QObject):
         entry.loaded = True
         entry.pendingFlags = {}
 
-    def loadOpenSession(self, db, mouseId, now, elapsed):
-        found = db.execute("select id, kind, startAt, startPercent, readingCount, slowCount, errorCount, inferred from sessions where mouseId = ? and endAt is null order by startAt desc, id desc limit 1", (mouseId,)).fetchone()
+    def loadOpenSession(self, db, mouseId, saved, now, elapsed):
+        found = db.execute("select id, kind, startAt, startPercent, readingCount, slowCount, errorCount, inferred from sessions where mouseId = ? and endAt is null order by id desc limit 1", (mouseId,)).fetchone()
         if (found is None):
             return None
         sessionId, kind, startAt, startPercent, readingCount, slowCount, errorCount, inferred = found
@@ -1279,23 +1322,33 @@ class Recorder(QObject):
         session.readingCount = readingCount
         session.slowCount = slowCount
         session.errorCount = errorCount
-        # the session's readings are the last readingCount saved, which leaves out one the session before it saved in the same second, and its powers are counted in order so a tie goes to the power seen first, as it would have without the restart
-        counted = db.execute("select power, percent from readings where mouseId = ? and at >= ? and origin in (0, 1, 5) order by at desc, seq desc limit ?", (mouseId, startAt, readingCount)).fetchall()
-        session.powers = Counter(power for power, percent in reversed(counted) if power is not None)
-        session.lowest = min((percent for power, percent in counted if percent is not None), default=None)
         # a charge a code started is the only kind a code 0 ends, and a saved charge that isn't inferred was started by one
         session.fromCode = (kind == CHARGE and not inferred)
-        # a mouse that reports only voltage or a rough level has no percent, so the last time comes from any reading
-        lastAt = db.execute("select at from readings where mouseId = ? and at >= ? and origin in (0, 1, 5) order by at desc, seq desc limit 1", (mouseId, startAt)).fetchone()
-        if (lastAt is not None):
-            session.lastAt = lastAt[0]
-        lastPercent = db.execute("select percent from readings where mouseId = ? and at >= ? and percent is not null order by at desc, seq desc limit 1", (mouseId, startAt)).fetchone()
-        if (lastPercent is not None):
-            session.lastPercent = lastPercent[0]
+        if (saved is not None and saved["session"] == sessionId):
+            # every reading goes into the session open when it comes, so the session's last reading is the mouse's
+            session.powers = saved["powers"]
+            session.lowest = saved["lowest"]
+            session.lastAt = saved["at"]
+            session.lastPercent = saved["lastPercent"]
+        else:
+            self.countOpenSession(db, mouseId, session, readingCount)
         # an earlier run's start has no boot clock reading, so it goes on this run's as long ago as the wall clock says, or, when the wall clock is behind the session's own last reading, as long as its saved readings span
         if (elapsed is not None):
             session.startElapsed = elapsed - max(0, max(now, session.lastAt) - startAt)
         return session
+
+    def countOpenSession(self, db, mouseId, session, readingCount):
+        # the session's readings are the last readingCount saved, which leaves out one the session before it saved in the same second, and its powers are counted in order so a tie goes to the power seen first, as it would have without the restart
+        counted = db.execute("select power, percent from readings where mouseId = ? and at >= ? and origin in (0, 1, 5) order by at desc, seq desc limit ?", (mouseId, session.startAt, readingCount)).fetchall()
+        session.powers = Counter(power for power, percent in reversed(counted) if power is not None)
+        session.lowest = min((percent for power, percent in counted if percent is not None), default=None)
+        # a mouse that reports only voltage or a rough level has no percent, so the last time comes from any reading
+        lastAt = db.execute("select at from readings where mouseId = ? and at >= ? and origin in (0, 1, 5) order by at desc, seq desc limit 1", (mouseId, session.startAt)).fetchone()
+        if (lastAt is not None):
+            session.lastAt = lastAt[0]
+        lastPercent = db.execute("select percent from readings where mouseId = ? and at >= ? and percent is not null order by at desc, seq desc limit 1", (mouseId, session.startAt)).fetchone()
+        if (lastPercent is not None):
+            session.lastPercent = lastPercent[0]
 
     def write(self, entry, row):
         saving = self.ensureLoaded(entry)
@@ -1318,6 +1371,7 @@ class Recorder(QObject):
                     if (entry.needsGap and row.origin != ORIGIN_GAP):
                         track.applyMarker(Row(row.at, ORIGIN_GAP, elapsed=row.elapsed), writer)
                     self.apply(track, row, writer)
+                    writer.saveTrack(track, row)
             except sqlite3.Error as error:
                 # the rollback undid the database, and the track in memory never took the change, so the rows and sessions still agree while any flag in pendingFlags waits for the next transaction that succeeds
                 self.writeFailed(entry, error)
@@ -1468,7 +1522,8 @@ def readSummary(db, entry, key, now):
         if (power not in powers):
             powers.append(power)
     summary["charge"] = [{"power": power, "buckets": bucketEntries([(sessionId, fromPercent, minutes) for rowPower, sessionId, fromPercent, minutes in rises if rowPower == power], chargeBucket, CHARGE_BUCKETS)} for power in powers]
-    lastCharge = db.execute("select " + ", ".join(SESSION_COLUMNS) + " from sessions where mouseId = ? and kind = 1 order by startAt desc, id desc limit 1", (mouseId,)).fetchone()
+    # sessions are numbered in the order they were saved, which their dates lose once a reboot sets the clock back behind them
+    lastCharge = db.execute("select " + ", ".join(SESSION_COLUMNS) + " from sessions where mouseId = ? and kind = 1 order by id desc limit 1", (mouseId,)).fetchone()
     summary["lastCharge"] = None if lastCharge is None else dict(zip(SESSION_COLUMNS, lastCharge))
     summary["lastError"] = db.execute("select max(at) from readings where mouseId = ? and charging = ?", (mouseId, hidpp.CHARGING_ERROR)).fetchone()[0]
     summary["monthly"] = monthlySummary(db, mouseId)
@@ -1479,12 +1534,12 @@ def readSummary(db, entry, key, now):
 
 
 def openSummary(db, mouseId):
-    found = db.execute("select id, kind, startAt, startPercent from sessions where mouseId = ? and endAt is null order by startAt desc, id desc limit 1", (mouseId,)).fetchone()
+    found = db.execute("select id, kind, startAt, startPercent from sessions where mouseId = ? and endAt is null order by id desc limit 1", (mouseId,)).fetchone()
     if (found is None):
         return None
     sessionId, kind, startAt, startPercent = found
-    # time left and time to full use the open session's steps at any level
-    values = [minutes for (minutes,) in db.execute("select minutesPerPercent from steps where mouseId = ? and kind = ? and at >= ? and session = ? and unbroken = 1", (mouseId, kind, startAt, sessionId))]
+    # time left and time to full use the open session's steps at any level, found by the session alone, since a reboot that sets the clock back dates some before its start
+    values = [minutes for (minutes,) in db.execute("select minutesPerPercent from steps where mouseId = ? and kind = ? and session = ? and unbroken = 1", (mouseId, kind, sessionId))]
     return {"kind": kind, "startAt": startAt, "startPercent": startPercent, "median": statistics.median(values) if values else None, "count": len(values)}
 
 
