@@ -21,6 +21,9 @@ HOLD_SECONDS = 10
 # the hold already keeps a change of percent alone to one row per 10 s, so this only bites on codes, power, and markers that flood in
 WRITE_BURST = 30
 WRITE_REFILL_SECONDS = HOLD_SECONDS
+# a mouse's row in mice is made the first time it's seen, so a device that names a new unit id at each identify would add one a second without a limit of its own
+NEW_MICE_BURST = 10
+NEW_MICE_REFILL_SECONDS = 5 * 60
 # the probe saw a wake's battery event come with or after its wireless status event, but only on two wakes, so a reading this close before a wake counts as part of it
 WAKE_SET_SECONDS = 2
 MILLIVOLT_STEP = 20
@@ -31,6 +34,7 @@ FAILED_OPEN = "open"
 FAILED_SAVE = "save"
 FAILED_READ = "read"
 FAILED_BUDGET = "budget "
+FAILED_NEW_MICE = "new mice"
 
 ORIGIN_EVENT = 0
 ORIGIN_READ = 1
@@ -609,6 +613,8 @@ class Recorder(QObject):
         self.entries = {}
         # one count for the whole recorder, so a mouse forgotten and seen again never gets a revision an old reply already has
         self.revisions = 0
+        self.newMice = NEW_MICE_BURST
+        self.newMiceAt = None
         self.timer = None
         if (timers):
             self.timer = QTimer(self)
@@ -636,8 +642,8 @@ class Recorder(QObject):
         for row in pending:
             self.process(entry, row)
         self.flushHeld(entry)
-        # a flag change the database hasn't taken yet would be lost, so that entry stays until a save goes through, unless no save ever will
-        if (entry.pendingFlags and entry.persist and self.store is not None and not self.store.neverOpens()):
+        # a flag change the database hasn't taken yet would be lost, so that entry stays until a save goes through, unless no save ever will or the mouse has no row to save it to
+        if (entry.pendingFlags and entry.persist and entry.mouseId is not None and self.store is not None and not self.store.neverOpens()):
             return
         del self.entries[key]
         self.schedule()
@@ -900,10 +906,17 @@ class Recorder(QObject):
     def load(self, entry):
         db = self.store.db
         found = db.execute("select id, reportsItselfSince, wakeSupport, source from mice where key = ?", (entry.key,)).fetchone()
+        if (found is None and not self.takeNewMouse()):
+            # the mouse waits in memory like one whose history is closed, and its first saved row follows a gap
+            entry.needsGap = True
+            self.store.say("More new mice showed up than the history adds at once, so some aren't saved yet", FAILED_NEW_MICE)
+            return
         if (found is None):
             with self.store.transaction():
                 cursor = db.execute("insert into mice (key, name, source, firstSeen, reportsItselfSince, wakeSupport) values (?, ?, ?, ?, ?, ?)", (entry.key, entry.name, entry.source, int(self.clock()), entry.track.reportsItselfSince, int(entry.track.wakeSupport)))
             entry.mouseId = cursor.lastrowid
+            # a row made after some were left out means they're being saved again
+            self.store.works(FAILED_NEW_MICE, "New mice are saved to the history again")
             track = Track(entry.track.wakeSupport, entry.track.reportsItselfSince)
         else:
             entry.mouseId = found[0]
@@ -1005,6 +1018,16 @@ class Recorder(QObject):
         # nothing was saved, so the revision stays, but the service still has to pick up the new flag
         if (flagChanged):
             self.changed.emit(entry.key)
+
+    def takeNewMouse(self):
+        now = self.monotonic()
+        if (self.newMiceAt is not None):
+            self.newMice = min(NEW_MICE_BURST, self.newMice + (now - self.newMiceAt) / NEW_MICE_REFILL_SECONDS)
+        self.newMiceAt = now
+        if (self.newMice < 1):
+            return False
+        self.newMice -= 1
+        return True
 
     def takeBudget(self, entry):
         now = self.monotonic()

@@ -1052,6 +1052,47 @@ class RecorderTests(RecorderCase):
         self.recorder.forget(KEY, source=history.SOURCE_UPOWER)
         self.assertIn(KEY, self.recorder.entries)
 
+    def miceRows(self):
+        with self.db() as db:
+            return [key for (key,) in db.execute("select key from mice order by id")]
+
+    def testOnlyTheBudgetOfNewMiceGetRowsAtOnce(self):
+        for index in range(history.NEW_MICE_BURST + 5):
+            self.recorder.setWakeSupport("%08x" % index, True)
+        self.assertEqual(len(self.miceRows()), history.NEW_MICE_BURST)
+
+    def testAMouseLeftOutIsSavedOnceTheBudgetRefills(self):
+        for index in range(history.NEW_MICE_BURST):
+            self.recorder.setWakeSupport("%08x" % index, True)
+        self.event(0, 50, key="ffffffff")
+        self.assertNotIn("ffffffff", self.miceRows())
+        self.event(history.NEW_MICE_REFILL_SECONDS + 10, 49, key="ffffffff")
+        self.assertIn("ffffffff", self.miceRows())
+        with self.db() as db:
+            rows = db.execute("select r.origin, r.percent from readings r join mice m on m.id = r.mouseId where m.key = 'ffffffff' order by r.at, r.seq").fetchall()
+        self.assertEqual(rows, [(history.ORIGIN_GAP, None), (history.ORIGIN_EVENT, 49)])
+
+    def testAMouseWithARowAlreadyCostsNothing(self):
+        for index in range(history.NEW_MICE_BURST):
+            self.recorder.setWakeSupport("%08x" % index, True)
+        self.recorder.forget("%08x" % 0)
+        self.event(0, 50, key="%08x" % 0)
+        with self.db() as db:
+            self.assertEqual(db.execute("select count(*) from readings where origin = 0").fetchone()[0], 1)
+
+    def testNewMiceLeftOutSayItOnceAndAgainWhenTheyreSaved(self):
+        for index in range(history.NEW_MICE_BURST + 3):
+            self.recorder.setWakeSupport("%08x" % index, True)
+        self.event(history.NEW_MICE_REFILL_SECONDS + 10, 49, key="%08x" % (history.NEW_MICE_BURST + 2))
+        self.assertEqual(self.errors.getvalue().splitlines(), ["More new mice showed up than the history adds at once, so some aren't saved yet", "New mice are saved to the history again"])
+
+    def testAMouseLeftOutIsForgottenWithItsFlags(self):
+        for index in range(history.NEW_MICE_BURST + 1):
+            self.recorder.setWakeSupport("%08x" % index, True)
+        key = "%08x" % history.NEW_MICE_BURST
+        self.recorder.forget(key)
+        self.assertNotIn(key, self.recorder.entries)
+
     def flapCharging(self, seconds, count):
         # every reading comes in at the same moment, as a device flooding the node would send them
         self.clock.now = START + seconds
