@@ -861,6 +861,16 @@ class WindowTests(WindowCase):
         segments.choose(0)
         self.assertEqual(segments.animation.startValue(), before)
 
+    def testTheBoldLabelChangesAsTheThumbPassesHalfway(self):
+        window = self.opened(entry())
+        window.motionFactor = 1.0
+        segments = window.segments
+        segments.choose(2)
+        segments.animation.setCurrentTime(1)
+        self.assertEqual(segments.underThumb(), 0)
+        segments.animation.setCurrentTime(segments.animation.duration())
+        self.assertEqual(segments.underThumb(), 2)
+
     def testAPickDuringAFadePicksUpWhereItIs(self):
         window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"), )
         window.motionFactor = 1.0

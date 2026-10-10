@@ -298,6 +298,10 @@ class SegmentedControl(QWidget):
         self.thumb = QRectF(value)
         self.update()
 
+    def underThumb(self):
+        middle = self.thumb.center().x()
+        return next((index for index in range(len(self.names)) if self.segmentX(index) <= middle < self.segmentX(index + 1)), self.index)
+
     def mousePressEvent(self, event):
         if (event.button() != Qt.MouseButton.LeftButton):
             return
@@ -340,8 +344,9 @@ class SegmentedControl(QWidget):
         if (frost is not None):
             thumb = QRectF(self.thumb)
             glass.paintPanel(painter, thumb, thumb.height() / 2, frost, theme, strong=True, offset=QPointF(self.mapTo(self.owner, self.rect().topLeft())))
+        bold = self.underThumb()
         for index, name in enumerate(self.names):
-            painter.setFont(font(self.fontSize, QFont.Weight.DemiBold if index == self.index else QFont.Weight.Normal))
+            painter.setFont(font(self.fontSize, QFont.Weight.DemiBold if index == bold else QFont.Weight.Normal))
             painter.setPen(QColor(theme.text))
             painter.drawText(QRectF(self.segmentX(index), 0, self.widths[index], self.height()), int(Qt.AlignmentFlag.AlignCenter), name)
         if (self.hasFocus() and self.keyFocus):
