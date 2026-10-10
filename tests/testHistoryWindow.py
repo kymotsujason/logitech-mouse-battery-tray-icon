@@ -139,6 +139,10 @@ class WindowCase(unittest.TestCase):
         self.window.open()
         return self.window
 
+    def pastOpen(self, window):
+        # the quiet after an open is over, as it is a few seconds later
+        window.openedClock.invalidate()
+
 
 class WindowTests(WindowCase):
     def testAnOpenWindowShowsTheMouseAndItsVerdictLine(self):
@@ -655,9 +659,47 @@ class WindowTests(WindowCase):
         self.assertEqual(window.sidebar.pillAnimation.state(), QAbstractAnimation.State.Stopped)
         self.assertEqual(window.sidebar.shownPill(), window.sidebar.rowRect(window.sidebar.selectedIndex()))
 
+    def testAReopenWithANewerReplyDoesntMorphTheBars(self):
+        window = self.opened(entry())
+        window.close()
+        newer = reply("02bc524c")
+        newer["recent"] = [[NOW + 60, 20, None, None, False]]
+        self.watcher.answers["02bc524c"] = (newer, None)
+        self.state(entry(revision=2))
+        window.lastFetch.clear()
+        window.open()
+        self.assertEqual(window.levelChart.slots, newer["recent"])
+        self.assertIsNone(window.levelChart.fromRects)
+        self.assertNotEqual(window.levelChart.morph.state(), QAbstractAnimation.State.Running)
+
+    def testAReopenOnTheTraysMouseDoesntFadeTheGlow(self):
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S", reading=hidpp.BatteryReading(18, 0)))
+        shown = self.mouseList.shownMouse().key
+        other = "11111111" if shown == "02bc524c" else "02bc524c"
+        window.pick(other)
+        window.paneCrossfade.finish()
+        # the glow only fades once a paint has made the backdrop, and a closed window keeps it for the next open
+        window.grab()
+        before = QColor(window.glow)
+        window.close()
+        window.open()
+        self.assertEqual(window.glowAnimation.state(), QAbstractAnimation.State.Stopped)
+        self.assertNotEqual(window.glow, before)
+        self.assertEqual(window.glow, glass.stateColor(window.theme, window.selectedMouse(), False))
+
+    def testTheQuietAfterAnOpenEndsWithItsTime(self):
+        window = self.opened(entry())
+        self.assertTrue(window.isQuiet())
+        with mock.patch.object(window, "openedClock") as clock:
+            clock.isValid.return_value = True
+            clock.hasExpired.side_effect = lambda ms: ms <= historyWindow.OPEN_QUIET_MS
+            self.assertFalse(window.isQuiet())
+        self.pastOpen(window)
+        self.assertFalse(window.isQuiet())
+
     def testEveryAnimationUsesTheSharedEaseOut(self):
         window = self.opened(entry())
-        for animation in (window.segments.animation, window.rangeControl.animation, window.glowAnimation, window.paneCrossfade.animation, window.chartCrossfade.animation, window.sidebar.pillAnimation, window.levelChart.morph):
+        for animation in (window.segments.animation, window.rangeControl.animation, window.glowAnimation, window.paneCrossfade.animation, window.chartCrossfade.animation, window.sidebar.pillAnimation, window.levelChart.morph, window.choiceMenu.animation):
             self.assertEqual(animation.easingCurve().type(), QEasingCurve.Type.BezierSpline)
             self.assertEqual(round(animation.easingCurve().valueForProgress(0.25), 3), 0.775)
 
@@ -827,6 +869,7 @@ class WindowTests(WindowCase):
     def testTurningMotionOffFinishesWhatIsRunning(self):
         window = self.opened(entry(), entry(key="11111111", name="MX Master 3S", reading=hidpp.BatteryReading(18, 0)))
         window.motionFactor = 1.0
+        self.pastOpen(window)
         # the glow only fades once a first paint has made the backdrop
         window.grab()
         window.pick("11111111")
@@ -846,6 +889,7 @@ class WindowTests(WindowCase):
     def testTurningMotionOffFinishesTheBarMorph(self):
         window = self.opened(entry())
         window.motionFactor = 1.0
+        self.pastOpen(window)
         newer = reply("02bc524c")
         newer["recent"] = [[NOW + 60, 20, None, None, False]]
         saved = window.replies["02bc524c"]
@@ -1000,6 +1044,27 @@ class WindowTests(WindowCase):
         self.assertEqual(window.paneFade.opacity(), 0.0)
         self.assertTrue(window.paneFade.isEnabled())
 
+    def testAPickSettlesARunningChartCrossfade(self):
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))
+        window.motionFactor = 1.0
+        window.segments.choose(1)
+        window.chartCrossfade.animation.setCurrentTime(window.chartCrossfade.animation.duration() // 2)
+        window.pick("11111111" if window.selected == "02bc524c" else "02bc524c")
+        self.assertEqual(window.chartCrossfade.animation.state(), QAbstractAnimation.State.Stopped)
+        self.assertIsNone(window.chartCrossfade.picture)
+        self.assertFalse(window.chartFade.isEnabled())
+        self.assertEqual(window.paneCrossfade.animation.state(), QAbstractAnimation.State.Running)
+
+    def testAPickRightAfterARangeSwitchEndsWithBothFadesOff(self):
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))
+        window.motionFactor = 1.0
+        window.pickRange("month")
+        self.assertTrue(window.chartFade.isEnabled())
+        window.pick("11111111" if window.selected == "02bc524c" else "02bc524c")
+        window.paneCrossfade.animation.setCurrentTime(window.paneCrossfade.animation.duration())
+        self.assertEqual((window.chartFade.isEnabled(), window.paneFade.isEnabled()), (False, False))
+        self.assertEqual((window.chartCrossfade.isVisible(), window.paneCrossfade.isVisible()), (False, False))
+
     def testAChartSwitchCrossfadesFromAPictureOfTheOldChart(self):
         window = self.opened(entry())
         window.motionFactor = 1.0
@@ -1076,6 +1141,17 @@ class WindowTests(WindowCase):
         self.assertEqual(window.levelChart.emptyText(), historyWindow.RANGE_ERROR_TEXT)
         self.assertFalse(window.loadingTimer.isActive())
 
+    def testARangeErrorGivesWayToLoadingAtOnce(self):
+        window = self.opened(entry())
+        self.watcher.levelAnswers[("02bc524c", "month")] = (None, "failed on purpose")
+        window.pickRange("month")
+        self.assertEqual((window.levelChart.rangeName, window.levelChart.emptyText()), ("month", historyWindow.RANGE_ERROR_TEXT))
+        self.watcher.holdLevels = True
+        window.pickRange("year")
+        # the error belongs to the month, so it isn't held up under the year
+        self.assertEqual((window.levelChart.rangeName, window.levelChart.emptyText()), ("year", historyWindow.LOADING_TEXT))
+        self.assertFalse(window.loadingTimer.isActive())
+
     def testTheDelayAppliesAgainAfterTheLevelsAreForgotten(self):
         window = self.opened(entry())
         self.watcher.holdLevels = True
@@ -1110,6 +1186,22 @@ class WindowTests(WindowCase):
         self.assertFalse(window.paneFade.isEnabled())
         self.assertFalse(window.chartFade.isEnabled())
 
+    def testClosingFinishesTheGlowAndTheThumbs(self):
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S", reading=hidpp.BatteryReading(18, 0)))
+        window.motionFactor = 1.0
+        self.pastOpen(window)
+        window.grab()
+        window.setGlow(QColor("#FF0000"))
+        window.segments.choose(2)
+        window.rangeControl.choose(0)
+        running = (window.glowAnimation, window.segments.animation, window.rangeControl.animation)
+        for animation in running:
+            self.assertEqual(animation.state(), QAbstractAnimation.State.Running)
+        window.close()
+        for animation in running:
+            self.assertEqual(animation.state(), QAbstractAnimation.State.Stopped)
+        self.assertEqual((window.glow, window.segments.thumb), (QColor("#FF0000"), window.segments.segmentRect(2)))
+
     def testTheCrossfadeScalesWithTheMotionFactor(self):
         window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))
         window.motionFactor = 0.5
@@ -1132,6 +1224,26 @@ class WindowTests(WindowCase):
         self.assertAlmostEqual(historyWindow.pictureOpacity(0.3), 0.5)
         self.assertEqual(historyWindow.pictureOpacity(0.6), 0.0)
         self.assertEqual(historyWindow.pictureOpacity(1.0), 0.0)
+
+    def testTheOldPictureFadesOnTimeWhileTheNewContentEasesIn(self):
+        # the shared curve passes 0.6 at about a sixth of the time, so the picture fading on it was gone almost at once
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))
+        window.motionFactor = 1.0
+        fade = window.paneCrossfade
+        window.pick("11111111")
+        fade.animation.setCurrentTime(round(fade.animation.duration() * 0.3))
+        opacities = []
+
+        class RecordingPainter(historyWindow.QPainter):
+            def setOpacity(self, opacity):
+                opacities.append(opacity)
+                super().setOpacity(opacity)
+
+        with mock.patch.object(historyWindow, "QPainter", RecordingPainter):
+            fade.grab()
+        self.assertEqual(len(opacities), 1)
+        self.assertAlmostEqual(opacities[0], 0.5)
+        self.assertAlmostEqual(window.paneFade.opacity(), glass.easeOut().valueForProgress(0.3))
 
     def testTheRangeControlSitsInTheChartBoxsTopRightCorner(self):
         window = self.opened(entry())
@@ -1158,6 +1270,30 @@ class WindowTests(WindowCase):
         self.assertIsNone(window.levelChart.fromRects)
         self.assertNotEqual(window.levelChart.morph.state(), QAbstractAnimation.State.Running)
 
+    def testAFreshReplyUnderThePaneCrossfadeDoesNotMorphTheBars(self):
+        low = hidpp.BatteryReading(18, 0)
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S", reading=low))
+        window.motionFactor = 1.0
+        self.pastOpen(window)
+        shown = window.selected
+        other = "11111111" if shown == "02bc524c" else "02bc524c"
+        window.pick(other)
+        window.pick(shown)
+        window.paneCrossfade.finish()
+        # the other mouse's kept reply goes old while it isn't shown, so picking it shows that reply and asks for a fresh one
+        self.watcher.hold = True
+        window.lastFetch.clear()
+        self.state(entry(revision=2 if other == "02bc524c" else 1), entry(key="11111111", name="MX Master 3S", reading=low, revision=2 if other == "11111111" else 1))
+        window.pick(other)
+        self.assertEqual(window.paneCrossfade.animation.state(), QAbstractAnimation.State.Running)
+        key, answer = self.watcher.waiting.pop()
+        fresh = reply(key)
+        fresh["recent"] = [[NOW + 60, 5, None, None, False]]
+        answer(fresh, None)
+        self.assertEqual(window.levelChart.slots, fresh["recent"])
+        self.assertIsNone(window.levelChart.fromRects)
+        self.assertNotEqual(window.levelChart.morph.state(), QAbstractAnimation.State.Running)
+
     def testBarsReturningFromAMessageDoNotMorph(self):
         window = self.opened(entry())
         window.motionFactor = 1.0
@@ -1176,6 +1312,7 @@ class WindowTests(WindowCase):
     def testANewReadingMorphsTheBars(self):
         window = self.opened(entry())
         window.motionFactor = 1.0
+        self.pastOpen(window)
         newer = reply("02bc524c")
         newer["recent"] = [[NOW + 60, 20, None, None, False]]
         saved = window.replies["02bc524c"]
@@ -1187,6 +1324,7 @@ class WindowTests(WindowCase):
     def testClosingTheWindowFinishesTheBarMorph(self):
         window = self.opened(entry())
         window.motionFactor = 1.0
+        self.pastOpen(window)
         newer = reply("02bc524c")
         newer["recent"] = [[NOW + 60, 20, None, None, False]]
         saved = window.replies["02bc524c"]
@@ -1854,6 +1992,19 @@ class WindowTests(WindowCase):
         self.assertTrue(menu.isVisibleTo(window))
         self.assertEqual(menu.progress, 1.0)
 
+    def testTurningMotionOffWhileTheSleepMenuClosesHidesIt(self):
+        window = self.opened(entry())
+        window.motionFactor = 1.0
+        QTest.mouseClick(window.popup, Qt.MouseButton.LeftButton)
+        menu = window.choiceMenu
+        menu.animation.setCurrentTime(menu.animation.duration())
+        QTest.keyClick(menu, Qt.Key.Key_Escape)
+        self.assertTrue(menu.closing)
+        window.setPortal("reduced-motion", 1)
+        self.assertEqual(menu.animation.state(), QAbstractAnimation.State.Stopped)
+        self.assertFalse(menu.isVisibleTo(window))
+        self.assertFalse(menu.closing)
+
     def testTheSleepMenuIsInstantWhenMotionIsOff(self):
         window = self.opened(entry())
         window.motionFactor = 0.0
@@ -1923,6 +2074,57 @@ class WindowTests(WindowCase):
             menu.progress = 0.5
             menu.grab()
             self.assertEqual(layer.call_count, 1)
+
+    def menuBounds(self, menu):
+        # the panel and its shadow, which spreads past the panel and drops below it
+        grow = max(spread for spread, alpha in glass.SHADOWS) + glass.SHADOW_DROP
+        return menu.panel.adjusted(-grow, -grow, grow, grow)
+
+    def testAFadingSleepMenuPaintsOnlyAroundItsPanel(self):
+        window = self.opened(entry())
+        window.motionFactor = 1.0
+        QTest.mouseClick(window.popup, Qt.MouseButton.LeftButton)
+        menu = window.choiceMenu
+        bounds = self.menuBounds(menu)
+        ratio = menu.devicePixelRatioF()
+        layer = menu.paintLayer()
+        self.assertLessEqual(layer.width(), (bounds.width() + 2) * ratio)
+        self.assertLessEqual(layer.height(), (bounds.height() + 2) * ratio)
+        updated = []
+        with mock.patch.object(menu, "update", side_effect=lambda *args: updated.append(args)):
+            menu.onProgress(0.5)
+        self.assertEqual(len(updated), 1)
+        self.assertEqual(len(updated[0]), 1)
+        rect = QRectF(updated[0][0])
+        # the layer starts a bit smaller, scaled towards the button's center, so the repaint covers that too
+        start = historyWindow.MENU_START_SCALE
+        small = QRectF(menu.origin.x() + (bounds.x() - menu.origin.x()) * start, menu.origin.y() + (bounds.y() - menu.origin.y()) * start, bounds.width() * start, bounds.height() * start)
+        self.assertTrue(rect.contains(bounds.united(small)))
+        self.assertTrue(bounds.united(small).adjusted(-1, -1, 1, 1).contains(rect))
+
+    def testTheSleepMenuNeedsAWayToReopen(self):
+        # a press on the button while the menu fades calls it, so a menu opened without one would raise there
+        window = self.opened(entry())
+        anchor = QRectF(QPointF(window.popup.mapTo(window, QPoint(0, 0))), QSizeF(window.popup.size()))
+        with self.assertRaises(TypeError):
+            window.choiceMenu.open(historyWindow.SLEEP_CHOICES, 0, anchor, window.popup.pick)
+
+    def testAFadingSleepMenuDrawsItsLayerSmoothly(self):
+        window = self.opened(entry())
+        window.motionFactor = 1.0
+        QTest.mouseClick(window.popup, Qt.MouseButton.LeftButton)
+        menu = window.choiceMenu
+        hints = []
+
+        class RecordingPainter(historyWindow.QPainter):
+            def setRenderHint(self, hint, on=True):
+                hints.append(hint)
+                super().setRenderHint(hint, on)
+
+        with mock.patch.object(historyWindow, "QPainter", RecordingPainter):
+            menu.progress = 0.5
+            menu.grab()
+        self.assertIn(historyWindow.QPainter.RenderHint.SmoothPixmapTransform, hints)
 
     def testTheSleepMenuNeverPaintsAFullFrameWhenItStartsToMove(self):
         window = self.opened(entry())

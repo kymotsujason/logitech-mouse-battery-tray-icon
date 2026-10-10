@@ -1,4 +1,5 @@
 import ctypes
+import math
 import os
 import time
 
@@ -57,9 +58,12 @@ LOADING_DELAY_MS = 300
 THUMB_SLIDE_MS = 250
 MENU_OPEN_MS = 150
 MENU_CLOSE_MS = 120
+MENU_START_SCALE = 0.97
 GLOW_FADE_MS = 400
 BAR_MORPH_MS = 250
 FROST_EVERY_MS = 50
+# a window shown again keeps last time's bars and glow, so the replies that land as it appears change them at once instead of moving them
+OPEN_QUIET_MS = 2000
 SLEEP_CHOICES = ((0, "Off"), (30, "Every 30 seconds"), (60, "Every minute"), (300, "Every 5 minutes"))
 # the button shows the choice short, so the label beside it fits, while its menu names each one in full
 SLEEP_SHORT = {0: "Off", 30: "30 s", 60: "1 min", 300: "5 min"}
@@ -386,7 +390,7 @@ class ChoiceMenu(QWidget):
         self.setAccessibleName(SLEEP_LABEL)
         self.hide()
 
-    def open(self, choices, value, anchor, onPick, onReopen=None):
+    def open(self, choices, value, anchor, onPick, onReopen):
         self.choices = choices
         self.marked = next((index for index, (choice, name) in enumerate(choices) if choice == value), 0)
         self.setHover(self.marked)
@@ -413,14 +417,14 @@ class ChoiceMenu(QWidget):
             self.returnReason = Qt.FocusReason.TabFocusReason if getattr(focused, "keyFocus", False) else Qt.FocusReason.OtherFocusReason
         self.origin = anchor.center()
         self.closing = False
+        # reopening mid close grows back from where the fade got to
+        start = self.progress if self.isVisible() and self.progress < 1.0 else 0.0
         self.show()
         self.raise_()
         self.setFocus()
         duration = int(MENU_OPEN_MS * self.owner.motionFactor)
         self.animation.stop()
         if (duration > 0):
-            # reopening mid close grows back from where the fade got to
-            start = self.progress if self.isVisible() and self.progress < 1.0 else 0.0
             self.animation.setStartValue(start)
             self.animation.setEndValue(1.0)
             self.animation.setDuration(duration)
@@ -432,7 +436,19 @@ class ChoiceMenu(QWidget):
 
     def onProgress(self, value):
         self.progress = float(value)
-        self.update()
+        # the menu covers the whole window, so a frame repaints only what the layer can reach instead of everything under it
+        self.update(self.motionRect().toAlignedRect())
+
+    def layerRect(self):
+        # the panel and its shadow, which spreads past the panel and drops below it
+        grow = max(spread for spread, alpha in glass.SHADOWS) + glass.SHADOW_DROP
+        return QRectF(self.panel.adjusted(-grow, -grow, grow, grow).toAlignedRect())
+
+    def motionRect(self):
+        # the layer scales towards the button's center, so the smallest frame can reach past the layer's own rect
+        layer = self.layerRect()
+        small = QRectF(self.origin.x() + (layer.x() - self.origin.x()) * MENU_START_SCALE, self.origin.y() + (layer.y() - self.origin.y()) * MENU_START_SCALE, layer.width() * MENU_START_SCALE, layer.height() * MENU_START_SCALE)
+        return layer.united(small)
 
     def settle(self):
         if (self.closing):
@@ -471,7 +487,7 @@ class ChoiceMenu(QWidget):
             self.hide()
 
     def hideEvent(self, event):
-        # a minimize sends children a spontaneous hide without hiding them, and the fade has to carry on through it
+        # a minimize that leaves the focus on the menu sends it a spontaneous hide without hiding it, so the fade carries on, while on KDE the window loses the focus first and focusOutEvent has hidden the menu already
         if (not event.spontaneous()):
             self.animation.stop()
             self.progress = 1.0
@@ -540,21 +556,24 @@ class ChoiceMenu(QWidget):
             self.paintMenu(painter)
             return
         # the menu opens over its button, so it grows out of the button instead of its own center
-        scale = 0.97 + 0.03 * self.progress
+        scale = MENU_START_SCALE + (1.0 - MENU_START_SCALE) * self.progress
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         painter.setOpacity(self.progress)
         painter.translate(self.origin)
         painter.scale(scale, scale)
         painter.translate(-self.origin)
-        painter.drawPixmap(0, 0, self.paintLayer())
+        painter.drawPixmap(self.layerRect().topLeft(), self.paintLayer())
 
     def paintLayer(self):
         # drawn whole at full opacity first, so the panel doesn't show its own shadow through itself while it fades
+        rect = self.layerRect()
         ratio = self.devicePixelRatioF()
-        layer = QPixmap(int(self.width() * ratio), int(self.height() * ratio))
+        layer = QPixmap(math.ceil(rect.width() * ratio), math.ceil(rect.height() * ratio))
         layer.setDevicePixelRatio(ratio)
         layer.fill(Qt.GlobalColor.transparent)
         painter = QPainter(layer)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.translate(-rect.topLeft())
         self.paintMenu(painter)
         painter.end()
         return layer
@@ -662,7 +681,8 @@ class Crossfade(QWidget):
         super().__init__(parent)
         self.owner = window
         self.picture = None
-        self.progress = 1.0
+        # the share of the time gone, which the picture fades on, since the eased progress passes 0.6 at about a sixth of the time and a switch would read as a fade up instead of a handover
+        self.elapsed = 1.0
         self.fade = None
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.animation = QVariantAnimation(self)
@@ -686,7 +706,7 @@ class Crossfade(QWidget):
             return
         self.picture = source.grab()
         self.setGeometry(source.geometry())
-        self.progress = 0.0
+        self.elapsed = 0.0
         fade.setOpacity(0.0)
         fade.setEnabled(True)
         self.raise_()
@@ -695,7 +715,7 @@ class Crossfade(QWidget):
         self.animation.start()
 
     def onStep(self, value):
-        self.progress = value
+        self.elapsed = self.animation.currentTime() / max(1, self.animation.duration())
         self.fade.setOpacity(value)
         self.update()
 
@@ -708,7 +728,7 @@ class Crossfade(QWidget):
         if (self.picture is None):
             return
         painter = QPainter(self)
-        painter.setOpacity(pictureOpacity(self.progress))
+        painter.setOpacity(pictureOpacity(self.elapsed))
         painter.drawPixmap(0, 0, self.picture)
 
 
@@ -878,6 +898,7 @@ class HistoryWindow(QWidget):
         self.watchedHandle = None
         self.watchedScreen = None
         self.frostClock = QElapsedTimer()
+        self.openedClock = QElapsedTimer()
         self.replies = {}
         self.errors = {}
         self.notRefreshed = set()
@@ -1008,6 +1029,7 @@ class HistoryWindow(QWidget):
         self.readPortal()
         # shown before the refresh, since the window only asks for a history while it's visible
         if (not self.isVisible()):
+            self.openedClock.start()
             # a window opened from the tray starts on the tray's mouse
             self.selected = None
             self.wanted = None
@@ -1032,6 +1054,9 @@ class HistoryWindow(QWidget):
         self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized)
         self.raise_()
         self.activateWindow()
+
+    def isQuiet(self):
+        return self.openedClock.isValid() and not self.openedClock.hasExpired(OPEN_QUIET_MS)
 
     def checkBlur(self):
         self.blurred = desktopBlurAvailable()
@@ -1131,6 +1156,8 @@ class HistoryWindow(QWidget):
         self.loadingShown = None
         duration = int(PANE_FADE_MS * self.motionFactor) if self.isVisible() else 0
         self.paneCrossfade.start(self.content, duration, self.paneFade)
+        # settled after the pane's picture, so that picture keeps the chart as it stood partway through its own fade
+        self.chartCrossfade.finish()
         self.refresh()
 
     def nameSegments(self):
@@ -1239,10 +1266,7 @@ class HistoryWindow(QWidget):
         self.errors.clear()
         self.levelErrors.clear()
         self.loadingShown = None
-        self.paneCrossfade.finish()
-        self.chartCrossfade.finish()
-        if (self.levelChart.morph.state() == QAbstractAnimation.State.Running):
-            self.levelChart.morph.setCurrentTime(self.levelChart.morph.duration())
+        self.finishAnimations()
         self.choiceMenu.hide()
         for timer in (self.fetchTimer, self.retryTimer, self.ageTimer, self.blurTimer, self.levelRetryTimer, self.loadingTimer):
             timer.stop()
@@ -1495,9 +1519,9 @@ class HistoryWindow(QWidget):
 
     def fillLevels(self, summary, key, voltage, rough):
         rangeName = self.levelRange
-        # bars morph only for a refresh of the bars the user was looking at, not under a crossfade, for another mouse, or after a message hid them
-        crossfading = self.chartCrossfade.animation.state() == QAbstractAnimation.State.Running
-        steady = not crossfading and self.levelChartKey == key and self.levelChartWasShown
+        # bars morph only for a refresh of the bars the user was looking at, not as the window opens, under a crossfade, for another mouse, or after a message hid them
+        crossfading = any(fade.animation.state() == QAbstractAnimation.State.Running for fade in (self.chartCrossfade, self.paneCrossfade))
+        steady = not crossfading and not self.isQuiet() and self.levelChartKey == key and self.levelChartWasShown
         self.levelChart.morphMs = int(BAR_MORPH_MS * self.motionFactor) if steady else 0
         if (rangeName == "week"):
             # the history reply already holds the week, so the default range costs no call
@@ -1524,8 +1548,8 @@ class HistoryWindow(QWidget):
             self.loadingTimer.stop()
             self.levelChart.setSlots([], voltage, rangeName, message=RANGE_ERROR_TEXT)
             self.levelChartKey = key
-        elif (error is None and self.levelChartKey == key and self.levelChart.rangeName != rangeName and self.loadingShown != (key, rangeName)):
-            # the old bars stay up for a moment, since the reply usually comes before the word would be worth showing
+        elif (error is None and self.levelChartKey == key and self.levelChart.rangeName != rangeName and self.levelChart.message is None and self.loadingShown != (key, rangeName)):
+            # the old bars stay up for a moment, since the reply usually comes before the word would be worth showing, while another range's message gives way at once
             if (not self.loadingTimer.isActive()):
                 self.loadingTimer.start()
         else:
@@ -1558,7 +1582,7 @@ class HistoryWindow(QWidget):
             return
         duration = int(GLOW_FADE_MS * self.motionFactor)
         self.glowAnimation.stop()
-        if (duration > 0 and self.isVisible() and self.backdrop is not None):
+        if (duration > 0 and self.isVisible() and self.backdrop is not None and not self.isQuiet()):
             self.glowAnimation.setStartValue(QColor(self.glow))
             self.glowAnimation.setEndValue(QColor(color))
             self.glowAnimation.setDuration(duration)

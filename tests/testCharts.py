@@ -163,6 +163,22 @@ class LevelChartTests(ChartCase):
             chart.setSlots(slots(percent=40))
             self.assertIsNone(chart.fromRects)
 
+    def testSlotsThatMovedByASlotChangeAtOnce(self):
+        # bars pair up by index, so after a shift of a slot each bar would move towards its neighbor's old height
+        chart = self.make(charts.LevelChart())
+        chart.resize(700, 238)
+        chart.morphMs = 100
+        chart.setSlots(slots(percent=40))
+        chart.show()
+        shifted = [[slot[0] + 7200, 80] + slot[2:] for slot in slots()]
+        chart.setSlots(shifted)
+        self.assertIsNone(chart.fromRects)
+        self.assertEqual(chart.morphProgress, 1.0)
+        nudged = [[slot[0] + 7200 + 300, 40] + slot[2:] for slot in slots()]
+        chart.setSlots(nudged)
+        self.assertIsNotNone(chart.fromRects)
+        self.assertEqual(chart.morph.state(), QAbstractAnimation.State.Running)
+
     def testARefreshThatChangesNothingLeavesARunningMorphAlone(self):
         chart = self.make(charts.LevelChart())
         chart.resize(700, 238)

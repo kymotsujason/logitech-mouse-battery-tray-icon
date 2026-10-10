@@ -141,7 +141,9 @@ class LevelChart(Chart):
             # nothing changed, so a morph still running carries on
             self.update()
             return
-        morphs = self.morphMs > 0 and self.isVisible() and rangeName == self.rangeName and message is None and self.message is None and len(slots) == len(self.slots) and slots != self.slots
+        # every slot edge follows the reply's own moment, so once they've moved half a slot each bar would morph towards its neighbor's old height
+        shifted = len(slots) > 1 and len(self.slots) > 1 and abs(slots[-1][0] - self.slots[-1][0]) * 2 >= self.slots[-1][0] - self.slots[-2][0]
+        morphs = self.morphMs > 0 and self.isVisible() and rangeName == self.rangeName and message is None and self.message is None and len(slots) == len(self.slots) and slots != self.slots and not shifted
         # taken before the slots change, so a morph in progress carries on from what's drawn
         rects = [self.shownRect(index) for index in range(len(self.slots))] if morphs else None
         self.morph.stop()
