@@ -25,10 +25,11 @@ START = 1800000000
 
 
 class Clock:
-    # the wall clock a test sets, and a monotonic one that moves forward with it but stays put when it steps back
+    # the wall clock a test sets, a monotonic one that moves forward with it but stays put when it steps back or the machine sleeps, and a boot clock that counts a sleep too
     def __init__(self, now=START):
         self.wall = now
         self.steady = 0.0
+        self.boot = 0.0
 
     @property
     def now(self):
@@ -36,7 +37,9 @@ class Clock:
 
     @now.setter
     def now(self, value):
-        self.steady += max(0, value - self.wall)
+        forward = max(0, value - self.wall)
+        self.steady += forward
+        self.boot += forward
         self.wall = value
 
     def __call__(self):
@@ -46,12 +49,16 @@ class Clock:
         return self.steady
 
     def boottime(self):
-        # nothing in a test suspends, so the boot clock is the monotonic one
-        return self.steady
+        return self.boot
 
     def jump(self, seconds):
         # a correction of the wall clock alone, which the monotonic and boot clocks never see
         self.wall += seconds
+
+    def suspend(self, seconds):
+        # the wall and boot clocks run on through a suspend while the monotonic one stops
+        self.wall += seconds
+        self.boot += seconds
 
 
 def battery(percent, charging=0, power=0, level=None, millivolts=None):
@@ -790,6 +797,15 @@ class ClockStepTests(RecorderCase):
         self.clock.jump(-2 * 60 * 60)
         self.event(-3600, 78)
         self.assertEqual(self.sessions()[0][3], 80)
+
+    def testASuspendInsideAStepCountsTowardItsLength(self):
+        self.recorder.setWakeSupport(KEY, True)
+        self.event(0, 80)
+        self.event(1800, 79)
+        # the monotonic clock stops for the hour the laptop sleeps, while the boot clock counts it
+        self.clock.suspend(60 * 60)
+        self.event(7200, 78)
+        self.assertEqual(self.steps()[-1][2:5], (90.0, 79, 78))
 
 
 class ReportsItselfTests(RecorderCase):
