@@ -1459,14 +1459,15 @@ class HistoryWindow(QWidget):
             return
         name = self.mouseList.displayNames()[mouse.key]
         reply = self.replies.get(mouse.key)
-        self.health = health.assess(reply.summary, mouse.reading) if reply is not None else None
+        messageText = self.historyMessage(mouse)
+        # a kept reply outlives a lost service, and its time left and its warning would speak for a history the pane no longer shows
+        self.health = health.assess(reply.summary, mouse.reading) if reply is not None and messageText is None else None
         state = self.iconStateFor(mouse)
         self.mouseIcon.setState(state, theme)
         self.setStateIcon(state)
         self.nameLabel.setText(name.upper())
         self.levelLabel.setText(capitalized(hidpp.levelText(mouse.reading)) if mouse.reading is not None else "")
-        self.statusLabel.setText(statusWords(mouse) + (health.statusSuffix(self.health) if self.health is not None else ""))
-        messageText = self.historyMessage(mouse)
+        self.statusLabel.setText(statusWords(mouse) + (health.statusSuffix(self.health) if self.health is not None and not mouse.stale else ""))
         if (messageText is not None):
             self.message.setText(messageText)
             self.showParts(summary=True, history=False, paneMessage=False)

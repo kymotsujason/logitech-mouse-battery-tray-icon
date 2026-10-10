@@ -192,6 +192,35 @@ class WindowTests(WindowCase):
         self.mouseList.applyService(None)
         self.assertEqual(window.message.text(), historyWindow.NO_SERVICE_TEXT)
 
+    def discharging(self, key="02bc524c"):
+        summary = reply(key)
+        summary["open"] = {"kind": history.DISCHARGE, "startAt": NOW - 3600, "startPercent": 80, "median": 12.0, "count": 5}
+        return summary
+
+    def testALostServiceDropsTheTimeLeft(self):
+        self.watcher.answers["02bc524c"] = (self.discharging(), None)
+        window = self.opened(entry())
+        self.assertIn(", about 12 hours left", window.statusLabel.text())
+        self.mouseList.applyService(None)
+        self.assertTrue(window.selectedMouse().stale)
+        self.assertEqual(window.message.text(), historyWindow.NO_SERVICE_TEXT)
+        self.assertNotIn("left", window.statusLabel.text())
+
+    def testALostServiceDropsTheTimeLeftAndTheWarningForAUPowerMouse(self):
+        # UPower still reads the mouse, so its reading isn't stale, while the history and its figures are gone
+        self.watcher.answers["02bc524c"] = (self.discharging(), None)
+        window = self.upowerWindow()
+        warned = health.Health(lines=[health.Line(health.DRAIN, "A charge lasts less.")], symbol=health.SYMBOL_WARNING, timeLeft=744.0)
+        with mock.patch.object(historyWindow.health, "assess", return_value=warned):
+            window.open()
+            self.assertIn(", about 12 hours left", window.statusLabel.text())
+            self.assertEqual(window.glow, QColor(window.theme.orange))
+            self.mouseList.applyService(None)
+        self.assertFalse(window.selectedMouse().stale)
+        self.assertEqual(window.message.text(), historyWindow.NO_SERVICE_TEXT)
+        self.assertNotIn("left", window.statusLabel.text())
+        self.assertEqual(window.glow, glass.stateColor(window.theme, window.selectedMouse(), False))
+
     def testAPathKeyMouseSaysItsHistoryCantBeKept(self):
         window = self.opened(entry(key="/dev/hidraw4#1", pathKey=True))
         self.assertEqual(window.message.text(), historyWindow.NO_SERIAL_TEXT)
