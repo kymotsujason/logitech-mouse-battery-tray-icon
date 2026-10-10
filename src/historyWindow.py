@@ -562,6 +562,66 @@ class PopupButton(QWidget):
             paintFocusRing(painter, QRectF(self.rect()), self.height() / 2)
 
 
+def pictureOpacity(progress):
+    return max(0.0, 1.0 - progress / 0.6)
+
+
+class Crossfade(QWidget):
+    # a picture of what was showing, laid over its place while the new content fades in, so a switch hands over instead of blinking through an empty panel
+    def __init__(self, window, parent):
+        super().__init__(parent)
+        self.owner = window
+        self.picture = None
+        self.progress = 1.0
+        self.fade = None
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.animation = QVariantAnimation(self)
+        self.animation.setEasingCurve(glass.easeOut())
+        self.animation.setStartValue(0.0)
+        self.animation.setEndValue(1.0)
+        self.animation.valueChanged.connect(self.onStep)
+        self.animation.finished.connect(self.done)
+        self.hide()
+
+    def finish(self):
+        if (self.animation.state() == QAbstractAnimation.State.Running):
+            self.animation.setCurrentTime(self.animation.duration())
+
+    def start(self, source, durationMs, fade):
+        # fade is the QGraphicsOpacityEffect on the incoming content, stepped with the picture
+        self.finish()
+        self.fade = fade
+        if (durationMs <= 0 or not source.isVisible()):
+            fade.setEnabled(False)
+            return
+        self.picture = source.grab()
+        self.setGeometry(source.geometry())
+        self.progress = 0.0
+        fade.setOpacity(0.0)
+        fade.setEnabled(True)
+        self.raise_()
+        self.show()
+        self.animation.setDuration(durationMs)
+        self.animation.start()
+
+    def onStep(self, value):
+        self.progress = value
+        self.fade.setOpacity(value)
+        self.update()
+
+    def done(self):
+        self.fade.setEnabled(False)
+        self.picture = None
+        self.hide()
+
+    def paintEvent(self, event):
+        if (self.picture is None):
+            return
+        painter = QPainter(self)
+        painter.setOpacity(pictureOpacity(self.progress))
+        painter.drawPixmap(0, 0, self.picture)
+
+
 class Sidebar(QWidget):
     picked = pyqtSignal(str)
 
@@ -783,13 +843,10 @@ class HistoryWindow(QWidget):
         # an opacity effect draws its widget from a cached image, and with the chart's own fade inside it a changed chart never showed, so each fade is only on while it runs
         self.paneFade.setEnabled(False)
         self.pane.setGraphicsEffect(self.paneFade)
-        self.paneAnimation = QVariantAnimation(self)
-        self.paneAnimation.setEasingCurve(glass.easeOut())
-        self.paneAnimation.valueChanged.connect(lambda value: self.paneFade.setOpacity(value))
-        self.paneAnimation.finished.connect(lambda: self.paneFade.setEnabled(False))
         # the pane clips and everything in it lives on the content, which slides under the pane when the screen has less room than the layout needs
         self.content = QWidget(self.pane)
         self.content.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.paneCrossfade = Crossfade(self, self.pane)
         self.vScroll = QScrollBar(Qt.Orientation.Vertical, self)
         self.hScroll = QScrollBar(Qt.Orientation.Horizontal, self)
         self.vScroll.valueChanged.connect(lambda value: self.scrollTo(self.scrollX, value))
@@ -819,10 +876,8 @@ class HistoryWindow(QWidget):
         self.rangeControl.chosen.connect(lambda index: self.pickRange(RANGE_NAMES[index]))
         self.nameRangeControl()
         self.chartFade = QGraphicsOpacityEffect(self.levelChart)
-        self.chartAnimation = QVariantAnimation(self)
-        self.chartAnimation.setEasingCurve(glass.easeOut())
-        self.chartAnimation.valueChanged.connect(lambda value: self.chartFade.setOpacity(value))
-        self.chartAnimation.finished.connect(lambda: self.chartFade.setEnabled(False))
+        self.chartCrossfade = Crossfade(self, self.content)
+        self.rangeControl.raise_()
         self.formLabels = [label(self.content, 13) for index in range(4)]
         self.formValues = [label(self.content, 13) for index in range(3)]
         for widget, text in zip(self.formLabels, ("Charge cycles", "Last charged", "Charging speed", "Check whether mice are asleep")):
@@ -918,7 +973,7 @@ class HistoryWindow(QWidget):
                 self.finishAnimations()
 
     def finishAnimations(self):
-        for animation in (self.glowAnimation, self.paneAnimation, self.chartAnimation, self.segments.animation, self.rangeControl.animation, self.sidebar.pillAnimation):
+        for animation in (self.glowAnimation, self.paneCrossfade.animation, self.chartCrossfade.animation, self.segments.animation, self.rangeControl.animation, self.sidebar.pillAnimation):
             if (animation.state() == QAbstractAnimation.State.Running):
                 animation.setCurrentTime(animation.duration())
 
@@ -968,19 +1023,8 @@ class HistoryWindow(QWidget):
         if (key == self.selected):
             return
         self.selected = key
-        # a fade still running carries on from its opacity, over the share of the time that's left
-        start = self.paneFade.opacity() if self.paneAnimation.state() == QAbstractAnimation.State.Running else 0.0
-        duration = int(PANE_FADE_MS * self.motionFactor * (1.0 - start))
-        self.paneAnimation.stop()
-        if (duration > 0 and self.isVisible()):
-            self.paneFade.setOpacity(start)
-            self.paneFade.setEnabled(True)
-            self.paneAnimation.setStartValue(start)
-            self.paneAnimation.setEndValue(1.0)
-            self.paneAnimation.setDuration(duration)
-            self.paneAnimation.start()
-        else:
-            self.paneFade.setEnabled(False)
+        duration = int(PANE_FADE_MS * self.motionFactor) if self.isVisible() else 0
+        self.paneCrossfade.start(self.content, duration, self.paneFade)
         self.refresh()
 
     def nameSegments(self):
@@ -1055,23 +1099,20 @@ class HistoryWindow(QWidget):
         self.nameSegments()
         self.rangeControl.setVisible(index == 0)
         chart = self.charts[index]
-        for other in self.charts:
-            if (other is not chart):
-                other.hide()
-        start = self.chartFade.opacity() if self.chartAnimation.state() == QAbstractAnimation.State.Running else 0.0
+        # a new effect on a chart replaces the old one, so a fade still running ends before that
+        self.chartCrossfade.finish()
+        old = next((each for each in self.charts if each.isVisible()), None)
         self.chartFade = QGraphicsOpacityEffect(chart)
         chart.setGraphicsEffect(self.chartFade)
         chart.show()
-        duration = int(CHART_FADE_MS * self.motionFactor * (1.0 - start))
-        self.chartAnimation.stop()
-        if (duration > 0):
-            self.chartFade.setOpacity(start)
-            self.chartAnimation.setStartValue(start)
-            self.chartAnimation.setEndValue(1.0)
-            self.chartAnimation.setDuration(duration)
-            self.chartAnimation.start()
+        if (old is not None and old is not chart):
+            # the picture is taken while the old chart is still up
+            self.chartCrossfade.start(old, int(CHART_FADE_MS * self.motionFactor), self.chartFade)
         else:
             self.chartFade.setEnabled(False)
+        for other in self.charts:
+            if (other is not chart):
+                other.hide()
         mouse = self.selectedMouse()
         if (mouse is not None):
             self.updateRefreshLine(mouse.key)

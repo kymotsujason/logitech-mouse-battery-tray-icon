@@ -655,7 +655,7 @@ class WindowTests(WindowCase):
 
     def testEveryAnimationUsesTheSharedEaseOut(self):
         window = self.opened(entry())
-        for animation in (window.segments.animation, window.rangeControl.animation, window.glowAnimation, window.paneAnimation, window.chartAnimation):
+        for animation in (window.segments.animation, window.rangeControl.animation, window.glowAnimation, window.paneCrossfade.animation, window.chartCrossfade.animation):
             self.assertEqual(animation.easingCurve().type(), QEasingCurve.Type.BezierSpline)
             self.assertEqual(round(animation.easingCurve().valueForProgress(0.25), 3), 0.775)
 
@@ -666,11 +666,11 @@ class WindowTests(WindowCase):
         self.assertFalse(window.paneFade.isEnabled())
         window.showChart(1)
         self.assertTrue(window.chartFade.isEnabled())
-        window.chartAnimation.setCurrentTime(window.chartAnimation.duration())
+        window.chartCrossfade.animation.setCurrentTime(window.chartCrossfade.animation.duration())
         self.assertFalse(window.chartFade.isEnabled())
         window.pick("11111111")
         self.assertTrue(window.paneFade.isEnabled())
-        window.paneAnimation.setCurrentTime(window.paneAnimation.duration())
+        window.paneCrossfade.animation.setCurrentTime(window.paneCrossfade.animation.duration())
         self.assertFalse(window.paneFade.isEnabled())
 
     def testTurningMotionOffMidFadeLeavesTheFadeOff(self):
@@ -809,7 +809,7 @@ class WindowTests(WindowCase):
         window.onPortalSetting(self.portalSignal("reduced-motion", 1))
         self.assertEqual(window.motionFactor, 0.0)
         window.pick("11111111")
-        self.assertEqual((window.paneAnimation.state(), window.paneFade.isEnabled()), (QAbstractAnimation.State.Stopped, False))
+        self.assertEqual((window.paneCrossfade.animation.state(), window.paneFade.isEnabled()), (QAbstractAnimation.State.Stopped, False))
 
     def testAKnownReducedMotionSurvivesAReopen(self):
         window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))
@@ -818,7 +818,7 @@ class WindowTests(WindowCase):
         window.open()
         self.assertEqual(window.motionFactor, 0.0)
         window.pick("11111111")
-        self.assertEqual(window.paneAnimation.state(), QAbstractAnimation.State.Stopped)
+        self.assertEqual(window.paneCrossfade.animation.state(), QAbstractAnimation.State.Stopped)
         window.setPortal("reduced-motion", 0)
         self.assertEqual(window.motionFactor, 1.0)
 
@@ -830,7 +830,7 @@ class WindowTests(WindowCase):
         window.pick("11111111")
         window.segments.choose(2)
         window.setGlow(QColor("#FF0000"))
-        running = (window.paneAnimation, window.chartAnimation, window.segments.animation, window.glowAnimation)
+        running = (window.paneCrossfade.animation, window.chartCrossfade.animation, window.segments.animation, window.glowAnimation)
         for animation in running:
             self.assertEqual(animation.state(), QAbstractAnimation.State.Running)
         window.setPortal("reduced-motion", 1)
@@ -897,36 +897,91 @@ class WindowTests(WindowCase):
         self.assertEqual(sidebar.pillAnimation.state(), QAbstractAnimation.State.Running)
         self.assertEqual(sidebar.pillAnimation.currentTime(), 100)
 
-    def testAPickDuringAFadePicksUpWhereItIs(self):
-        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"), )
+    def testAPickCrossfadesFromAPictureOfTheOldPane(self):
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))
         window.motionFactor = 1.0
+        fade = window.paneCrossfade
+        self.assertFalse(fade.isVisible())
         window.pick("11111111")
-        self.assertEqual(window.paneAnimation.startValue(), 0.0)
-        window.paneAnimation.setCurrentTime(window.paneAnimation.duration() // 2)
-        halfway = window.paneFade.opacity()
-        self.assertGreater(halfway, 0.3)
-        window.pick("02bc524c")
-        self.assertAlmostEqual(window.paneFade.opacity(), halfway)
-        self.assertAlmostEqual(window.paneAnimation.startValue(), halfway)
-        self.assertLess(window.paneAnimation.duration(), historyWindow.PANE_FADE_MS)
+        self.assertTrue(fade.isVisible())
+        self.assertIsNotNone(fade.picture)
         self.assertTrue(window.paneFade.isEnabled())
-        self.assertEqual(window.paneAnimation.state(), QAbstractAnimation.State.Running)
-        window.paneAnimation.setCurrentTime(window.paneAnimation.duration())
-        window.pick("11111111")
-        self.assertEqual(window.paneAnimation.startValue(), 0.0)
-        self.assertEqual(window.paneAnimation.duration(), historyWindow.PANE_FADE_MS)
+        self.assertEqual(fade.animation.duration(), historyWindow.PANE_FADE_MS)
+        fade.animation.setCurrentTime(fade.animation.duration())
+        self.assertFalse(fade.isVisible())
+        self.assertIsNone(fade.picture)
+        self.assertFalse(window.paneFade.isEnabled())
 
-    def testAChartSwitchDuringAFadePicksUpWhereItIs(self):
+    def testAPickWithMotionOffShowsNoPicture(self):
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))
+        window.motionFactor = 0.0
+        window.pick("11111111")
+        self.assertFalse(window.paneCrossfade.isVisible())
+        self.assertFalse(window.paneFade.isEnabled())
+
+    def testAPickDuringACrossfadeStartsAFreshPicture(self):
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))
+        window.motionFactor = 1.0
+        fade = window.paneCrossfade
+        window.pick("11111111")
+        first = fade.picture
+        fade.animation.setCurrentTime(fade.animation.duration() // 2)
+        window.pick("02bc524c")
+        self.assertIsNot(fade.picture, first)
+        self.assertLess(fade.animation.currentTime(), 20)
+        self.assertEqual(fade.animation.state(), QAbstractAnimation.State.Running)
+        self.assertEqual(window.paneFade.opacity(), 0.0)
+        self.assertTrue(window.paneFade.isEnabled())
+
+    def testAChartSwitchCrossfadesFromAPictureOfTheOldChart(self):
         window = self.opened(entry())
         window.motionFactor = 1.0
-        window.showChart(1)
-        window.chartAnimation.setCurrentTime(window.chartAnimation.duration() // 2)
-        halfway = window.chartFade.opacity()
-        self.assertGreater(halfway, 0.3)
-        window.showChart(2)
-        self.assertAlmostEqual(window.chartFade.opacity(), halfway)
-        self.assertAlmostEqual(window.chartAnimation.startValue(), halfway)
-        self.assertLess(window.chartAnimation.duration(), historyWindow.CHART_FADE_MS)
+        fade = window.chartCrossfade
+        self.assertFalse(fade.isVisible())
+        window.segments.choose(1)
+        self.assertTrue(fade.isVisible())
+        self.assertIsNotNone(fade.picture)
+        self.assertTrue(window.chartFade.isEnabled())
+        self.assertFalse(window.levelChart.isVisible())
+        fade.animation.setCurrentTime(fade.animation.duration())
+        self.assertFalse(fade.isVisible())
+        self.assertFalse(window.chartFade.isEnabled())
+
+    def testAChartSwitchWithMotionOffShowsNoPicture(self):
+        window = self.opened(entry())
+        window.motionFactor = 0.0
+        window.segments.choose(1)
+        self.assertFalse(window.chartCrossfade.isVisible())
+        self.assertFalse(window.chartFade.isEnabled())
+
+    def testAChartSwitchDuringACrossfadeStartsAFreshPicture(self):
+        window = self.opened(entry())
+        window.motionFactor = 1.0
+        fade = window.chartCrossfade
+        window.segments.choose(1)
+        first = fade.picture
+        fade.animation.setCurrentTime(fade.animation.duration() // 2)
+        window.segments.choose(2)
+        self.assertIsNot(fade.picture, first)
+        self.assertLess(fade.animation.currentTime(), 20)
+        self.assertEqual(fade.animation.state(), QAbstractAnimation.State.Running)
+        self.assertEqual(window.chartFade.opacity(), 0.0)
+
+    def testReturningToAChartMidCrossfadeKeepsTheEffectsValid(self):
+        window = self.opened(entry())
+        window.motionFactor = 1.0
+        window.segments.choose(1)
+        window.segments.choose(0)
+        window.segments.choose(1)
+        window.chartCrossfade.animation.setCurrentTime(window.chartCrossfade.animation.duration())
+        self.assertFalse(window.chartFade.isEnabled())
+        self.assertFalse(window.chartCrossfade.isVisible())
+
+    def testTheOldPictureIsGoneBySixtyPercent(self):
+        self.assertEqual(historyWindow.pictureOpacity(0.0), 1.0)
+        self.assertAlmostEqual(historyWindow.pictureOpacity(0.3), 0.5)
+        self.assertEqual(historyWindow.pictureOpacity(0.6), 0.0)
+        self.assertEqual(historyWindow.pictureOpacity(1.0), 0.0)
 
     def testTheRangeControlSitsInTheChartBoxsTopRightCorner(self):
         window = self.opened(entry())
