@@ -3,7 +3,9 @@ import gc
 import io
 import os
 import shutil
+import signal
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import time
@@ -1760,6 +1762,41 @@ class RecoveryTests(RecorderCase):
             self.assertTrue(self.recorder.available())
         self.assertIn("Couldn't save to the history: attempt to write a readonly database", self.errors.getvalue())
         self.assertEqual(self.recorder.summary(KEY)["name"], "PRO X3 SUPERSTRIKE")
+
+    def testASigkilledRecorderKeepsItsCommitsAndGetsItsGap(self):
+        # a real recorder in its own process saves three readings, starts a fourth transaction, and is killed before it commits, so SQLite never closes the file
+        script = "\n".join((
+            "import os, signal, sys, time",
+            "sys.path.insert(0, sys.argv[2])",
+            "import history, hidpp",
+            "recorder = history.Recorder(sys.argv[1], timers=False)",
+            "start = time.monotonic() - 100",
+            "for index, percent in enumerate((80, 79, 78)):",
+            "    recorder.addReading(sys.argv[3], hidpp.BatteryReading(percent, 0, None, None, 0), history.ORIGIN_EVENT, name='PRO X3 SUPERSTRIKE', at=time.time() - 100 + 20 * index, arrived=start + 20 * index)",
+            "    recorder.tick()",
+            "db = recorder.store.db",
+            "db.execute('begin immediate')",
+            "db.execute('insert into readings (mouseId, at, seq, percent, charging, power, origin) values (1, ?, 0, 11, 0, 0, 0)', (int(time.time()),))",
+            "os.kill(os.getpid(), signal.SIGKILL)",
+        ))
+        source = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
+        started = int(time.time())
+        result = subprocess.run([sys.executable, "-c", script, self.folder, source, KEY], capture_output=True, timeout=60, env=dict(os.environ, QT_QPA_PLATFORM="offscreen"))
+        self.assertEqual(result.returncode, -signal.SIGKILL, result.stderr)
+        path = os.path.join(self.folder, history.FILE_NAME)
+        self.assertGreater(os.path.getsize(path + "-wal"), 0)
+        recorder = history.Recorder(self.folder, timers=False)
+        try:
+            self.assertTrue(recorder.available())
+            rows = recorder.store.db.execute("select at, origin, percent from readings order by at, seq").fetchall()
+        finally:
+            recorder.stop()
+        self.assertEqual([row[1:] for row in rows], [(history.ORIGIN_EVENT, 80), (history.ORIGIN_EVENT, 79), (history.ORIGIN_EVENT, 78), (history.ORIGIN_GAP, None)])
+        # the gap goes where the killed run was last seen, which is its open, since that came after its readings
+        self.assertGreaterEqual(rows[-1][0], started)
+        self.assertLessEqual(rows[-1][0], int(time.time()))
+        self.assertEqual([name for name in os.listdir(self.folder) if ".broken-" in name], [])
+        self.assertNotIn("corrupt", self.errors.getvalue())
 
     def testACleanStopLeavesAUPowerMouseAGapAtTheStop(self):
         # the UPower history writes no gap row when the service stops, so the next start puts one where the last run stopped
