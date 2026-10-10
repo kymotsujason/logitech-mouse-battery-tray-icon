@@ -199,14 +199,20 @@ class ServiceWatcher(QObject):
     @pyqtSlot(QDBusMessage)
     def onReadAllDone(self, message):
         self.readRetryTimer.stop()
-        self.readProblems.clear()
+        self.readWorks()
 
     @pyqtSlot(QDBusMessage)
     def onReadSilentDone(self, message):
         # a ReadAll still waiting to be asked again reads more than this one did, so only its own retry ends here
         if (self.retryMethod == READ_SILENT):
             self.readRetryTimer.stop()
-        self.readProblems.clear()
+        self.readWorks()
+
+    def readWorks(self):
+        # a printed read failure gets a line when it's over too, so the journal shows how long reads were turned away
+        if (self.readProblems):
+            self.readProblems.clear()
+            printLine("Asked the battery service for a fresh reading again")
 
     @pyqtSlot(QDBusError, QDBusMessage)
     def onReadSilentFailed(self, error, message):

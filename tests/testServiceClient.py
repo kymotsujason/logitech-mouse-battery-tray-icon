@@ -385,7 +385,8 @@ class ServiceWatcherTests(unittest.TestCase):
         self.setAnswer(serviceState.CALLER_UNKNOWN)
         self.watcher.readAll()
         self.assertTrue(waitUntil(lambda: self.privateBus.lines(log).count("GetState") == before + 3))
-        self.assertEqual(self.errorLines(), ["Couldn't ask the battery service for a fresh reading: " + serviceState.CALLER_UNKNOWN + ": refused by the fake"] * 2)
+        refused = "Couldn't ask the battery service for a fresh reading: " + serviceState.CALLER_UNKNOWN + ": refused by the fake"
+        self.assertEqual(self.errorLines(), [refused, "Asked the battery service for a fresh reading again", refused])
 
     def testAReadAllThatCantBeSentCountsAsAFailedCall(self):
         self.names.append("deadBus" + str(id(self)))

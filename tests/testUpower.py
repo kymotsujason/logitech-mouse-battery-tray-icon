@@ -287,7 +287,7 @@ class RetryTests(unittest.TestCase):
             self.assertTrue(waitFor(lambda: len(bus.calls) == 2 and not watcher.enumerateDue))
             watcher.listDevices()
             waitFor(lambda: len(bus.calls) >= 4 and not watcher.enumerateDue)
-        self.assertEqual(errors.getvalue(), "UPower answered org.freedesktop.DBus.Error.NoReply\n" * 2)
+        self.assertEqual(errors.getvalue(), "UPower answered org.freedesktop.DBus.Error.NoReply\nUPower answers again\n" * 2)
 
     def testADeviceErrorThatComesBackAfterItsGetAllAnsweredIsPrintedAgain(self):
         errors = io.StringIO()
@@ -298,8 +298,65 @@ class RetryTests(unittest.TestCase):
                 watcher.retryTimer.stop()
                 watcher.refresh(PATH)
                 self.assertTrue(waitFor(lambda: len(bus.calls) == asked and not watcher.refreshing))
-        self.assertEqual(errors.getvalue(), ("UPower answered org.freedesktop.DBus.Error.NoReply for " + PATH + "\n") * 2)
+        self.assertEqual(errors.getvalue(), "UPower answered org.freedesktop.DBus.Error.NoReply for " + PATH + "\nUPower answers again for " + PATH + "\nUPower answered org.freedesktop.DBus.Error.NoReply for " + PATH + "\n")
         self.assertEqual(len(self.changed), 1)
+
+    def testOnlyTheDeviceWhoseCallWentThroughSaysItAnswersAgain(self):
+        errors = io.StringIO()
+        failing = {PATH, OTHER_PATH}
+
+        def answer(message):
+            if (message.path() in failing):
+                return message.createErrorReply("org.freedesktop.DBus.Error.NoReply", "failed on purpose")
+            return message.createReply([mouseProperties()])
+
+        with contextlib.redirect_stderr(errors):
+            bus, watcher = self.makeWatcher(answer)
+            watcher.refresh(PATH)
+            watcher.refresh(OTHER_PATH)
+            self.assertTrue(waitFor(lambda: watcher.retryPaths == {PATH, OTHER_PATH}))
+            failing.discard(PATH)
+            watcher.retryTimer.stop()
+            watcher.onRetry()
+            self.assertTrue(waitFor(lambda: watcher.retryPaths == {OTHER_PATH} and not watcher.refreshing))
+            settle()
+        self.assertEqual(errors.getvalue().splitlines(), ["UPower answered org.freedesktop.DBus.Error.NoReply for " + PATH, "UPower answered org.freedesktop.DBus.Error.NoReply for " + OTHER_PATH, "UPower answers again for " + PATH])
+
+    def testADeviceRemovedWhileFailingEndsWithoutALineAndIsPrintedAgainWhenItFailsLater(self):
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors):
+            bus, watcher = self.makeWatcher(failWith("org.freedesktop.DBus.Error.NoReply"))
+            watcher.refresh(PATH)
+            self.assertTrue(waitFor(lambda: PATH in watcher.retryPaths))
+            watcher.retryTimer.stop()
+            watcher.onDeviceRemoved(FakeMessage("", [PATH]))
+            watcher.onDeviceAdded(FakeMessage("", [PATH]))
+            self.assertTrue(waitFor(lambda: PATH in watcher.retryPaths and not watcher.refreshing))
+        self.assertEqual(errors.getvalue(), ("UPower answered org.freedesktop.DBus.Error.NoReply for " + PATH + "\n") * 2)
+
+    def testAListingThatGoesThroughSaysNothingWhenOnlyADeviceFailed(self):
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors):
+            bus, watcher = self.makeWatcher(lambda message: message.createReply([[]]) if message.member() == "EnumerateDevices" else message.createErrorReply("org.freedesktop.DBus.Error.NoReply", "failed on purpose"))
+            watcher.refresh(PATH)
+            self.assertTrue(waitFor(lambda: PATH in watcher.retryPaths))
+            watcher.listDevices()
+            self.assertTrue(waitFor(lambda: len(bus.calls) == 2))
+            settle()
+        self.assertEqual(errors.getvalue(), "UPower answered org.freedesktop.DBus.Error.NoReply for " + PATH + "\n")
+
+    def testANewUPowerDropsTheDevicesFailuresButNotTheListings(self):
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors):
+            bus, watcher = self.makeWatcher(failWith("org.freedesktop.DBus.Error.NoReply"))
+            watcher.reportError("org.freedesktop.DBus.Error.NoReply")
+            watcher.reportError("org.freedesktop.DBus.Error.NoReply", PATH)
+            watcher.bus = ScriptedBus(lambda message: message.createReply([[]]))
+            watcher.onOwnerChanged(upower.SERVICE, ":1.5", ":1.9")
+            self.assertTrue(waitFor(lambda: watcher.bus.calls))
+            settle()
+        self.assertEqual(errors.getvalue().splitlines(), ["UPower answered org.freedesktop.DBus.Error.NoReply", "UPower answered org.freedesktop.DBus.Error.NoReply for " + PATH, "UPower answers again"])
+        self.assertEqual(watcher.printedErrors, {})
 
     def testFailedCallsAreRetriedWhenTheirPrintFails(self):
         hooked = []

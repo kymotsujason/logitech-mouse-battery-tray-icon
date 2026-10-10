@@ -146,7 +146,8 @@ class UPowerWatcher(QObject):
         self.refreshing = {}
         self.callCount = 0
         self.refreshAgain = set()
-        self.printedErrors = set()
+        # the failures printed for each device's call, and under None for the listing's
+        self.printedErrors = {}
 
     def start(self):
         # subscribing before listing keeps a device added in between from going missing
@@ -172,6 +173,8 @@ class UPowerWatcher(QObject):
     def onOwnerChanged(self, name, oldOwner, newOwner):
         self.stop()
         self.retryMs = RETRY_MS
+        # every device goes with the old UPower, while the listing's failure is over only once a listing goes through
+        self.printedErrors = {path: errors for path, errors in self.printedErrors.items() if path is None}
         for path in sorted(self.paths):
             self.mouseRemoved.emit(path)
         self.paths.clear()
@@ -196,23 +199,27 @@ class UPowerWatcher(QObject):
                 self.enumerateDue = False
             return
         self.enumerateDue = False
+        self.answered()
         # a device still failing keeps its backoff, which its own answer starts over once it goes through
         if (not self.retryPaths):
             self.retryMs = RETRY_MS
-            # UPower answers again, so a failure after this is printed as news
-            self.printedErrors.clear()
         for path in paths:
             # a device still failing is read by its own retry, so a listing can't cut its backoff short
             if (path not in self.retryPaths):
                 self.refresh(path)
 
     def reportError(self, error, path=None):
-        # the retries keep going quietly, so each kind of failure gets one line until UPower answers again, naming the device when it's one device's call
-        line = "UPower answered " + error + ("" if path is None else " for " + path)
-        if (line in self.printedErrors):
+        # the retries keep going quietly, so each kind of failure gets one line until the call that failed goes through, naming the device when it's one device's call
+        printed = self.printedErrors.setdefault(path, set())
+        if (error in printed):
             return
-        self.printedErrors.add(line)
-        printLine(line)
+        printed.add(error)
+        printLine("UPower answered " + error + ("" if path is None else " for " + path))
+
+    def answered(self, path=None):
+        # a printed failure gets a line when it's over too, so the journal shows how long readings were out
+        if (self.printedErrors.pop(path, None)):
+            printLine("UPower answers again" + ("" if path is None else " for " + path))
 
     def scheduleRetry(self):
         if (not self.retryTimer.isActive()):
@@ -246,6 +253,8 @@ class UPowerWatcher(QObject):
             self.refreshAgain.discard(path)
             self.retryPaths.discard(path)
             if (error in GONE_ERRORS):
+                # a device that's gone has nothing left to recover from
+                self.printedErrors.pop(path, None)
                 self.dropPath(path)
             elif (error not in ABSENT_ERRORS):
                 # a call that failed for another reason says nothing about the mouse, so it keeps its last reading until the retry
@@ -253,6 +262,7 @@ class UPowerWatcher(QObject):
                 self.retryPaths.add(path)
                 self.scheduleRetry()
             return
+        self.answered(path)
         if (path in self.refreshAgain):
             # the device changed after this call went out, so its answer may already be old
             self.refreshAgain.discard(path)
@@ -261,7 +271,6 @@ class UPowerWatcher(QObject):
         self.retryPaths.discard(path)
         if (not self.retryPaths and not self.enumerateDue):
             self.retryMs = RETRY_MS
-            self.printedErrors.clear()
         mouse = mouseFromProperties(path, props)
         if (mouse is None):
             self.dropPath(path)
@@ -282,6 +291,7 @@ class UPowerWatcher(QObject):
     def onDeviceRemoved(self, message):
         path = pathArgument(message)
         self.retryPaths.discard(path)
+        self.printedErrors.pop(path, None)
         self.refreshing.pop(path, None)
         self.refreshAgain.discard(path)
         self.dropPath(path)

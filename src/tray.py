@@ -281,8 +281,10 @@ class MouseBatteryApp(QObject):
     def onLowBatterySent(self, key, name, percent, notificationId, error):
         if (notificationId is not None):
             self.mouseList.markWarningSent(key, percent)
-            # a notice went through, so the next failure for this mouse is printed as news
-            self.noticeErrors = {each for each in self.noticeErrors if each[0] != key}
+            # a notice went through, so the next failure for this mouse is printed as news, and a failure that was printed gets a line saying it's over
+            if (any(each[0] == key for each in self.noticeErrors)):
+                self.noticeErrors = {each for each in self.noticeErrors if each[0] != key}
+                printLine("A low battery notice for " + name + " went through")
             return
         # NoReply means the bus already handed the message to the server (or is starting the server for it), and asking again after a timeout would send it twice
         if (error == NO_REPLY):
@@ -343,7 +345,9 @@ class MouseBatteryApp(QObject):
                 self.colorErrors.add(message)
                 printLine(message)
             return palette
-        self.colorErrors.clear()
+        if (self.colorErrors):
+            self.colorErrors.clear()
+            printLine("Read the panel color again")
         return self.cachedColor
 
     def updateTray(self, *args):

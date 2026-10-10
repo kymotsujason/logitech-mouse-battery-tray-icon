@@ -276,7 +276,7 @@ class AppTests(unittest.TestCase):
             for i in range(3):
                 mouseApp.clearColor()
                 mouseApp.baseColor()
-        self.assertEqual(errors.getvalue(), "Couldn't read the panel color: embedded null byte\n" * 2)
+        self.assertEqual(errors.getvalue(), "Couldn't read the panel color: embedded null byte\nRead the panel color again\nCouldn't read the panel color: embedded null byte\n")
 
     def testAPanelColorErrorWithABrokenStderrStillDrawsTheTray(self):
         mouseApp = self.makeApp(True)
@@ -687,7 +687,8 @@ class AppTests(unittest.TestCase):
             for percent in (9, 8, lowBattery.CRITICAL_PERCENT):
                 mouseApp.mouseList.applyUPower(upower.UPowerMouse(PATH, "12ab34cd", "MX Master 3", hidpp.BatteryReading(percent, 0)))
         self.assertEqual(replies, [])
-        self.assertEqual([line for line in errors.getvalue().splitlines() if "low battery" in line], ["Couldn't send the low battery notice for MX Master 3: org.freedesktop.DBus.Error.ServiceUnknown"] * 2)
+        refused = "Couldn't send the low battery notice for MX Master 3: org.freedesktop.DBus.Error.ServiceUnknown"
+        self.assertEqual([line for line in errors.getvalue().splitlines() if "low battery" in line], [refused, "A low battery notice for MX Master 3 went through", refused])
 
     def testALowBatteryNoticeThatTimedOutIsLoggedOnce(self):
         mouseApp = self.makeApp(True)
