@@ -175,11 +175,12 @@ class RecorderCase(unittest.TestCase):
         self.recorder.store.closeQuietly()
         return mock.patch.object(sqlite3, "connect", failing)
 
-    def assertStoppedForCorruption(self, seconds):
+    def assertStoppedForCorruption(self):
         self.assertFalse(self.recorder.available())
         self.assertTrue(os.path.exists(os.path.join(self.folder, history.INTEGRITY_FLAG)))
         saved = self.rows()
-        self.event(seconds, 40)
+        # a reading inside the retry wait goes nowhere
+        self.event(self.clock.now - START + 60, 40)
         self.assertEqual(self.rows(), saved)
 
     def rows(self):
@@ -324,12 +325,56 @@ class StoreTests(RecorderCase):
             self.assertTrue(recorder.available())
         return [sql for sql in statements if sql in ("pragma integrity_check", "pragma quick_check")]
 
+    def testCorruptionDuringARunOpensAgainWithTheFullCheckAfterTheRetryWait(self):
+        self.event(0, 50)
+        self.recorder.store.markCorrupt(history.CorruptHistory("test"))
+        self.at(300)
+        self.assertFalse(self.recorder.available())
+        self.clock.now = START + 2 + history.OPEN_RETRY_SECONDS
+        self.assertEqual(self.checksOpening(self.recorder), ["pragma integrity_check"])
+        self.assertFalse(os.path.exists(os.path.join(self.folder, history.INTEGRITY_FLAG)))
+        self.at(2 + history.OPEN_RETRY_SECONDS)
+        # the reopen gaps the time nothing was saved, and the level memory still holds goes after it, since an unchanged reading saves nothing
+        self.assertEqual([row[:3] for row in self.rows()], [(0, history.ORIGIN_EVENT, 50), (2, history.ORIGIN_GAP, None), (2, history.ORIGIN_EVENT, 50)])
+        self.event(700, 49)
+        self.assertEqual(self.rows()[-1][:3], (700, history.ORIGIN_EVENT, 49))
+        self.assertEqual(self.errors.getvalue().splitlines(), ["The history is corrupt (test), so it's closed and checked again in 10 minutes", "The history is open again"])
+
+    def testAHistoryFoundCorruptDuringARunIsMovedAsideAndTheLevelsGoToANewOne(self):
+        self.event(0, 50)
+        self.event(10, 70, key=OTHER)
+        self.recorder.store.markCorrupt(corruption())
+        path = os.path.join(self.folder, history.FILE_NAME)
+        with open(path, "wb") as f:
+            f.write(b"x" * 4096)
+        self.at(12 + history.OPEN_RETRY_SECONDS)
+        self.assertTrue(os.path.exists(path + ".broken-" + str(START + 12 + history.OPEN_RETRY_SECONDS)))
+        self.assertEqual([row[:3] for row in self.rows() if row[1] != history.ORIGIN_GAP], [(0, history.ORIGIN_EVENT, 50), (10, history.ORIGIN_EVENT, 70)])
+        with self.db() as db:
+            self.assertEqual(sorted(key for (key,) in db.execute("select key from mice")), sorted([KEY, OTHER]))
+        self.assertEqual(self.recorder.summary(KEY)["name"], "PRO X3 SUPERSTRIKE")
+
+    def testAHistoryThatKeepsTurningCorruptIsLeftClosedUntilTheNextStart(self):
+        self.event(0, 50)
+        seconds = 2
+        for index in range(history.CORRUPT_REOPENS - 1):
+            self.recorder.store.markCorrupt(corruption())
+            seconds += history.OPEN_RETRY_SECONDS
+            self.at(seconds)
+            self.assertTrue(self.recorder.store.isOpen())
+        self.recorder.store.markCorrupt(corruption())
+        self.at(seconds + 10 * history.OPEN_RETRY_SECONDS)
+        self.assertFalse(self.recorder.available())
+        self.assertTrue(self.recorder.store.neverOpens())
+        self.assertTrue(os.path.exists(os.path.join(self.folder, history.INTEGRITY_FLAG)))
+        self.assertEqual(self.errors.getvalue().count("so none is kept until Mouse Battery starts again"), 1)
+
     def testCorruptionFoundByASummaryStopsTheHistory(self):
         self.event(0, 50)
         self.failQuery(corruption(), "from steps")
         with self.assertRaises(history.HistoryUnavailable):
             self.recorder.summary(KEY)
-        self.assertStoppedForCorruption(1800)
+        self.assertStoppedForCorruption()
         with self.assertRaises(history.HistoryUnavailable):
             self.recorder.summary(KEY)
 
@@ -338,7 +383,7 @@ class StoreTests(RecorderCase):
         self.failQuery(corruption(), "from readings")
         with self.assertRaises(history.HistoryUnavailable):
             self.recorder.levels(KEY, "week")
-        self.assertStoppedForCorruption(1800)
+        self.assertStoppedForCorruption()
         with self.assertRaises(history.HistoryUnavailable):
             self.recorder.levels(KEY, "week")
 
@@ -348,7 +393,7 @@ class StoreTests(RecorderCase):
         self.event(1800, 49)
         self.assertEqual([row[:3] for row in self.rows()], [(0, 0, 50)])
         self.assertFalse(self.recorder.entries[KEY].loaded)
-        self.assertStoppedForCorruption(3600)
+        self.assertStoppedForCorruption()
 
     def testCorruptionFoundLoadingAMouseStopsTheHistory(self):
         self.event(0, 50)
@@ -357,7 +402,7 @@ class StoreTests(RecorderCase):
         self.failQuery(corruption(), "from mice")
         self.event(1800, 49)
         self.assertEqual([row[:3] for row in self.rows()], [(0, 0, 50), (2, history.ORIGIN_GAP, None)])
-        self.assertStoppedForCorruption(3600)
+        self.assertStoppedForCorruption()
 
     def testAnErrorWithoutACodeIsntCorruption(self):
         db = sqlite3.connect(":memory:")
@@ -575,6 +620,15 @@ class TimerTests(RecorderCase):
         self.clock.now += history.OPEN_RETRY_SECONDS
         self.recorder.tick()
         self.assertTrue(self.recorder.store.isOpen())
+
+    def testCorruptionFoundByASummaryStartsTheReopenTimer(self):
+        self.recorder.stop()
+        self.recorder = history.Recorder(self.folder, self.clock, monotonic=self.clock.monotonic)
+        self.failQuery(corruption(), "from mice")
+        with self.assertRaises(history.HistoryUnavailable):
+            self.recorder.summary(KEY)
+        self.assertTrue(self.recorder.timer.isActive())
+        self.assertAlmostEqual(self.recorder.timer.interval(), history.OPEN_RETRY_SECONDS * 1000, delta=5)
 
 
 class SessionTests(RecorderCase):
@@ -1696,7 +1750,8 @@ class RecorderTests(RecorderCase):
     def testACorruptHidppLookupForAUPowerReadingMarksTheHistoryCorrupt(self):
         self.failQuery(corruption())
         self.recorder.addReading("9a1b2c3d", battery(70), history.ORIGIN_UPOWER, source=history.SOURCE_UPOWER, at=START)
-        self.assertTrue(self.recorder.store.brokenThisRun)
+        self.assertFalse(self.recorder.store.isOpen())
+        self.assertTrue(os.path.exists(os.path.join(self.folder, history.INTEGRITY_FLAG)))
         self.assertFalse(self.recorder.available())
 
     def testAReloadedVoltageOnlySessionEndsAtItsLastReading(self):

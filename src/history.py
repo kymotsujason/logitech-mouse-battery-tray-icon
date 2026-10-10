@@ -17,6 +17,8 @@ FILE_NAME = "history.sqlite3"
 INTEGRITY_FLAG = "history.check-integrity"
 SCHEMA_VERSION = 1
 OPEN_RETRY_SECONDS = 600
+# a history that turns corrupt this often in one run is left closed until the next start, so a failing disk can't fill the folder with broken copies
+CORRUPT_REOPENS = 3
 HOLD_SECONDS = 10
 # the hold already keeps a change of percent alone to one row per 10 s, so this only bites on codes, power, and markers that flood in
 WRITE_BURST = 30
@@ -175,12 +177,17 @@ class Store:
         self.frame = frame
         self.db = None
         self.tooNew = False
-        # corruption found during a run serves no history until the next start, when the full check runs
+        # a history that kept turning corrupt serves none until the next start
         self.brokenThisRun = False
+        self.corruptCount = 0
+        # corruption found during a run runs the full check at the reopen, even when the flag file couldn't be written
+        self.checkFully = False
         self.lastAttempt = None
         # the last run's moved dates and its gaps go in before anything this open saves, since a row saved first would sit where the gap belongs
         self.caughtUp = False
         self.catchUpAt = None
+        # counts the opens, so a mouse loaded from an earlier one is loaded again
+        self.opened = 0
         self.beatAt = None
         self.printed = set()
         # the lines each kind of failure still going on has printed, so its end gets a line and the next outage prints again
@@ -269,7 +276,7 @@ class Store:
 
     def openOnce(self):
         flag = os.path.join(self.folder, INTEGRITY_FLAG)
-        fullCheck = os.path.exists(flag)
+        fullCheck = self.checkFully or os.path.exists(flag)
         # autocommit, so every transaction here is an explicit BEGIN, schema creation included
         self.db = sqlite3.connect(self.path(), timeout=1.0, isolation_level=None)
         rows = self.db.execute("pragma integrity_check" if fullCheck else "pragma quick_check").fetchall()
@@ -289,6 +296,7 @@ class Store:
                 for statement in SCHEMA:
                     self.db.execute(statement)
                 self.db.execute("pragma user_version = " + str(SCHEMA_VERSION))
+        self.opened += 1
         self.caughtUp = False
         self.catchUp()
         if (fullCheck):
@@ -296,6 +304,7 @@ class Store:
                 os.remove(flag)
             except OSError:
                 pass
+        self.checkFully = False
         self.lastAttempt = None
         self.works(FAILED_OPEN, "The history is open again")
         return True
@@ -385,9 +394,16 @@ class Store:
         return True
 
     def markCorrupt(self, error):
-        self.say("The history is corrupt (" + describe(error) + "), so none is kept until Mouse Battery starts again")
         self.closeQuietly()
-        self.brokenThisRun = True
+        self.corruptCount += 1
+        self.checkFully = True
+        # the reopen waits like a failed open, and runs the same full check and move aside a start would
+        self.lastAttempt = self.monotonic()
+        if (self.corruptCount >= CORRUPT_REOPENS):
+            self.brokenThisRun = True
+            self.say("The history turned corrupt " + str(self.corruptCount) + " times in this run (" + describe(error) + "), so none is kept until Mouse Battery starts again")
+        else:
+            self.say("The history is corrupt (" + describe(error) + "), so it's closed and checked again in " + str(OPEN_RETRY_SECONDS // 60) + " minutes", FAILED_OPEN)
         try:
             with open(os.path.join(self.folder, INTEGRITY_FLAG), "w"):
                 pass
@@ -799,6 +815,8 @@ class Recorder(QObject):
         # the wall clock minus the boot clock at the last look, which moves only when the wall clock is set
         self.offset = None
         self.store = Store(folder, clock, monotonic, self.clockFrame) if folder is not None else None
+        # the store's open this recorder's loaded mice came from
+        self.opened = 0
         self.entries = {}
         # one count for the whole recorder, so a mouse forgotten and seen again never gets a revision an old reply already has
         self.revisions = 0
@@ -817,6 +835,7 @@ class Recorder(QObject):
             # the retry runs on the timer too, so the last run's gaps go in once the disk frees up even with no mouse around
             self.schedule()
             return False
+        self.followOpens()
         return True
 
     def ready(self):
@@ -826,6 +845,20 @@ class Recorder(QObject):
             self.schedule()
             return False
         return True
+
+    def markCorrupt(self, error):
+        self.store.markCorrupt(error)
+        self.schedule()
+
+    def followOpens(self):
+        if (self.opened == self.store.opened):
+            return
+        self.opened = self.store.opened
+        # a reopen can bring another file, or the same one with a gap where it was closed, so each mouse loads again and saves the level memory holds
+        for entry in self.entries.values():
+            if (entry.loaded):
+                self.unload(entry)
+        self.schedule()
 
     def unload(self, entry):
         entry.loaded = False
@@ -875,7 +908,7 @@ class Recorder(QObject):
             summary = readSummary(self.store.db, self.entries.get(key), key, self.clock())
         except sqlite3.Error as error:
             if (isCorruption(error)):
-                self.store.markCorrupt(error)
+                self.markCorrupt(error)
             else:
                 self.store.say("Couldn't read the history: " + describe(error), FAILED_READ)
             raise HistoryUnavailable() from error
@@ -892,7 +925,7 @@ class Recorder(QObject):
             levels = readLevels(self.store.db, key, rangeName, self.clock())
         except sqlite3.Error as error:
             if (isCorruption(error)):
-                self.store.markCorrupt(error)
+                self.markCorrupt(error)
             else:
                 self.store.say("Couldn't read the history: " + describe(error), FAILED_READ)
             raise HistoryUnavailable() from error
@@ -1025,7 +1058,7 @@ class Recorder(QObject):
             return
         since = entry.bootSince
         tracked = entry.bootAfter is None or since + moved > entry.bootAfter
-        if (not self.store.canSave()):
+        if (not self.store.canSave() or self.opened != self.store.opened):
             # loading compares the offset saved for this boot with the clock then, and moves the rows there, so only memory moves now
             entry.track.shift(since, moved)
             self.unload(entry)
@@ -1063,7 +1096,7 @@ class Recorder(QObject):
             found = self.store.db.execute("select source from mice where key = ?", (entry.key,)).fetchone()
         except sqlite3.Error as error:
             if (isCorruption(error)):
-                self.store.markCorrupt(error)
+                self.markCorrupt(error)
             else:
                 self.store.say("Couldn't read the history: " + describe(error), FAILED_READ)
             return None
@@ -1424,7 +1457,7 @@ class Recorder(QObject):
         entry.needsGap = True
         entry.retryAt = self.monotonic() + OPEN_RETRY_SECONDS
         if (isCorruption(error)):
-            self.store.markCorrupt(error)
+            self.markCorrupt(error)
             self.unload(entry)
             return
         self.store.say("Couldn't save to the history: " + describe(error), FAILED_SAVE)
