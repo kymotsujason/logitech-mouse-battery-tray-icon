@@ -23,6 +23,7 @@ import history
 
 app = QApplication.instance() or QApplication([])
 KEY = "02bc524c"
+OTHER = "0badc0de"
 START = 1800000000
 BOOT = "test-boot"
 FIXTURE_SCHEMA = (
@@ -157,6 +158,16 @@ class RecorderCase(unittest.TestCase):
                 real.close()
         self.recorder.store.db = FailingDb()
         return real
+
+    @contextlib.contextmanager
+    def locked(self):
+        # another process holding a write transaction on the file, which SQLite answers with SQLITE_BUSY once its busy wait runs out
+        other = sqlite3.connect(os.path.join(self.folder, history.FILE_NAME), isolation_level=None)
+        try:
+            other.execute("begin immediate")
+            yield
+        finally:
+            other.close()
 
     def failOpening(self):
         def failing(*args, **kwargs):
@@ -553,6 +564,17 @@ class TimerTests(RecorderCase):
         self.clock.now = START - 2 * 60 * 60
         self.recorder.schedule()
         self.assertAlmostEqual(self.recorder.timer.interval(), history.WAKE_SET_SECONDS * 1000, delta=5)
+
+    def testAnOpenThatFailsAtTheStartIsRetriedOnTheTimerWithNoMouse(self):
+        self.recorder.stop()
+        self.recorder = history.Recorder(self.folder, self.clock, monotonic=self.clock.monotonic)
+        with self.failOpening():
+            self.assertFalse(self.recorder.available())
+        self.assertTrue(self.recorder.timer.isActive())
+        self.assertAlmostEqual(self.recorder.timer.interval(), history.OPEN_RETRY_SECONDS * 1000, delta=5)
+        self.clock.now += history.OPEN_RETRY_SECONDS
+        self.recorder.tick()
+        self.assertTrue(self.recorder.store.isOpen())
 
 
 class SessionTests(RecorderCase):
@@ -964,6 +986,34 @@ class ClockFrameTests(RecorderCase):
         # the clock was set back while the service was stopped
         self.clock.jump(-60 * 60)
         self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic, boottime=self.clock.boottime, bootId=BOOT)
+        self.event(600 - 60 * 60, 79)
+        self.assertEqual([row[:3] for row in self.rows() if row[1] != history.ORIGIN_GAP], [(-3600, 0, 80), (600 - 3600, 0, 79)])
+
+    def testAStepALockHidFromTheOpenMovesTheLastRunsRowsOnceTheLockIsGone(self):
+        self.event(0, 80)
+        self.recorder.stop()
+        # the clock was set back while the service was stopped, and another process held the file as it started again
+        self.clock.jump(-60 * 60)
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic, boottime=self.clock.boottime, bootId=BOOT)
+        with self.locked():
+            self.assertTrue(self.recorder.available())
+        self.event(600 - 60 * 60, 79)
+        self.at(2 + history.OPEN_RETRY_SECONDS - 60 * 60)
+        self.assertEqual([row[:3] for row in self.rows() if row[1] != history.ORIGIN_GAP], [(-3600, 0, 80), (600 - 3600, 0, 79)])
+
+    def testAStepTheHistoryCouldntSaveMovesTheRowsAtTheNextLoad(self):
+        self.event(0, 80)
+        self.clock.jump(-60 * 60)
+        with self.failOnce(sqlite3.OperationalError("database or disk is full")):
+            self.recorder.tick()
+        self.event(600 - 60 * 60, 79)
+        self.assertEqual([row[:3] for row in self.rows() if row[1] != history.ORIGIN_GAP], [(-3600, 0, 80), (600 - 3600, 0, 79)])
+
+    def testAStepBeforeAMouseLoadsMovesTheRowsAnEarlierRunOnThisBootSaved(self):
+        self.event(0, 80)
+        self.restart()
+        self.assertTrue(self.recorder.available())
+        self.clock.jump(-60 * 60)
         self.event(600 - 60 * 60, 79)
         self.assertEqual([row[:3] for row in self.rows() if row[1] != history.ORIGIN_GAP], [(-3600, 0, 80), (600 - 3600, 0, 79)])
 
@@ -1578,6 +1628,40 @@ class RecorderTests(RecorderCase):
         self.recorder.addReading("9a1b2c3d", battery(70), history.ORIGIN_UPOWER, source=history.SOURCE_UPOWER, at=START + 60)
         self.assertEqual((entry.source, len(entry.pending)), (history.SOURCE_UPOWER, 1))
 
+    def testAMouseWhoseReadingsDontChangeIsSavedOnceAFailedOpenIsRetried(self):
+        self.assertTrue(self.recorder.available())
+        with self.failOpening():
+            self.event(0, 80)
+        for seconds in range(300, 3601, 300):
+            self.event(seconds, 80)
+        self.assertEqual([row[:3] for row in self.rows()], [(0, history.ORIGIN_EVENT, 80)])
+
+    def testASavedMouseWhoseReadingsDontChangeIsSavedAfterItsGapOnceAFailedOpenIsRetried(self):
+        self.event(0, 70)
+        self.recorder.stop()
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic)
+        with self.failOpening():
+            self.event(1000, 80)
+        for seconds in range(1300, 4601, 300):
+            self.event(seconds, 80)
+        self.assertEqual([row[:3] for row in self.rows()], [(0, history.ORIGIN_EVENT, 70), (2, history.ORIGIN_GAP, None), (1000, history.ORIGIN_GAP, None), (1000, history.ORIGIN_EVENT, 80)])
+
+    def testAWriteThatFailedIsSavedOnTheRetryWaitWhenNoOtherReadingComes(self):
+        self.event(0, 80)
+        with self.failOnce(sqlite3.OperationalError("database or disk is full")):
+            self.event(1800, 79)
+        self.at(1802 + history.OPEN_RETRY_SECONDS)
+        self.assertEqual([row[:3] for row in self.rows()], [(0, history.ORIGIN_EVENT, 80), (1800, history.ORIGIN_GAP, None), (1800, history.ORIGIN_EVENT, 79)])
+
+    def testAFlagThatFailedToSaveIsSavedOnTheRetryWaitAfterItsMouseLeaves(self):
+        self.event(0, 80)
+        with self.failOnce(sqlite3.OperationalError("database or disk is full")):
+            self.recorder.setWakeSupport(KEY, True)
+        self.recorder.forget(KEY)
+        self.at(2 + history.OPEN_RETRY_SECONDS)
+        with self.db() as db:
+            self.assertEqual(db.execute("select wakeSupport from mice").fetchone()[0], 1)
+
     def testAHistoryThatCantOpenYetLeavesASavedHidppKeyToHidpp(self):
         self.event(0, 50)
         self.recorder.stop()
@@ -1762,6 +1846,77 @@ class RecoveryTests(RecorderCase):
             self.assertTrue(self.recorder.available())
         self.assertIn("Couldn't save to the history: attempt to write a readonly database", self.errors.getvalue())
         self.assertEqual(self.recorder.summary(KEY)["name"], "PRO X3 SUPERSTRIKE")
+
+    def testARecoveryALockHeldUpGoesInOnceTheLockIsGone(self):
+        # another process held the file through the open a day later and then let go, while a second mouse kept the run watched
+        self.event(0, 80)
+        self.at(5 * 60 + 10)
+        self.kill()
+        day = 24 * 60 * 60
+        self.clock.now = START + day
+        with self.locked():
+            self.assertTrue(self.recorder.available())
+        self.event(day + 100, 60, key=OTHER)
+        for seconds in range(day + 300, day + 3600, 300):
+            self.at(seconds)
+        self.assertEqual(self.gaps(), [5 * 60 + 10])
+        self.assertEqual(set(self.dayLevels()), {None})
+        self.assertEqual(self.heartbeat(), seconds)
+        self.assertIn((day + 100, history.ORIGIN_EVENT, 60, 0, 0), self.rows())
+
+    def testAMouseThatComesBackWhileTheRecoveryWaitsKeepsItsLevelAfterTheGap(self):
+        self.event(0, 80)
+        self.at(5 * 60 + 10)
+        self.kill()
+        self.clock.now = START + 5000
+        with self.locked():
+            self.assertTrue(self.recorder.available())
+        self.event(5100, 70)
+        self.at(5000 + history.OPEN_RETRY_SECONDS)
+        # a row saved before the recovery's gap would have the gap put after it, which would hide the level the mouse came back at
+        self.assertEqual([row[:3] for row in self.rows()], [(0, history.ORIGIN_EVENT, 80), (310, history.ORIGIN_GAP, None), (5100, history.ORIGIN_GAP, None), (5100, history.ORIGIN_EVENT, 70)])
+        self.assertEqual(self.recorder.summary(KEY)["recent"][-1][1], 70)
+
+    def testAHeartbeatTableALockHeldUpIsMadeOnceTheLockIsGone(self):
+        self.event(0, 80)
+        self.recorder.stop()
+        with self.db() as db:
+            db.execute("drop table heartbeat")
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic, boottime=self.clock.boottime, bootId=BOOT)
+        self.clock.now = START + 5000
+        with self.locked():
+            self.assertTrue(self.recorder.available())
+        self.event(5100, 79)
+        for seconds in range(5300, 5000 + 4 * 3600, 300):
+            self.at(seconds)
+        self.assertEqual(self.heartbeat(), seconds)
+        self.assertEqual(self.rows()[-2:], [(5100, history.ORIGIN_GAP, None, None, None), (5100, history.ORIGIN_EVENT, 79, 0, 0)])
+        self.assertEqual(self.errors.getvalue().splitlines(), ["Couldn't save to the history: SQLITE_BUSY", "The history is saving again"])
+
+    def testCorruptionFoundRetryingTheRecoveryClosesTheHistory(self):
+        self.event(0, 80)
+        self.kill()
+        real = sqlite3.connect
+        errors = [sqlite3.OperationalError("database is locked"), corruption()]
+
+        class FailingDb:
+            def __init__(self, db):
+                self.db = db
+
+            def execute(self, sql, *args):
+                if ("heartbeat" in sql and errors):
+                    raise errors.pop(0)
+                return self.db.execute(sql, *args)
+
+            def close(self):
+                self.db.close()
+        with mock.patch.object(sqlite3, "connect", lambda *args, **kwargs: FailingDb(real(*args, **kwargs))):
+            self.clock.now = START + 100
+            self.assertTrue(self.recorder.available())
+            self.at(100 + history.OPEN_RETRY_SECONDS)
+        self.assertFalse(self.recorder.store.isOpen())
+        self.assertTrue(os.path.exists(os.path.join(self.folder, history.INTEGRITY_FLAG)))
+        self.assertIn("The history is corrupt", self.errors.getvalue())
 
     def testASigkilledRecorderKeepsItsCommitsAndGetsItsGap(self):
         # a real recorder in its own process saves three readings, starts a fourth transaction, and is killed before it commits, so SQLite never closes the file
