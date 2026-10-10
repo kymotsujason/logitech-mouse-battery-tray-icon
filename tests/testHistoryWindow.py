@@ -299,6 +299,31 @@ class WindowTests(WindowCase):
         self.assertTrue(window.isOld(mouse, historyWindow.Reply(reply("02bc524c"), mouse.historyRevision, askedAt)))
         self.assertGreater(historyWindow.UPOWER_SETTLE_SECONDS, history.WAKE_SET_SECONDS + history.HOLD_SECONDS)
 
+    def testAWindowBuiltAfterAUPowerChangeWaitsForTheServiceToSaveIt(self):
+        # the tray hears UPower before the window exists, so the window starts from the mice the tray already knows
+        self.mouseList.applyUPower(upower.UPowerMouse("/org/freedesktop/UPower/devices/mouse_02bc524c", "02bc524c", None, hidpp.BatteryReading(61, 0)))
+        late = historyWindow.HistoryWindow(self.mouseList, self.watcher, self.upower, self.folder, None, tray.mouseLine, tray.iconStateFor)
+        self.addCleanup(sip.delete, late)
+        self.addCleanup(late.close)
+        self.assertIn("02bc524c", late.upowerChangedAt)
+        self.state(entry())
+        late.open()
+        self.assertEqual(self.watcher.asked, [])
+        self.assertTrue(late.fetchTimer.isActive())
+        self.settle(late)
+        self.assertEqual(self.watcher.asked, ["02bc524c"])
+
+    def testAWindowBuiltLongAfterAUPowerReadingDoesntWait(self):
+        old = time.time() - 10 * historyWindow.UPOWER_SETTLE_SECONDS
+        self.mouseList.applyUPower(upower.UPowerMouse("/org/freedesktop/UPower/devices/mouse_02bc524c", "02bc524c", None, hidpp.BatteryReading(61, 0), updatedAt=old))
+        late = historyWindow.HistoryWindow(self.mouseList, self.watcher, self.upower, self.folder, None, tray.mouseLine, tray.iconStateFor)
+        self.addCleanup(sip.delete, late)
+        self.addCleanup(late.close)
+        self.assertNotIn("02bc524c", late.upowerChangedAt)
+        self.state(entry())
+        late.open()
+        self.assertEqual(self.watcher.asked, ["02bc524c"])
+
     def testAUPowerRefreshThatLeavesTheReadingAloneIsntAChange(self):
         window = self.opened(entry())
         self.upowerChange()

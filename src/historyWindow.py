@@ -675,6 +675,15 @@ class HistoryWindow(QWidget):
         self.lastFetch = {}
         self.upowerChangedAt = {}
         self.upowerSeen = {}
+        # the tray hears UPower before the window is built, and the service may still be holding that reading, so a UPower mouse read within the settle time counts as changed when it was read
+        now = time.monotonic()
+        for mouse in mouseList.mice:
+            if (mouse.upowerPath is None):
+                continue
+            self.upowerSeen[mouse.key] = (mouse.upowerPath, mouse.reading)
+            readAgo = max(0.0, time.time() - mouse.lastRead) if mouse.lastRead is not None else 0.0
+            if (readAgo < UPOWER_SETTLE_SECONDS):
+                self.upowerChangedAt[mouse.key] = now - readAgo
         self.levelRange = levelRange if levelRange in RANGE_NAMES else "week"
         # each mouse's slots per range, dropped with its history reply, since a new reply means new readings
         self.levels = {}
