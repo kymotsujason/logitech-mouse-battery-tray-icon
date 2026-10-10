@@ -284,6 +284,8 @@ class NodeSignatureTests(unittest.TestCase):
         self.folder = tempfile.mkdtemp()
         self.path = os.path.join(self.folder, "hidraw4")
         open(self.path, "w").close()
+        # the mode the file starts with follows the umask, so it's set here or a restrictive umask already gives it the mode the test changes it to
+        os.chmod(self.path, 0o644)
 
     def tearDown(self):
         shutil.rmtree(self.folder, ignore_errors=True)
