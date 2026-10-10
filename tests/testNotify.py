@@ -119,6 +119,44 @@ class NotifierTests(unittest.TestCase):
         QTest.qWait(200)
         self.assertIs(notifier.handlers.get(7), second)
 
+    def reply(self, member, *arguments):
+        return QDBusMessage.createMethodCall(notify.SERVICE, notify.PATH, notify.SERVICE, member).createReply(list(arguments))
+
+    def signal(self, member, *arguments):
+        message = QDBusMessage.createSignal(notify.PATH, notify.SERVICE, member)
+        message.setArguments(list(arguments))
+        return message
+
+    def testCapabilitiesOfAnotherTypeLeaveMarkupUnknown(self):
+        notifier = notify.Notifier(RecordingBus())
+        for capabilities in (5, {"body-markup": 1}):
+            with self.subTest(capabilities=capabilities):
+                notifier.onCapabilities(self.reply("GetCapabilities", capabilities))
+                self.assertIsNone(notifier.bodyMarkup)
+        notifier.onCapabilities(self.reply("GetCapabilities", ["actions", "body-markup"]))
+        self.assertTrue(notifier.bodyMarkup)
+
+    def testANoticeIdOfAnotherTypeStillCountsAsSentWithoutAHandler(self):
+        notifier = notify.Notifier(RecordingBus())
+        sent = []
+        for notificationId in ([7], "7", True):
+            with self.subTest(notificationId=notificationId):
+                notifier.onNotified(self.reply("Notify", notificationId), mock.Mock(), lambda *result: sent.append(result))
+        self.assertEqual((notifier.handlers, sent), ({}, [([7], None), ("7", None), (True, None)]))
+
+    def testSignalsWithAnIdOfAnotherTypeAreIgnored(self):
+        notifier = notify.Notifier(RecordingBus())
+        handler = mock.Mock()
+        notifier.handlers[1] = handler
+        for notificationId in ([1], True, "1"):
+            with self.subTest(notificationId=notificationId):
+                notifier.onActionInvoked(self.signal("ActionInvoked", notificationId, "go"))
+                notifier.onNotificationClosed(self.signal("NotificationClosed", notificationId, 2))
+        QTest.qWait(50)
+        self.assertEqual((handler.call_count, notifier.handlers), (0, {1: handler}))
+        notifier.onActionInvoked(self.signal("ActionInvoked", 1, "go"))
+        handler.assert_called_once_with("go")
+
 
 class FakeServerTest(unittest.TestCase):
     capabilities = None

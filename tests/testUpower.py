@@ -100,6 +100,71 @@ class ReadingTests(unittest.TestCase):
     def testAModelWithControlCharactersReadsClean(self):
         self.assertEqual(upower.mouseFromProperties(PATH, mouseProperties(Model="MX\x1b[2J Master")).name, "MX[2J Master")
 
+    def testAPropertyOfTheWrongTypeIsReadAsMissing(self):
+        cases = {
+            "State": lambda mouse: mouse.reading.charging == upower.UNKNOWN_CODE,
+            "BatteryLevel": lambda mouse: mouse.reading == hidpp.BatteryReading(55, 0),
+            "Percentage": lambda mouse: mouse.reading.percent is None,
+            "Model": lambda mouse: mouse.name is None,
+            "Serial": lambda mouse: (mouse.key, mouse.pathKey) == (PATH, True),
+            "UpdateTime": lambda mouse: mouse.updatedAt is None,
+            "NativePath": lambda mouse: mouse is None,
+        }
+        for name, holds in cases.items():
+            wrong = [5, 5.5] if name in ("Model", "Serial", "NativePath") else ["5"] if name in ("Percentage", "UpdateTime") else ["5", 5.5]
+            for value in [[1, 2], {"a": 1}, True] + wrong:
+                with self.subTest(name=name, value=value):
+                    self.assertTrue(holds(upower.mouseFromProperties(PATH, mouseProperties(**{name: value}))))
+
+    def testATypeOfTheWrongTypeIsNoMouse(self):
+        for value in ("5", [5], 5.0, True):
+            with self.subTest(value=value):
+                self.assertIsNone(upower.mouseFromProperties(PATH, mouseProperties(Type=value)))
+
+    def testAVendorOfTheWrongTypeLeavesTheNativePathToDecide(self):
+        self.assertIsNotNone(upower.mouseFromProperties(PATH, mouseProperties(Vendor=["Logitech"])))
+        self.assertIsNone(upower.mouseFromProperties(PATH, mouseProperties(Vendor=["Logitech"], NativePath="unrelated")))
+
+    def testAMissingPercentageIsNoPercentage(self):
+        props = mouseProperties()
+        del props["Percentage"]
+        self.assertIsNone(upower.mouseFromProperties(PATH, props).reading.percent)
+
+    def testIntegerTypesOfEveryWidthStillRead(self):
+        mouse = upower.mouseFromProperties(PATH, mouseProperties(Percentage=54, UpdateTime=2 ** 40, BatteryLevel=8))
+        self.assertEqual((mouse.reading, mouse.updatedAt), (hidpp.BatteryReading(None, 0, level="full"), float(2 ** 40)))
+        self.assertEqual(upower.mouseFromProperties(PATH, mouseProperties(Percentage=54)).reading.percent, 54)
+
+    def testPropertiesThatArentADictAreNoMouse(self):
+        for props in ("text", [mouseProperties()], 5, None):
+            with self.subTest(props=props):
+                self.assertIsNone(upower.mouseFromProperties(PATH, props))
+
+    def testWrongPropertiesNamesEachOneOfTheWrongType(self):
+        self.assertEqual(upower.wrongProperties(mouseProperties(State="2", Model=5, Unknown=[1])), ["Model", "State"])
+        self.assertEqual(upower.wrongProperties(mouseProperties(UpdateTime=1800000000)), [])
+
+
+class ReplyTests(unittest.TestCase):
+    def reply(self, *arguments):
+        return upower.enumerateCall().createReply(list(arguments))
+
+    def testAListingOfAnotherTypeIsUnreadable(self):
+        for arguments in ([], ["/org/freedesktop/UPower/devices/mouse_0"], [5], [{"a": 1}]):
+            with self.subTest(arguments=arguments):
+                self.assertEqual(upower.pathsFrom(self.reply(*arguments)), ([], upower.UNREADABLE))
+
+    def testAListingKeepsOnlyObjectPaths(self):
+        self.assertEqual(upower.pathsFrom(self.reply([PATH, 5, "", "relative", OTHER_PATH])), ([PATH, OTHER_PATH], None))
+
+    def testPropertiesOfAnotherTypeAreUnreadable(self):
+        for arguments in ([], ["text"], [[1, 2]], [5]):
+            with self.subTest(arguments=arguments):
+                self.assertEqual(upower.propertiesFrom(self.reply(*arguments)), (None, upower.UNREADABLE))
+
+    def testPropertiesThatAreADictRead(self):
+        self.assertEqual(upower.propertiesFrom(self.reply({"Type": 5})), ({"Type": 5}, None))
+
 
 class WatcherRoutingTests(unittest.TestCase):
     def setUp(self):
@@ -131,6 +196,21 @@ class WatcherRoutingTests(unittest.TestCase):
         message = FakeMessage(PATH, ["org.freedesktop.UPower", {"Type": 5}, []])
         self.watcher.onPropertiesChanged(message)
         self.assertEqual(self.refreshed, [])
+
+    def testChangesThatArentADictAreIgnoredForAnUnkeptPath(self):
+        for changed in (5, None, ["Type"], "Type"):
+            with self.subTest(changed=changed):
+                self.watcher.onPropertiesChanged(FakeMessage(PATH, [upower.DEVICE_INTERFACE, changed, []]))
+                self.watcher.onPropertiesChanged(FakeMessage(PATH, [upower.DEVICE_INTERFACE, QDBusVariant(changed), []]))
+        self.assertEqual(self.refreshed, [])
+
+    def testADeviceAddedWithoutAnObjectPathIsIgnored(self):
+        for arguments in ([], [5], [""], ["relative"]):
+            with self.subTest(arguments=arguments):
+                self.watcher.onDeviceAdded(FakeMessage("", arguments))
+        self.assertEqual(self.refreshed, [])
+        self.watcher.onDeviceAdded(FakeMessage("", [PATH]))
+        self.assertEqual(self.refreshed, [PATH])
 
     def testAPathBeingReadForTheFirstTimeRefreshesOnAnyChange(self):
         self.watcher.refreshing[PATH] = 1
@@ -565,6 +645,43 @@ class RetryTests(unittest.TestCase):
             watcher.onPropertiesChanged(FakeMessage(PATH, [upower.DEVICE_INTERFACE, {"Percentage": 9.0}, []]))
             self.assertTrue(waitFor(lambda: self.changed))
         self.assertEqual(([mouse.reading.percent for mouse in self.changed], len(bus.calls), watcher.retryPaths), ([9], 2, set()))
+
+    def testAnUnreadableGetAllKeepsTheMouseAndRetries(self):
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors):
+            bus, watcher = self.makeWatcher(lambda message: message.createReply(["not properties"]))
+            watcher.paths.add(PATH)
+            watcher.refresh(PATH)
+            self.assertTrue(waitFor(lambda: PATH in watcher.retryPaths))
+        self.assertEqual((self.removed, PATH in watcher.paths, watcher.retryTimer.isActive()), ([], True, True))
+        self.assertEqual(errors.getvalue(), "UPower answered " + upower.UNREADABLE + " for " + PATH + "\n")
+
+    def testAnUnreadableListingIsRetried(self):
+        bus, watcher = self.makeWatcher(lambda message: message.createReply(["not paths"]))
+        watcher.start()
+        self.assertTrue(waitFor(lambda: watcher.enumerateDue and watcher.retryTimer.isActive()))
+        self.assertEqual(len(bus.calls), 1)
+
+    def testAPropertyOfTheWrongTypeIsPrintedOnceAndTheRestStillReads(self):
+        errors = io.StringIO()
+        answers = [mouseProperties(State=[2]), mouseProperties(State=[2], Percentage=40.0), mouseProperties(State=[2], Model=5), mouseProperties(), mouseProperties(State=[2])]
+        with contextlib.redirect_stderr(errors):
+            bus, watcher = self.makeWatcher(lambda message: message.createReply([answers.pop(0)]))
+            for asked in range(1, 6):
+                watcher.refresh(PATH)
+                self.assertTrue(waitFor(lambda: len(self.changed) == asked))
+        self.assertEqual([(mouse.reading.percent, mouse.reading.charging) for mouse in self.changed], [(55, 6), (40, 6), (55, 6), (55, 0), (55, 6)])
+        line = "UPower sent {} for " + PATH + " as a type this version can't read, so it's left out"
+        self.assertEqual(errors.getvalue().splitlines(), [line.format("State"), line.format("Model, State"), line.format("State")])
+
+    def testAnotherDeviceWithATypeOfTheWrongTypeIsPrintedToo(self):
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors):
+            bus, watcher = self.makeWatcher(lambda message: message.createReply([{"Type": "2", "Percentage": 80.0}]))
+            watcher.refresh(PATH)
+            self.assertTrue(waitFor(lambda: not watcher.refreshing))
+            settle()
+        self.assertEqual((self.changed, errors.getvalue()), ([], "UPower sent Type for " + PATH + " as a type this version can't read, so it's left out\n"))
 
     def testAReplyAfterAStopIsSetAside(self):
         bus, watcher = self.makeWatcher(lambda message: message.createReply([{"Type": 5, "NativePath": "hidpp_battery_0", "Serial": "1"}]))

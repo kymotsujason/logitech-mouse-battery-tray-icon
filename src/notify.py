@@ -15,6 +15,11 @@ NO_REPLY = "org.freedesktop.DBus.Error.NoReply"
 HANDLER_GRACE_MS = 5000
 
 
+def isNotificationId(value):
+    # the spec's ids are uint32, while a server that sends another type can't match a handler, and a list can't key one at all
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 def uintArgument(value):
     variant = QVariant(value)
     variant.convert(QMetaType(QMetaType.Type.UInt.value))
@@ -80,7 +85,10 @@ class Notifier(QObject):
         self.askingCapabilities = False
         # a server that can't answer yet is asked again with the next notice, and the bodies waiting now go out escaped
         if (dbusCalls.failure(reply) is None and reply.arguments()):
-            self.bodyMarkup = "body-markup" in [str(capability) for capability in dbusCalls.plain(reply.arguments()[0])]
+            capabilities = dbusCalls.plain(reply.arguments()[0])
+            # an answer of another type counts as no answer
+            if (isinstance(capabilities, list)):
+                self.bodyMarkup = "body-markup" in [str(capability) for capability in capabilities]
         waiting = self.waitingSends
         self.waitingSends = []
         for summary, body, actions, onAction, onSent in waiting:
@@ -96,7 +104,8 @@ class Notifier(QObject):
                 onSent(None, reply.errorName())
             return
         notificationId = reply.arguments()[0]
-        if (onAction is not None):
+        # the server took the notice whatever type its id came in, so it still counts as sent
+        if (onAction is not None and isNotificationId(notificationId)):
             self.handlers[notificationId] = onAction
         if (onSent is not None):
             onSent(notificationId, None)
@@ -111,7 +120,7 @@ class Notifier(QObject):
     @pyqtSlot(QDBusMessage)
     def onActionInvoked(self, message):
         arguments = message.arguments()
-        if (len(arguments) < 2):
+        if (len(arguments) < 2 or not isNotificationId(arguments[0])):
             return
         handler = self.handlers.get(arguments[0])
         if (handler is not None):
@@ -120,7 +129,7 @@ class Notifier(QObject):
     @pyqtSlot(QDBusMessage)
     def onNotificationClosed(self, message):
         arguments = message.arguments()
-        if (not arguments or arguments[0] not in self.handlers):
+        if (not arguments or not isNotificationId(arguments[0]) or arguments[0] not in self.handlers):
             return
         notificationId = arguments[0]
         handler = self.handlers[notificationId]

@@ -26,6 +26,10 @@ GONE_ERRORS = ("org.freedesktop.DBus.Error.UnknownObject", "org.freedesktop.DBus
 ABSENT_ERRORS = ("org.freedesktop.DBus.Error.ServiceUnknown", "org.freedesktop.DBus.Error.NameHasNoOwner", "org.freedesktop.DBus.Error.Disconnected")
 RETRY_MS = 5 * 1000
 RETRY_MAX_MS = 60 * 1000
+# a reply that isn't the type UPower documents counts as a failed call, so a mouse keeps its last reading through it
+UNREADABLE = "a reply this version can't read"
+# each property's type as PyQt6 hands it over, where an int stands for every D-Bus integer width
+PROPERTY_TYPES = {"Type": int, "NativePath": str, "Vendor": str, "Model": str, "Serial": str, "Percentage": (int, float), "State": int, "BatteryLevel": int, "UpdateTime": (int, float)}
 
 
 @dataclass(frozen=True)
@@ -39,8 +43,22 @@ class UPowerMouse:
     updatedAt: float | None = None
 
 
+def wrongProperties(values):
+    # another UPower version, another daemon on the name, or a broken reply can send a property in another type, and a D-Bus boolean arrives as a bool, which Python counts as an int
+    return sorted(key for key, kinds in PROPERTY_TYPES.items() if key in values and (not isinstance(values[key], kinds) or isinstance(values[key], bool)))
+
+
+def plainValues(props):
+    return {key: dbusCalls.plain(value) for key, value in props.items()}
+
+
 def mouseFromProperties(path, props):
-    values = {key: dbusCalls.plain(value) for key, value in props.items()}
+    if (not isinstance(props, dict)):
+        return None
+    values = plainValues(props)
+    # a property of the wrong type is read as missing, so the rest of the device still reads
+    for key in wrongProperties(values):
+        del values[key]
     if (values.get("Type") != TYPE_MOUSE):
         return None
     nativePath = str(values.get("NativePath", ""))
@@ -50,7 +68,8 @@ def mouseFromProperties(path, props):
     charging = STATE_CODES.get(values.get("State", 0), UNKNOWN_CODE)
     level = values.get("BatteryLevel", LEVEL_NONE)
     if (level == LEVEL_NONE):
-        percentage = float(values.get("Percentage", 0.0))
+        # a missing percentage is no percentage, never an empty battery that would warn
+        percentage = float(values.get("Percentage", math.nan))
         percent = min(100, max(0, int(percentage + 0.5))) if math.isfinite(percentage) else None
         reading = hidpp.BatteryReading(percent, charging)
     else:
@@ -83,9 +102,10 @@ def pathsFrom(reply):
     if (error is not None):
         return ([], error)
     arguments = reply.arguments()
-    if (not arguments):
-        return ([], None)
-    return ([dbusCalls.pathText(path) for path in arguments[0]], None)
+    if (not arguments or not isinstance(arguments[0], list)):
+        return ([], UNREADABLE)
+    paths = [devicePath(path) for path in arguments[0]]
+    return ([path for path in paths if path is not None], None)
 
 
 def propertiesFrom(reply):
@@ -93,9 +113,15 @@ def propertiesFrom(reply):
     if (error is not None):
         return (None, error)
     arguments = reply.arguments()
-    if (not arguments):
-        return ({}, None)
+    if (not arguments or not isinstance(arguments[0], dict)):
+        return (None, UNREADABLE)
     return (arguments[0], None)
+
+
+def devicePath(value):
+    # anything but an object path goes out as a call Qt can't send, which fails with InvalidObjectPath and would be retried for as long as the app runs
+    path = dbusCalls.pathText(value)
+    return path if path.startswith("/") else None
 
 
 def enumeratePaths(bus):
@@ -134,6 +160,8 @@ class UPowerWatcher(QObject):
         self.bus = bus if bus is not None else QDBusConnection.systemBus()
         self.paths = set()
         self.retryPaths = set()
+        # the properties each device last sent in a type this version can't read, so each set is printed once
+        self.wrongTypes = {}
         self.enumerateDue = False
         self.retryMs = RETRY_MS
         self.retryTimer = QTimer(self)
@@ -175,6 +203,7 @@ class UPowerWatcher(QObject):
         self.retryMs = RETRY_MS
         # every device goes with the old UPower, while the listing's failure is over only once a listing goes through
         self.printedErrors = {path: errors for path, errors in self.printedErrors.items() if path is None}
+        self.wrongTypes.clear()
         for path in sorted(self.paths):
             self.mouseRemoved.emit(path)
         self.paths.clear()
@@ -255,6 +284,7 @@ class UPowerWatcher(QObject):
             if (error in GONE_ERRORS):
                 # a device that's gone has nothing left to recover from
                 self.printedErrors.pop(path, None)
+                self.wrongTypes.pop(path, None)
                 self.dropPath(path)
             elif (error not in ABSENT_ERRORS):
                 # a call that failed for another reason says nothing about the mouse, so it keeps its last reading until the retry
@@ -271,12 +301,22 @@ class UPowerWatcher(QObject):
         self.retryPaths.discard(path)
         if (not self.retryPaths and not self.enumerateDue):
             self.retryMs = RETRY_MS
+        self.reportWrongTypes(path, wrongProperties(plainValues(props)))
         mouse = mouseFromProperties(path, props)
         if (mouse is None):
             self.dropPath(path)
             return
         self.paths.add(path)
         self.mouseChanged.emit(mouse)
+
+    def reportWrongTypes(self, path, wrong):
+        if (not wrong):
+            self.wrongTypes.pop(path, None)
+            return
+        if (self.wrongTypes.get(path) == wrong):
+            return
+        self.wrongTypes[path] = wrong
+        printLine("UPower sent " + ", ".join(wrong) + " for " + path + " as a type this version can't read, so it's left out")
 
     def dropPath(self, path):
         if (path in self.paths):
@@ -285,13 +325,17 @@ class UPowerWatcher(QObject):
 
     @pyqtSlot(QDBusMessage)
     def onDeviceAdded(self, message):
-        self.refresh(pathArgument(message))
+        path = pathArgument(message)
+        if (path is None):
+            return
+        self.refresh(path)
 
     @pyqtSlot(QDBusMessage)
     def onDeviceRemoved(self, message):
         path = pathArgument(message)
         self.retryPaths.discard(path)
         self.printedErrors.pop(path, None)
+        self.wrongTypes.pop(path, None)
         self.refreshing.pop(path, None)
         self.refreshAgain.discard(path)
         self.dropPath(path)
@@ -314,12 +358,12 @@ class UPowerWatcher(QObject):
             return
         # UPower can set Type after DeviceAdded, once the mouse's input device shows up
         changed = dbusCalls.plain(arguments[1]) if len(arguments) > 1 else {}
-        if ("Type" in changed):
+        if (isinstance(changed, dict) and "Type" in changed):
             self.refresh(path)
 
 
 def pathArgument(message):
     arguments = message.arguments()
     if (not arguments):
-        return ""
-    return dbusCalls.pathText(arguments[0])
+        return None
+    return devicePath(arguments[0])
