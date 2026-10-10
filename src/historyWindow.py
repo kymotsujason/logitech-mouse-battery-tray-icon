@@ -82,9 +82,9 @@ UNAVAILABLE_TEXT = "Its history isn't available right now."
 RESTART_TEXT = "Restart Mouse Battery to see its history."
 RANGE_RESTART_TEXT = "Restart Mouse Battery to see this range."
 RANGE_ERROR_TEXT = "Couldn't load this range."
-RANGE_NAMES = ("day", "week", "month", "halfYear", "year", "all")
-RANGE_LABELS = ("D", "W", "M", "6M", "Y", "All")
-RANGE_WIDTHS = (30, 30, 30, 34, 30, 36)
+RANGE_NAMES = ("day", "week", "month")
+RANGE_LABELS = ("D", "W", "M")
+RANGE_WIDTHS = (30, 30, 30)
 RANGE_HEIGHT = 22
 # an older service answers these the same way every time, so asking again changes nothing
 RESTART_LEVEL_ERRORS = (serviceState.UNKNOWN_METHOD, serviceState.ACCESS_DENIED, serviceState.INVALID_ARGS)
@@ -992,8 +992,8 @@ class HistoryWindow(QWidget):
         self.segments.chosen.connect(self.showChart)
         self.nameSegments()
         self.levelChart = charts.LevelChart(self.content)
-        self.hoursChart = charts.LineChart("Hours per Charge", "h", charts.HOURS_EMPTY, charts.HOURS_CAPTION, self.content)
-        self.chargingChart = charts.LineChart("Charging Speed", "min per 10%", charts.CHARGING_EMPTY, None, self.content)
+        self.hoursChart = charts.LineChart("Hours per Charge", "h", charts.HOURS_EMPTY, "h", self.content)
+        self.chargingChart = charts.LineChart("Charging Speed", "min per 10%", charts.CHARGING_EMPTY, "min", self.content, byCharger=True)
         self.charts = [self.levelChart, self.hoursChart, self.chargingChart]
         # made after the charts, so it sits above the level chart's corner
         self.rangeControl = SegmentedControl(self, RANGE_LABELS, RANGE_WIDTHS, RANGE_HEIGHT, 11, track=True, index=RANGE_NAMES.index(self.levelRange))

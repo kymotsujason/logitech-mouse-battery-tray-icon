@@ -729,12 +729,12 @@ class AppTests(unittest.TestCase):
     def testAPickedRangeIsSavedAndTheNextWindowOpensOnIt(self):
         mouseApp = self.makeApp(True)
         mouseApp.showHistory()
-        mouseApp.historyWindow.pickRange("year")
-        self.assertEqual(settings.loadLevelRange(self.temp.name), "year")
+        mouseApp.historyWindow.pickRange("month")
+        self.assertEqual(settings.loadLevelRange(self.temp.name), "month")
         mouseApp.historyWindow.close()
         again = self.makeApp(True)
         again.showHistory()
-        self.assertEqual(again.historyWindow.levelRange, "year")
+        self.assertEqual(again.historyWindow.levelRange, "month")
 
     def testAFailedSleepCheckSaveSaysSoAndStillAppliesTheChoice(self):
         mouseApp = self.makeApp(True)
@@ -750,9 +750,9 @@ class AppTests(unittest.TestCase):
         mouseApp.showHistory()
         errors = io.StringIO()
         with mock.patch.object(settings, "saveLevelRange", return_value=False), contextlib.redirect_stderr(errors):
-            mouseApp.historyWindow.pickRange("year")
+            mouseApp.historyWindow.pickRange("month")
         self.assertEqual(errors.getvalue(), "Couldn't save the chart's range to " + settings.settingsPath(self.temp.name) + "\n")
-        self.assertEqual((mouseApp.historyWindow.levelRange, mouseApp.historyWindow.rangeControl.index), ("year", historyWindow.RANGE_NAMES.index("year")))
+        self.assertEqual((mouseApp.historyWindow.levelRange, mouseApp.historyWindow.rangeControl.index), ("month", historyWindow.RANGE_NAMES.index("month")))
 
     def testAnUpdateKeepsAnOpenWindowOpen(self):
         mouseApp = self.makeApp(True)

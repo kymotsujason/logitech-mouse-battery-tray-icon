@@ -570,7 +570,7 @@ class WindowTests(WindowCase):
     def testARangeErrorThatLandsWhileClosedLeavesTheNextOpenItsTry(self):
         window = self.opened(entry())
         self.watcher.holdLevels = True
-        window.pickRange("year")
+        window.pickRange("month")
         window.close()
         key, rangeName, onAnswer = self.watcher.waitingLevels.pop()
         onAnswer(None, serviceState.READ_ALL_LIMITED)
@@ -578,29 +578,29 @@ class WindowTests(WindowCase):
         self.watcher.holdLevels = False
         window.lastFetch.clear()
         window.open()
-        self.assertEqual(self.watcher.levelAsks, [("02bc524c", "year")] * 2)
-        self.assertEqual(window.levelChart.slots, levelsReply("02bc524c", "year")["slots"])
+        self.assertEqual(self.watcher.levelAsks, [("02bc524c", "month")] * 2)
+        self.assertEqual(window.levelChart.slots, levelsReply("02bc524c", "month")["slots"])
 
     def testARangeAnswerThatLandsWhileClosedIsKept(self):
         window = self.opened(entry())
         self.watcher.holdLevels = True
-        window.pickRange("year")
+        window.pickRange("month")
         window.close()
         key, rangeName, onAnswer = self.watcher.waitingLevels.pop()
         onAnswer(levelsReply(key, rangeName), None)
         window.lastFetch.clear()
         window.open()
-        self.assertEqual(self.watcher.levelAsks, [("02bc524c", "year")])
-        self.assertEqual(window.levelChart.slots, levelsReply("02bc524c", "year")["slots"])
+        self.assertEqual(self.watcher.levelAsks, [("02bc524c", "month")])
+        self.assertEqual(window.levelChart.slots, levelsReply("02bc524c", "month")["slots"])
 
     def testAReopenDoesntAskAgainForARangeOnItsWay(self):
         window = self.opened(entry())
         self.watcher.holdLevels = True
-        window.pickRange("year")
+        window.pickRange("month")
         window.close()
         window.lastFetch.clear()
         window.open()
-        self.assertEqual(self.watcher.levelAsks, [("02bc524c", "year")])
+        self.assertEqual(self.watcher.levelAsks, [("02bc524c", "month")])
 
     def testAServiceRestartForgetsTheReplies(self):
         window = self.opened(entry())
@@ -1147,9 +1147,9 @@ class WindowTests(WindowCase):
         window.pickRange("month")
         self.assertEqual((window.levelChart.rangeName, window.levelChart.emptyText()), ("month", historyWindow.RANGE_ERROR_TEXT))
         self.watcher.holdLevels = True
-        window.pickRange("year")
-        # the error belongs to the month, so it isn't held up under the year
-        self.assertEqual((window.levelChart.rangeName, window.levelChart.emptyText()), ("year", historyWindow.LOADING_TEXT))
+        window.pickRange("day")
+        # the error belongs to the month, so it isn't held up under the day
+        self.assertEqual((window.levelChart.rangeName, window.levelChart.emptyText()), ("day", historyWindow.LOADING_TEXT))
         self.assertFalse(window.loadingTimer.isActive())
 
     def testTheDelayAppliesAgainAfterTheLevelsAreForgotten(self):
@@ -1346,13 +1346,13 @@ class WindowTests(WindowCase):
         window = self.opened(entry())
         saved = []
         window.levelRangeChanged.connect(saved.append)
-        window.pickRange("year")
-        self.assertEqual((self.watcher.levelAsks, saved, window.levelChart.title), ([("02bc524c", "year")], ["year"], "Battery Level, Last Year"))
-        self.assertEqual(window.levelChart.slots, levelsReply("02bc524c", "year")["slots"])
+        window.pickRange("month")
+        self.assertEqual((self.watcher.levelAsks, saved, window.levelChart.title), ([("02bc524c", "month")], ["month"], "Battery Level, Last 30 Days"))
+        self.assertEqual(window.levelChart.slots, levelsReply("02bc524c", "month")["slots"])
         window.pickRange("week")
-        window.pickRange("year")
+        window.pickRange("month")
         self.assertEqual(len(self.watcher.levelAsks), 1)
-        self.assertEqual(window.rangeControl.index, historyWindow.RANGE_NAMES.index("year"))
+        self.assertEqual(window.rangeControl.index, historyWindow.RANGE_NAMES.index("month"))
 
     def testPickingTheDayShowsItsPercentBars(self):
         window = self.opened(entry())
@@ -1385,9 +1385,9 @@ class WindowTests(WindowCase):
     def testALoadingRangeSaysSo(self):
         window = self.opened(entry())
         self.watcher.holdLevels = True
-        window.pickRange("all")
+        window.pickRange("month")
         window.showLoading()
-        self.assertEqual((window.levelChart.title, window.levelChart.emptyText()), ("Battery Level, All Time", historyWindow.LOADING_TEXT))
+        self.assertEqual((window.levelChart.title, window.levelChart.emptyText()), ("Battery Level, Last 30 Days", historyWindow.LOADING_TEXT))
 
     def testARangeSwitchKeepsTheOldBarsUntilTheNewOnesCome(self):
         window = self.opened(entry())
@@ -1477,9 +1477,9 @@ class WindowTests(WindowCase):
         self.assertTrue(window.levelRetryTimer.isActive())
 
     def answerOnce(self, error):
-        self.watcher.levelAnswers[("02bc524c", "year")] = (None, error)
+        self.watcher.levelAnswers[("02bc524c", "month")] = (None, error)
         window = self.opened(entry())
-        window.pickRange("year")
+        window.pickRange("month")
         return (window.levelChart.emptyText(), window.levelRetryTimer.isActive())
 
     def testAnUndecodableRangeIsntAskedForAgain(self):
@@ -1494,9 +1494,9 @@ class WindowTests(WindowCase):
         self.assertEqual(window.popup.accessibleName(), "Check whether mice are asleep, 1 min")
         self.assertEqual(window.choiceMenu.accessibleName(), "Check whether mice are asleep")
         self.assertEqual(window.rangeControl.accessibleName(), "Chart range, Last 7 Days")
-        window.pickRange("year")
-        self.assertEqual(window.rangeControl.accessibleName(), "Chart range, Last Year")
-        self.assertEqual((window.segments.accessibleName(), window.levelChart.accessibleName(), window.hoursChart.accessibleName()), ("Chart, Level", "Battery Level, Last Year", "Hours per Charge, All Time"))
+        window.pickRange("month")
+        self.assertEqual(window.rangeControl.accessibleName(), "Chart range, Last 30 Days")
+        self.assertEqual((window.segments.accessibleName(), window.levelChart.accessibleName(), window.hoursChart.accessibleName()), ("Chart, Level", "Battery Level, Last 30 Days", "Hours per Charge, All Time"))
         window.segments.choose(1, animate=False)
         self.assertEqual(window.segments.accessibleName(), "Chart, Hours per Charge")
         self.state(entry(), entry(key="11111111", name="MX Master 3S", reading=hidpp.BatteryReading(18, 0)))
@@ -1511,27 +1511,37 @@ class WindowTests(WindowCase):
         self.assertEqual(window.choiceMenu.accessibleDescription(), "Every minute")
 
     def testAnOldServiceSaysToRestartForTheRange(self):
-        self.watcher.levelAnswers[("02bc524c", "year")] = (None, serviceState.UNKNOWN_METHOD)
+        self.watcher.levelAnswers[("02bc524c", "month")] = (None, serviceState.UNKNOWN_METHOD)
         window = self.opened(entry())
-        window.pickRange("year")
+        window.pickRange("month")
         self.assertEqual(window.levelChart.emptyText(), historyWindow.RANGE_RESTART_TEXT)
 
     def testARefusedRangeIsAskedAgainSoon(self):
-        self.watcher.levelAnswers[("02bc524c", "year")] = (None, serviceState.READ_ALL_LIMITED)
+        self.watcher.levelAnswers[("02bc524c", "month")] = (None, serviceState.READ_ALL_LIMITED)
         window = self.opened(entry())
-        window.pickRange("year")
+        window.pickRange("month")
         self.assertTrue(window.levelRetryTimer.isActive())
         self.assertEqual(window.levelChart.emptyText(), historyWindow.LOADING_TEXT)
-        del self.watcher.levelAnswers[("02bc524c", "year")]
+        del self.watcher.levelAnswers[("02bc524c", "month")]
         window.levelRetryTimer.timeout.emit()
-        self.assertEqual(window.levelChart.slots, levelsReply("02bc524c", "year")["slots"])
+        self.assertEqual(window.levelChart.slots, levelsReply("02bc524c", "month")["slots"])
 
     def testTheWindowOpensOnTheSavedRange(self):
-        window = historyWindow.HistoryWindow(self.mouseList, self.watcher, self.upower, self.folder, None, tray.mouseLine, tray.iconStateFor, levelRange="halfYear")
+        window = historyWindow.HistoryWindow(self.mouseList, self.watcher, self.upower, self.folder, None, tray.mouseLine, tray.iconStateFor, levelRange="month")
         try:
             self.state(entry())
             window.open()
-            self.assertEqual((window.rangeControl.index, self.watcher.levelAsks), (historyWindow.RANGE_NAMES.index("halfYear"), [("02bc524c", "halfYear")]))
+            self.assertEqual((window.rangeControl.index, self.watcher.levelAsks), (historyWindow.RANGE_NAMES.index("month"), [("02bc524c", "month")]))
+        finally:
+            window.close()
+            sip.delete(window)
+
+    def testASavedRangeThatIsntOfferedAnyMoreOpensOnTheWeek(self):
+        window = historyWindow.HistoryWindow(self.mouseList, self.watcher, self.upower, self.folder, None, tray.mouseLine, tray.iconStateFor, levelRange="year")
+        try:
+            self.state(entry())
+            window.open()
+            self.assertEqual((window.levelRange, window.rangeControl.index), ("week", historyWindow.RANGE_NAMES.index("week")))
         finally:
             window.close()
             sip.delete(window)
@@ -1861,7 +1871,7 @@ class WindowTests(WindowCase):
         QTest.keyClick(window.rangeControl, Qt.Key.Key_Right)
         self.assertEqual(window.levelRange, "month")
         QTest.keyClick(window.rangeControl, Qt.Key.Key_End)
-        self.assertEqual(window.levelRange, "all")
+        self.assertEqual(window.levelRange, "month")
         QTest.keyClick(window.rangeControl, Qt.Key.Key_Home)
         self.assertEqual(window.levelRange, "day")
 

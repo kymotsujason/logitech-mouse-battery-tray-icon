@@ -11,7 +11,7 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 from PyQt6 import sip
 from PyQt6.QtCore import QAbstractAnimation, QPointF
-from PyQt6.QtGui import QFont, QFontMetrics, QImage
+from PyQt6.QtGui import QColor, QFont, QFontMetrics, QFontMetricsF, QImage
 from PyQt6.QtWidgets import QApplication
 
 import charts
@@ -313,8 +313,82 @@ class LevelChartTests(ChartCase):
         chart.setSlots(self.spans(26, 7 * 24 * 60 * 60, charts.LEVEL_HEIGHTS["low"], charts.LEVEL_HEIGHTS["good"]), rangeName="halfYear", rough=True)
         self.assertIn("low to good", chart.hoverText(0))
 
+    def barState(self, chart, index):
+        return chart.barColor(index).name()
+
+    def testBarsAreColoredByState(self):
+        chart = self.make(charts.LevelChart())
+        chart.resize(700, 238)
+        chart.setSlots([[NOW - 7200, 100, None, None, True], [NOW - 3600, 15, None, None, False], [NOW, 60, None, None, False]])
+        theme = chart.theme
+        self.assertEqual(self.barState(chart, 0), QColor(theme.green).name())
+        self.assertEqual(self.barState(chart, 1), QColor(theme.red).name())
+        self.assertEqual(self.barState(chart, 2), QColor(theme.blue).name())
+        # the tray icon's rule is 20% or below
+        chart.setSlots([[NOW - 3600, 20, None, None, False], [NOW, 21, None, None, False]])
+        self.assertEqual((self.barState(chart, 0), self.barState(chart, 1)), (QColor(theme.red).name(), QColor(theme.blue).name()))
+
+    def testASpanBarUsesItsHighLevelAndItsChargeCount(self):
+        chart = self.make(charts.LevelChart())
+        chart.resize(700, 238)
+        chart.setSlots([[NOW - 86400, 20, 90, 1], [NOW - 43200, 5, 15, 0], [NOW, 20, 90, 0]], rangeName="month")
+        theme = chart.theme
+        self.assertEqual([self.barState(chart, index) for index in range(3)], [QColor(theme.green).name(), QColor(theme.red).name(), QColor(theme.blue).name()])
+
+    def testAVoltageChartKeepsOneColor(self):
+        chart = self.make(charts.LevelChart())
+        chart.resize(700, 238)
+        chart.setSlots([[NOW - 7200, None, None, 3300, True], [NOW, None, None, 3900, False]], voltage=True)
+        self.assertEqual({self.barState(chart, 0), self.barState(chart, 1)}, {QColor(chart.theme.blue).name()})
+
+    def testALowBarIsRedInTheRender(self):
+        chart = self.make(charts.LevelChart())
+        chart.setSlots([[NOW - 7200 * (83 - index), 15, None, None, False] for index in range(84)])
+        image = rendered(chart)
+        bar = chart.barRect(40)
+        color = image.pixelColor(int(bar.center().x()), int(bar.bottom() - 2))
+        self.assertGreater(color.red(), color.blue() + 60)
+
+    def testEveryBarIsSolidAtItsMiddle(self):
+        chart = self.make(charts.LevelChart())
+        levels = [100, 100, 95, 60, 50, 20, 3, 1]
+        chart.setSlots([[NOW - 7200 * (83 - index), levels[index % len(levels)], None, None, index % 9 == 0] for index in range(84)])
+        image = rendered(chart)
+        for index in range(84):
+            bar = chart.barRect(index)
+            self.assertGreater(image.pixelColor(int(bar.center().x()), int(bar.bottom() - 1)).alpha(), 120, index)
+
+    def testABarIsAtMostTwentyFourPixelsWide(self):
+        self.assertEqual(charts.MAX_BAR_WIDTH, 24)
+        chart = self.make(charts.LevelChart())
+        chart.resize(700, 238)
+        chart.setSlots([[NOW - 7200, 50, None, None, False], [NOW, 50, None, None, False]])
+        self.assertEqual(chart.barRect(0).width(), 24)
+
+    def testEachRunOfChargingSlotsGetsOneDotAboveItsFirstBar(self):
+        chart = self.make(charts.LevelChart())
+        chart.resize(700, 238)
+        chart.setSlots([[NOW - 7200 * (83 - index), 50, None, None, index in (3, 4, 5, 10)] for index in range(84)])
+        dots = []
+        with unittest.mock.patch.object(charts.Chart, "paintDot", lambda self, painter, center, color: dots.append((center.x(), center.y(), color.name()))):
+            rendered(chart)
+        self.assertEqual(len(dots), 2)
+        for dot, index in zip(dots, (3, 10)):
+            bar = chart.barRect(index)
+            self.assertAlmostEqual(dot[0], bar.center().x(), delta=0.01)
+            self.assertAlmostEqual(dot[1], bar.top() - 8, delta=0.01)
+            self.assertEqual(dot[2], QColor(chart.theme.green).name())
+
+    def testNoChargeMeansNoDot(self):
+        chart = self.make(charts.LevelChart())
+        chart.setSlots(slots())
+        dots = []
+        with unittest.mock.patch.object(charts.Chart, "paintDot", lambda self, painter, center, color: dots.append(center)):
+            rendered(chart)
+        self.assertEqual(dots, [])
+
     def testTheMonthlyChartsSayTheyCoverAllTime(self):
-        chart = self.make(charts.LineChart("Hours per Charge", "h", charts.HOURS_EMPTY, charts.HOURS_CAPTION))
+        chart = self.make(charts.LineChart("Hours per Charge", "h", charts.HOURS_EMPTY, "h"))
         self.assertEqual(chart.title, "Hours per Charge, All Time")
 
 class EnglishNameTests(ChartCase):
@@ -396,12 +470,109 @@ class RangeTableTests(unittest.TestCase):
             self.assertEqual(charts.RANGE_SECONDS[name], seconds, name)
 
     def testTheWindowsRangeControlFollowsTheServicesRanges(self):
-        self.assertEqual(historyWindow.RANGE_NAMES, tuple(history.LEVEL_RANGES))
+        self.assertEqual(historyWindow.RANGE_NAMES, ("day", "week", "month"))
+        self.assertTrue(set(historyWindow.RANGE_NAMES) <= set(history.LEVEL_RANGES))
         self.assertEqual(len(historyWindow.RANGE_LABELS), len(historyWindow.RANGE_NAMES))
         self.assertEqual(len(historyWindow.RANGE_WIDTHS), len(historyWindow.RANGE_NAMES))
 
 
+class NiceTickTests(unittest.TestCase):
+    def testTicksStartAtZeroAndCoverTheTopWithRoundSteps(self):
+        self.assertEqual(charts.niceTicks(42), [0, 20, 40, 60])
+        self.assertEqual(charts.niceTicks(11), [0, 5, 10, 15])
+        self.assertEqual(charts.niceTicks(4.5), [0, 2, 4, 6])
+        self.assertEqual(charts.niceTicks(8), [0, 2.5, 5, 7.5, 10])
+        self.assertEqual(charts.niceTicks(100), [0, 50, 100, 150])
+
+    def testEveryTopGetsThreeToFiveTicksThatCoverIt(self):
+        for top in (0.05, 0.7, 1, 3.3, 9, 10, 12, 42, 55, 99, 101, 640, 7000):
+            ticks = charts.niceTicks(top)
+            self.assertTrue(3 <= len(ticks) <= 5, (top, ticks))
+            self.assertEqual(ticks[0], 0)
+            self.assertGreaterEqual(ticks[-1], top * 1.1 - 1e-9, (top, ticks))
+
+    def testAZeroTopStillGetsTicks(self):
+        self.assertGreaterEqual(len(charts.niceTicks(0)), 3)
+
+
 class LineChartTests(ChartCase):
+    def hours(self, values=((("2026-08", 31.0), ("2026-09", 36.0), ("2026-10", 41.0)))):
+        chart = self.make(charts.LineChart("Hours per Charge", "h", charts.HOURS_EMPTY, "h"))
+        chart.resize(700, 238)
+        chart.setSeries({"hours": list(values)})
+        return chart
+
+    def testTheYAxisStartsAtZeroWithRoundLabelsAndAShortUnit(self):
+        chart = self.hours()
+        self.assertEqual(chart.tickLabels(), ["60 h", "40 h", "20 h", "0 h"])
+        small = self.make(charts.LineChart("Charging Speed", "min per 10%", charts.CHARGING_EMPTY, "min"))
+        small.setSeries({"charger": [("2026-09", 9.0), ("2026-10", 10.0)]})
+        self.assertEqual(small.tickLabels(), ["15 min", "10 min", "5 min", "0 min"])
+        fraction = self.make(charts.LineChart("Charging Speed", "min per 10%", charts.CHARGING_EMPTY, "min"))
+        fraction.setSeries({"charger": [("2026-09", 7.0), ("2026-10", 8.0)]})
+        self.assertEqual(fraction.tickLabels(), ["10 min", "7.5 min", "5 min", "2.5 min", "0 min"])
+
+    def testAWobbleStaysSmallOnAZeroBasedAxis(self):
+        chart = self.make(charts.LineChart("Charging Speed", "min per 10%", charts.CHARGING_EMPTY, "min"))
+        chart.resize(700, 238)
+        chart.setSeries({"charger": [("2026-09", 9.0), ("2026-10", 10.0)]})
+        drawn = []
+        with unittest.mock.patch.object(charts.LineChart, "paintLine", lambda self, painter, area, positions, color, fade: drawn.append(positions)):
+            rendered(chart)
+        first, second = drawn[0]
+        self.assertLess(first.y() - second.y(), chart.area().height() * 0.1)
+
+    def testTheAxisWidthFitsTheWidestLabel(self):
+        chart = self.make(charts.LineChart("Charging Speed", "min per 10%", charts.CHARGING_EMPTY, "min"))
+        chart.setSeries({"charger": [("2026-09", 13.0), ("2026-10", 15.0)]})
+        metrics = QFontMetricsF(charts.font(charts.LABEL_SIZE))
+        widest = max(metrics.horizontalAdvance(label) for label in chart.tickLabels())
+        self.assertGreaterEqual(chart.axisWidth(), widest + 8)
+        self.assertGreaterEqual(chart.axisWidth(), charts.AXIS_WIDTH)
+        chart.setSeries({"charger": [("2026-09", 13000.0), ("2026-10", 15000.0)]})
+        wide = QFontMetricsF(charts.font(charts.LABEL_SIZE)).horizontalAdvance("20000 min")
+        self.assertGreaterEqual(chart.axisWidth(), wide + 8)
+        self.assertGreater(chart.axisWidth(), charts.AXIS_WIDTH)
+        chart.resize(700, 238)
+        self.assertAlmostEqual(chart.area().right(), 700 - 16 - chart.axisWidth(), delta=0.01)
+
+    def testTheLevelChartKeepsItsAxisWidth(self):
+        chart = self.make(charts.LevelChart())
+        self.assertEqual(chart.axisWidth(), charts.AXIS_WIDTH)
+
+    def testTheHoursLineIsBlueAndNeverOrange(self):
+        chart = self.hours()
+        drawn = []
+        with unittest.mock.patch.object(charts.LineChart, "paintLine", lambda self, painter, area, positions, color, fade: drawn.append(color.name())):
+            rendered(chart)
+        self.assertEqual(drawn, [QColor(chart.theme.blue).name()])
+
+    def testChargersGetTheTwoChargeColorsThenTheSecondaryText(self):
+        for theme, expected in ((glass.DARK, ("#24A957", "#5E5CE6")), (glass.LIGHT, ("#248A3D", "#5856D6"))):
+            self.assertEqual(theme.chargeSeries, expected)
+            chart = self.make(charts.LineChart("Charging Speed", "min per 10%", charts.CHARGING_EMPTY, "min", byCharger=True))
+            chart.setTheme(theme)
+            chart.setSeries({name: [("2026-09", 4.0), ("2026-10", 5.0)] for name in ("cable", "wireless charger", "charger 3")})
+            drawn = []
+            with unittest.mock.patch.object(charts.LineChart, "paintLine", lambda self, painter, area, positions, color, fade: drawn.append(color.name())):
+                rendered(chart)
+            self.assertEqual(drawn, [QColor(expected[0]).name(), QColor(expected[1]).name(), QColor(theme.secondary).name()])
+            self.assertNotIn(QColor(theme.orange).name(), drawn)
+
+    def testEveryMonthsPointGetsADot(self):
+        chart = self.hours()
+        dots = []
+        with unittest.mock.patch.object(charts.Chart, "paintDot", lambda self, painter, center, color: dots.append(color.name())):
+            rendered(chart)
+        self.assertEqual(dots, [QColor(chart.theme.blue).name()] * 3)
+
+    def testTheCaptionIsGone(self):
+        self.assertFalse(hasattr(charts, "HOURS_CAPTION"))
+        chart = self.hours()
+        self.assertFalse(hasattr(chart, "caption"))
+        self.assertEqual(chart.area().bottom(), chart.height() - charts.BOTTOM)
+
+
     def testTheBigNumberIsTheNewestMonthAcrossEverySeries(self):
         chart = self.make(charts.LineChart("Charging Speed", "min per 10%", charts.CHARGING_EMPTY))
         chart.setSeries({"charger": [("2026-08", 6.0), ("2026-09", 5.0)], "wireless charger": [("2026-09", 4.0), ("2026-10", 3.0)]})
@@ -412,16 +583,16 @@ class LineChartTests(ChartCase):
         self.assertEqual(shown, [(3.0, "2026-10")])
 
     def testEverySeriesGetsALine(self):
-        chart = self.make(charts.LineChart("Charging Speed", "min per 10%", charts.CHARGING_EMPTY))
+        chart = self.make(charts.LineChart("Charging Speed", "min per 10%", charts.CHARGING_EMPTY, "min", byCharger=True))
         chart.setSeries({name: [("2026-09", 4.0 + index), ("2026-10", 5.0)] for index, name in enumerate(("a", "b", "c", "d", "e"))})
         drawn = []
         with unittest.mock.patch.object(charts.LineChart, "paintLine", lambda self, painter, area, positions, color, fade: drawn.append(color.name())):
             rendered(chart)
         self.assertEqual(len(drawn), 5)
-        self.assertEqual(drawn[4], drawn[0])
+        self.assertEqual(drawn[3], drawn[0])
 
     def testAnEmptySeriesSaysSo(self):
-        chart = self.make(charts.LineChart("Hours per Charge", "h", charts.HOURS_EMPTY, charts.HOURS_CAPTION))
+        chart = self.make(charts.LineChart("Hours per Charge", "h", charts.HOURS_EMPTY, "h"))
         chart.setSeries({"hours": []})
         self.assertEqual(chart.series, {})
         rendered(chart)

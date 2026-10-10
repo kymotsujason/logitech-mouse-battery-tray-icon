@@ -1,11 +1,13 @@
+import math
 import time
 
 from PyQt6.QtCore import QPointF, QRectF, Qt, QVariantAnimation
-from PyQt6.QtGui import QBrush, QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen
+from PyQt6.QtGui import QBrush, QColor, QFont, QFontMetricsF, QLinearGradient, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import QWidget
 
 import glass
 import hidpp
+import icon
 import mice
 
 RANGE_TITLES = {"day": "Battery Level, Last 24 Hours", "week": "Battery Level, Last 7 Days", "month": "Battery Level, Last 30 Days", "halfYear": "Battery Level, Last 6 Months", "year": "Battery Level, Last Year", "all": "Battery Level, All Time"}
@@ -15,13 +17,22 @@ RANGE_SECONDS = {"day": 30 * 60, "week": 2 * 60 * 60, "month": 12 * 60 * 60, "ha
 SPAN_RANGES = ("month", "halfYear", "year", "all")
 LABEL_SPACING = {"day": 40, "week": 40, "month": 64, "halfYear": 36, "year": 36, "all": 36}
 LEVEL_EMPTY = RANGE_EMPTY["week"]
-MAX_BAR_WIDTH = 28
+MAX_BAR_WIDTH = 24
+BAR_RADIUS = 4
+BAR_BOTTOM_ALPHA = 0.55
+DOT_RADIUS = 4
+DOT_RING = 2
+DOT_RISE = 8
+MAX_TICKS = 5
+TICK_ROOM = 1.1
+TICK_STEPS = (1, 2, 2.5, 5)
+# the ring around a dot is the panel's own color, which the glass only approximates
+PANEL_COLORS = {True: "#1C1F22", False: "#F2F3F5"}
 MIN_BAR_HEIGHT = 3
 BAR_GAP = 2.0
 RANGE_ROOM = 10
 HOURS_EMPTY = "No measured drain yet"
 CHARGING_EMPTY = "No measured charges yet"
-HOURS_CAPTION = "A rough guide, since each month mixes every part of the battery. The health box is the one to trust."
 LEVEL_HEIGHTS = hidpp.LEVEL_HEIGHTS
 LABEL_SIZE = 10
 TITLE_SIZE = 12
@@ -29,6 +40,22 @@ AXIS_WIDTH = 44
 TOP = 30
 BOTTOM = 24
 MONTH_LABEL_WIDTH = 40
+
+
+def niceTicks(top):
+    # the smallest round step that covers the top with room to spare in five ticks or fewer, counting the zero
+    limit = (top if top > 0 else 1) * TICK_ROOM
+    for exponent in range(-9, 10):
+        for factor in TICK_STEPS:
+            step = factor * 10 ** exponent
+            count = math.ceil(round(limit / step, 9))
+            if (count + 1 <= MAX_TICKS):
+                return [round(index * step, 9) for index in range(count + 1)]
+    return [0, limit]
+
+
+def tickText(value):
+    return str(int(value)) if value == int(value) else str(value)
 
 
 def font(size, weight=QFont.Weight.Normal):
@@ -78,7 +105,17 @@ class Chart(QWidget):
         self.update()
 
     def area(self):
-        return QRectF(16, TOP, self.width() - 32 - AXIS_WIDTH, self.height() - TOP - BOTTOM)
+        return QRectF(16, TOP, self.width() - 32 - self.axisWidth(), self.height() - TOP - BOTTOM)
+
+    def axisWidth(self):
+        return AXIS_WIDTH
+
+    def paintDot(self, painter, center, color):
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(PANEL_COLORS[self.theme.dark]))
+        painter.drawEllipse(center, DOT_RADIUS + DOT_RING, DOT_RADIUS + DOT_RING)
+        painter.setBrush(color)
+        painter.drawEllipse(center, DOT_RADIUS, DOT_RADIUS)
 
     def paintTitle(self, painter):
         painter.setFont(font(TITLE_SIZE, QFont.Weight.Medium))
@@ -97,7 +134,7 @@ class Chart(QWidget):
             painter.drawLine(QPointF(area.x(), y), QPointF(area.right(), y))
             painter.setFont(font(LABEL_SIZE))
             painter.setPen(QColor(self.theme.secondary))
-            painter.drawText(QRectF(area.right() + 8, y - 8, AXIS_WIDTH, 16), int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), label)
+            painter.drawText(QRectF(area.right() + 8, y - 8, self.axisWidth(), 16), int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), label)
 
 
 class LevelChart(Chart):
@@ -170,7 +207,7 @@ class LevelChart(Chart):
 
     def area(self):
         # the range control sits in the top right corner, so the bars start below it
-        return QRectF(16, TOP + RANGE_ROOM, self.width() - 32 - AXIS_WIDTH, self.height() - TOP - RANGE_ROOM - BOTTOM)
+        return QRectF(16, TOP + RANGE_ROOM, self.width() - 32 - self.axisWidth(), self.height() - TOP - RANGE_ROOM - BOTTOM)
 
     def values(self, slot):
         if (self.isSpan()):
@@ -209,6 +246,37 @@ class LevelChart(Chart):
             if (not self.isSpan()):
                 top, bottom = area.bottom() - MIN_BAR_HEIGHT / 3, area.bottom()
         return QRectF(x, top, width, bottom - top)
+
+    def isCharged(self, slot):
+        return slot[3] > 0 if self.isSpan() else bool(slot[4])
+
+    def barColor(self, index):
+        slot = self.slots[index]
+        if (self.voltage):
+            return QColor(self.theme.blue)
+        if (self.isCharged(slot)):
+            return QColor(self.theme.green)
+        value = slot[2] if self.isSpan() else slotValue(slot)
+        if (value is not None and value <= icon.RED_PERCENT):
+            return QColor(self.theme.red)
+        return QColor(self.theme.blue)
+
+    def barPath(self, rect):
+        # a span floats between two levels, so both its ends are round, while a level bar stands on the baseline
+        path = QPainterPath()
+        radius = min(BAR_RADIUS, rect.width() / 2, rect.height() / 2 if self.isSpan() else rect.height())
+        if (self.isSpan()):
+            path.addRoundedRect(rect, radius, radius)
+            return path
+        diameter = radius * 2
+        path.moveTo(rect.left(), rect.bottom())
+        path.lineTo(rect.left(), rect.top() + radius)
+        path.arcTo(QRectF(rect.left(), rect.top(), diameter, diameter), 180, -90)
+        path.lineTo(rect.right() - radius, rect.top())
+        path.arcTo(QRectF(rect.right() - diameter, rect.top(), diameter, diameter), 90, -90)
+        path.lineTo(rect.right(), rect.bottom())
+        path.closeSubpath()
+        return path
 
     def barAt(self, x):
         area = self.area()
@@ -320,23 +388,29 @@ class LevelChart(Chart):
         area = self.area()
         low, high, labels = self.scale()
         self.paintGrid(painter, area, labels)
+        dots = []
+        charging = False
         for index, slot in enumerate(self.slots):
             rect = self.shownRect(index)
             if (rect is None):
+                charging = False
                 continue
-            path = QPainterPath()
-            path.addRoundedRect(rect, min(1.5, rect.width() / 2), min(1.5, rect.width() / 2))
-            # a long slot nearly always holds a charge, so only the short ranges mark it in green
-            if (not self.isSpan() and slot[4]):
-                fill = QLinearGradient(rect.topLeft(), rect.bottomLeft())
-                fill.setColorAt(0, QColor(self.theme.green).lighter(125))
-                fill.setColorAt(1, QColor(self.theme.green))
-                painter.fillPath(path, QBrush(fill))
-            else:
-                color = glass.rgba(self.theme.bar)
-                if (index == self.hover):
-                    color.setAlphaF(min(1.0, color.alphaF() * 2))
-                painter.fillPath(path, color)
+            color = self.barColor(index)
+            top = QColor(color)
+            bottom = QColor(color)
+            bottom.setAlphaF(BAR_BOTTOM_ALPHA)
+            if (index == self.hover):
+                bottom.setAlphaF(min(1.0, BAR_BOTTOM_ALPHA * 2))
+            fill = QLinearGradient(rect.topLeft(), rect.bottomLeft())
+            fill.setColorAt(0, top)
+            fill.setColorAt(1, bottom)
+            painter.fillPath(self.barPath(rect), QBrush(fill))
+            # color alone can't carry a charge, so the first bar of each run of them wears a dot
+            if (self.isCharged(slot) and not charging):
+                dots.append(QPointF(rect.center().x(), rect.top() - DOT_RISE))
+            charging = self.isCharged(slot)
+        for center in dots:
+            self.paintDot(painter, center, QColor(self.theme.green))
         self.paintLabels(painter, area)
 
     def paintLabels(self, painter, area):
@@ -351,12 +425,13 @@ class LevelChart(Chart):
 
 
 class LineChart(Chart):
-    def __init__(self, title, unit, empty, caption=None, parent=None):
+    def __init__(self, title, unit, empty, tickUnit=None, parent=None, byCharger=False):
         # these charts plot every month the mouse has, so the title says so
         super().__init__(title + ", All Time", parent)
         self.unit = unit
+        self.tickUnit = unit if tickUnit is None else tickUnit
         self.empty = empty
-        self.caption = caption
+        self.byCharger = byCharger
         self.series = {}
 
     def setSeries(self, series):
@@ -375,6 +450,26 @@ class LineChart(Chart):
                 newest = (month, value)
         return newest
 
+    def ticks(self):
+        if (not self.series):
+            return [0, 1]
+        return niceTicks(max(value for points in self.series.values() for month, value in points))
+
+    def tickLabels(self):
+        return [tickText(tick) + " " + self.tickUnit for tick in reversed(self.ticks())]
+
+    def axisWidth(self):
+        metrics = QFontMetricsF(font(LABEL_SIZE))
+        return max(AXIS_WIDTH, math.ceil(max(metrics.horizontalAdvance(label) for label in self.tickLabels())) + 8)
+
+    def seriesColors(self):
+        if (self.byCharger):
+            return [QColor(self.theme.chargeSeries[0]), QColor(self.theme.chargeSeries[1]), QColor(self.theme.secondary)]
+        return [QColor(self.theme.blue)]
+
+    def area(self):
+        return super().area().adjusted(0, 22, 0, 0)
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -383,30 +478,24 @@ class LineChart(Chart):
             self.paintEmpty(painter, self.empty)
             return
         months = self.months()
-        values = [value for points in self.series.values() for month, value in points]
-        low, high = min(values) * 0.8, max(values) * 1.2
-        if (high <= low):
-            high = low + 1
-        area = self.area().adjusted(0, 22, 0, -16 if self.caption else 0)
-        self.paintGrid(painter, area, [str(round(high)) + " " + self.unit, str(round((low + high) / 2)) + " " + self.unit, str(round(low)) + " " + self.unit])
-        colors = [QColor(self.theme.green), QColor(glass.BLUE), QColor(self.theme.orange), QColor(self.theme.secondary)]
+        ticks = self.ticks()
+        top = ticks[-1]
+        area = self.area()
+        self.paintGrid(painter, area, self.tickLabels())
+        colors = self.seriesColors()
         legend = []
         for index, (label, points) in enumerate(sorted(self.series.items())):
             color = colors[index % len(colors)]
-            positions = [QPointF(area.x() + area.width() * (months.index(month) / max(1, len(months) - 1) if len(months) > 1 else 0.5), area.bottom() - (value - low) / (high - low) * area.height()) for month, value in points]
+            positions = [QPointF(area.x() + area.width() * (months.index(month) / max(1, len(months) - 1) if len(months) > 1 else 0.5), area.bottom() - value / top * area.height()) for month, value in points]
             self.paintLine(painter, area, positions, color, fade=len(self.series) == 1)
             legend.append((label, color))
         latestMonth, latest = self.headline()
         painter.setFont(font(22, QFont.Weight.Bold))
         painter.setPen(QColor(self.theme.text))
-        painter.drawText(QRectF(16, TOP - 2, self.width() - 32 - AXIS_WIDTH, 26), int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), latestText(latest, self.unit, latestMonth, time.time()))
+        painter.drawText(QRectF(16, TOP - 2, self.width() - 32 - self.axisWidth(), 26), int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), latestText(latest, self.unit, latestMonth, time.time()))
         if (len(legend) > 1):
             self.paintLegend(painter, legend)
         self.paintMonths(painter, area, months)
-        if (self.caption):
-            painter.setFont(font(LABEL_SIZE))
-            painter.setPen(QColor(self.theme.secondary))
-            painter.drawText(QRectF(16, self.height() - 18, self.width() - 32, 16), int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), self.caption)
 
     def paintLine(self, painter, area, positions, color, fade):
         path = QPainterPath()
@@ -420,22 +509,21 @@ class LineChart(Chart):
             fill.lineTo(positions[0].x(), area.bottom())
             gradient = QLinearGradient(0, area.y(), 0, area.bottom())
             top = QColor(color)
-            top.setAlphaF(0.28)
+            top.setAlphaF(0.18)
             bottom = QColor(color)
             bottom.setAlphaF(0.0)
             gradient.setColorAt(0, top)
             gradient.setColorAt(1, bottom)
             painter.fillPath(fill, QBrush(gradient))
-        painter.setPen(QPen(color, 2.5, cap=Qt.PenCapStyle.RoundCap))
+        painter.setPen(QPen(color, 2, cap=Qt.PenCapStyle.RoundCap, join=Qt.PenJoinStyle.RoundJoin))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawPath(path)
-        if (len(positions) == 1):
-            painter.setBrush(color)
-            painter.drawEllipse(positions[0], 3, 3)
+        for position in positions:
+            self.paintDot(painter, position, color)
 
     def paintLegend(self, painter, legend):
         painter.setFont(font(LABEL_SIZE))
-        x = self.width() - 16 - AXIS_WIDTH
+        x = self.width() - 16 - self.axisWidth()
         for label, color in reversed(legend):
             width = painter.fontMetrics().horizontalAdvance(label) + 18
             x -= width
