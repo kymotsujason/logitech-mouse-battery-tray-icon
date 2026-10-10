@@ -403,16 +403,49 @@ class AutostartTests(unittest.TestCase):
 
     def testALinkAtTheTemporaryNameIsntWrittenThrough(self):
         os.makedirs(os.path.dirname(self.path))
+        temp = self.path + ".0123456789abcdef.new"
         with tempfile.TemporaryDirectory() as other:
             victim = os.path.join(other, "victim")
             with open(victim, "w") as f:
                 f.write("keep")
-            os.symlink(victim, self.path + ".new")
-            autostart.setEnabled(self.configHome, False)
+            os.symlink(victim, temp)
+            # the link sits at the name this write will really use
+            with mock.patch.object(autostart.secrets, "token_hex", return_value="0123456789abcdef"):
+                with self.assertRaises(FileExistsError):
+                    autostart.setEnabled(self.configHome, False)
             with open(victim) as f:
                 self.assertEqual(f.read(), "keep")
-        self.assertFalse(os.path.islink(self.path))
-        self.assertIn("Hidden=true", self.read())
+        self.assertTrue(os.path.islink(temp))
+        self.assertFalse(os.path.lexists(self.path))
+
+    def modesWhileWriting(self):
+        modes = []
+        realFdopen = os.fdopen
+
+        def recordMode(fd, *args, **kwargs):
+            if (args[:1] == ("w",)):
+                modes.append(stat.S_IMODE(os.fstat(fd).st_mode))
+            return realFdopen(fd, *args, **kwargs)
+
+        oldMask = os.umask(0o022)
+        try:
+            with mock.patch.object(autostart.os, "fdopen", recordMode):
+                autostart.setEnabled(self.configHome, False)
+        finally:
+            os.umask(oldMask)
+        return modes
+
+    def testATemporaryFileIsOnlyTheOwnersWhileItsWritten(self):
+        os.makedirs(os.path.dirname(self.path))
+        with open(self.path, "w") as f:
+            f.write("[Desktop Entry]\nType=Application\nName=Mouse Battery\nExec=logitech-mouse-battery\n")
+        os.chmod(self.path, 0o600)
+        self.assertEqual(self.modesWhileWriting(), [0o600])
+        self.assertEqual(stat.S_IMODE(os.stat(self.path).st_mode), 0o600)
+
+    def testANewOverrideIsOnlyTheOwners(self):
+        self.assertEqual(self.modesWhileWriting(), [0o600])
+        self.assertEqual(stat.S_IMODE(os.stat(self.path).st_mode), 0o600)
 
     def testA0400OverrideRaisesPermissionErrorAndIsLeftUnchanged(self):
         os.makedirs(os.path.dirname(self.path))

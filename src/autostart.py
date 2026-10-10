@@ -134,8 +134,8 @@ def writeText(folder, name, shown, info, text):
             raise PermissionError(errno.EACCES, "Permission denied, the file is read only", os.path.join(shown, name))
     # each write gets a temporary name of its own, made fresh without following a link, so the text can't land in another file and two writers at once can't publish each other's unfinished file
     temp = name + "." + secrets.token_hex(8) + ".new"
-    # opened before the cleanup below takes over, so a name that already exists is never removed as if it were this write's
-    fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o666, dir_fd=folder)
+    # opened before the cleanup below takes over, so a name that already exists is never removed as if it were this write's, and made only the owner's so the text can't be read before it takes the old file's mode
+    fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=folder)
     try:
         try:
             with os.fdopen(fd, "w", encoding="utf-8", errors="surrogateescape", closefd=False) as f:
