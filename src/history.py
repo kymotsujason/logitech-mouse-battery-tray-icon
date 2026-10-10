@@ -27,6 +27,8 @@ DISCHARGE_SETTLE_SECONDS = 60
 # a mouse's row in mice is made the first time it's seen, so a device that names a new unit id at each identify would add one a second without a limit of its own
 NEW_MICE_BURST = 10
 NEW_MICE_REFILL_SECONDS = 5 * 60
+# a run that ends without its gap rows leaves at most this much of a mouse's old level standing, while an idle machine syncs the heartbeat to the disk only this often
+HEARTBEAT_SECONDS = 5 * 60
 # the probe saw a wake's battery event come with or after its wireless status event, but only on two wakes, so a reading this close before a wake counts as part of it
 WAKE_SET_SECONDS = 2
 MILLIVOLT_STEP = 20
@@ -163,6 +165,7 @@ class Store:
         # corruption found during a run serves no history until the next start, when the full check runs
         self.brokenThisRun = False
         self.lastAttempt = None
+        self.beatAt = None
         self.printed = set()
         # the lines each kind of failure still going on has printed, so its end gets a line and the next outage prints again
         self.failing = {}
@@ -244,6 +247,7 @@ class Store:
                 for statement in SCHEMA:
                     self.db.execute(statement)
                 self.db.execute("pragma user_version = " + str(SCHEMA_VERSION))
+        self.recover()
         if (fullCheck):
             try:
                 os.remove(flag)
@@ -252,6 +256,44 @@ class Store:
         self.lastAttempt = None
         self.works(FAILED_OPEN, "The history is open again")
         return True
+
+    def recover(self):
+        now = int(self.clock())
+        self.beatAt = self.monotonic()
+        try:
+            with self.transaction():
+                # older releases ignore a table they don't know, so this one comes without a new version, which would lock them out of the file
+                self.db.execute("create table if not exists heartbeat (id integer primary key, at integer not null)")
+                found = self.db.execute("select at from heartbeat where id = 0").fetchone()
+                if (found is not None):
+                    self.addRecoveryGaps(found[0], now)
+                self.db.execute("insert or replace into heartbeat (id, at) values (0, ?)", (now,))
+        except sqlite3.Error as error:
+            if (isCorruption(error)):
+                raise
+            # a disk that's full or read only can still serve the history it has
+            self.say("Couldn't save to the history: " + describe(error), FAILED_SAVE)
+
+    def addRecoveryGaps(self, savedAt, now):
+        # a run that ended without its gap rows, on a power loss or a kill, would leave each mouse's last level standing over the time nothing watched, so a gap goes where that run was last seen
+        for (mouseId,) in self.db.execute("select id from mice").fetchall():
+            last = self.db.execute("select at, origin from readings where mouseId = ? order by at desc, seq desc limit 1", (mouseId,)).fetchone()
+            if (last is None or last[1] == ORIGIN_GAP):
+                continue
+            # a heartbeat saved while the wall clock was ahead would put the gap after the rows this run saves
+            DbWriter(self.db, mouseId).insertReading(Row(min(max(savedAt, last[0]), now), ORIGIN_GAP))
+
+    def beat(self):
+        # the attempt counts even when it fails, so a full disk is tried only as often as a working one
+        self.beatAt = self.monotonic()
+        try:
+            with self.transaction():
+                self.db.execute("insert or replace into heartbeat (id, at) values (0, ?)", (int(self.clock()),))
+        except sqlite3.Error as error:
+            if (isCorruption(error)):
+                self.markCorrupt(error)
+            else:
+                self.say("Couldn't save to the history: " + describe(error), FAILED_SAVE)
 
     def renameBroken(self):
         suffix = ".broken-" + str(int(self.clock()))
@@ -869,7 +911,13 @@ class Recorder(QObject):
                 self.process(entry, entry.pending.pop(0))
             if (entry.held is not None and entry.lastWriteAt is not None and now >= entry.lastWriteAt + HOLD_SECONDS):
                 self.flushHeld(entry)
+        if (self.watching() and now >= self.store.beatAt + HEARTBEAT_SECONDS):
+            self.store.beat()
         self.schedule()
+
+    def watching(self):
+        # a machine with no mouse in the history has nothing to keep a heartbeat for
+        return self.store is not None and self.store.isOpen() and any(entry.loaded for entry in self.entries.values())
 
     def schedule(self):
         if (self.timer is None):
@@ -880,6 +928,8 @@ class Recorder(QObject):
                 due.append(entry.pending[0].arrived + WAKE_SET_SECONDS)
             if (entry.held is not None and entry.lastWriteAt is not None):
                 due.append(entry.lastWriteAt + HOLD_SECONDS)
+        if (self.watching()):
+            due.append(self.store.beatAt + HEARTBEAT_SECONDS)
         if (not due):
             self.timer.stop()
             return
@@ -893,6 +943,9 @@ class Recorder(QObject):
             for row in pending:
                 self.process(entry, row)
             self.flushHeld(entry)
+        # a clean stop saves when it stopped, so a mouse whose source writes no gap row on the way out still gets one at the next start
+        if (self.watching()):
+            self.store.beat()
         if (self.timer is not None):
             self.timer.stop()
         if (self.store is not None):

@@ -172,7 +172,7 @@ class StoreTests(RecorderCase):
         with self.db() as db:
             self.assertEqual(db.execute("pragma user_version").fetchone()[0], 1)
             tables = {name for (name,) in db.execute("select name from sqlite_master where type = 'table'")}
-        self.assertEqual(tables, {"mice", "readings", "steps", "sessions"})
+        self.assertEqual(tables, {"mice", "readings", "steps", "sessions", "heartbeat"})
 
     @unittest.skipUnless(sys.version_info >= (3, 13), "sqlite3 warns about unclosed connections only from Python 3.13")
     def testTheHelpersCloseTheirConnections(self):
@@ -204,7 +204,8 @@ class StoreTests(RecorderCase):
         self.assertTrue(again.available())
         again.stop()
         self.assertEqual([name for name in os.listdir(self.folder) if ".broken-" in name], [])
-        self.assertEqual([row[:3] for row in self.rows()], [(0, 0, 50)])
+        # the first run's stop wrote no gap row, so the next start adds one where it was last seen
+        self.assertEqual([row[:3] for row in self.rows()], [(0, 0, 50), (2, history.ORIGIN_GAP, None)])
 
     def testANewerDatabaseIsLeftAsItIs(self):
         with self.db() as db:
@@ -276,7 +277,7 @@ class StoreTests(RecorderCase):
         self.assertFalse(os.path.exists(os.path.join(self.folder, history.INTEGRITY_FLAG)))
         again.stop()
         self.assertEqual([name for name in os.listdir(self.folder) if ".broken-" in name], [])
-        self.assertEqual([row[:3] for row in self.rows()], [(0, 0, 50)])
+        self.assertEqual([row[:3] for row in self.rows()], [(0, 0, 50), (2, history.ORIGIN_GAP, None)])
         # the flag is gone, so the start after that goes back to the quick check
         last = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic)
         self.assertEqual(self.checksOpening(last), ["pragma quick_check"])
@@ -326,7 +327,7 @@ class StoreTests(RecorderCase):
         self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic)
         self.failQuery(corruption(), "from mice")
         self.event(1800, 49)
-        self.assertEqual([row[:3] for row in self.rows()], [(0, 0, 50)])
+        self.assertEqual([row[:3] for row in self.rows()], [(0, 0, 50), (2, history.ORIGIN_GAP, None)])
         self.assertStoppedForCorruption(3600)
 
     def testAnErrorWithoutACodeIsntCorruption(self):
@@ -962,7 +963,7 @@ class RecorderTests(RecorderCase):
         self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic)
         self.recorder.addReading(KEY, battery(49), history.ORIGIN_UPOWER, source=history.SOURCE_UPOWER, at=START + 600)
         self.at(700)
-        self.assertEqual([row[2] for row in self.rows()], [50])
+        self.assertEqual([row[2] for row in self.rows()], [50, None])
 
     def testAUPowerRowQueuedBeforeTheHidppSearchIsLeftOut(self):
         self.recorder.addReading(KEY, battery(49), history.ORIGIN_UPOWER, source=history.SOURCE_UPOWER, at=START)
@@ -983,7 +984,7 @@ class RecorderTests(RecorderCase):
         self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic)
         self.recorder.addReading(KEY, battery(48), history.ORIGIN_UPOWER, source=history.SOURCE_UPOWER, at=START + 600)
         self.at(700)
-        self.assertEqual([row[2] for row in self.rows()], [49])
+        self.assertEqual([row[2] for row in self.rows()], [49, None])
 
     def testASourceThatFailedToSaveIsSavedWhenTheMouseLoadsAgain(self):
         self.recorder.addReading(KEY, battery(49), history.ORIGIN_UPOWER, source=history.SOURCE_UPOWER, at=START)
@@ -1332,7 +1333,7 @@ class RecorderTests(RecorderCase):
         self.clock.now = START + 600 + history.OPEN_RETRY_SECONDS
         self.recorder.addReading(KEY, battery(48), history.ORIGIN_UPOWER, source=history.SOURCE_UPOWER, at=START + 1200)
         self.at(1300)
-        self.assertEqual(([row[2] for row in self.rows()], entry.source), ([50], history.SOURCE_HIDPP))
+        self.assertEqual(([row[2] for row in self.rows()], entry.source), ([50, None], history.SOURCE_HIDPP))
 
     def testAHistoryThatNeverOpensLetsUPowerHaveTheKey(self):
         self.recorder.store.tooNew = True
@@ -1346,7 +1347,7 @@ class RecorderTests(RecorderCase):
         with mock.patch.object(self.recorder, "isHidppKey", return_value=False):
             self.recorder.addReading(KEY, battery(49), history.ORIGIN_UPOWER, source=history.SOURCE_UPOWER, at=START + 600)
         self.at(700)
-        self.assertEqual(([row[2] for row in self.rows()], self.recorder.entries[KEY].source), ([50], history.SOURCE_HIDPP))
+        self.assertEqual(([row[2] for row in self.rows()], self.recorder.entries[KEY].source), ([50, None], history.SOURCE_HIDPP))
 
     def testACorruptHidppLookupForAUPowerReadingMarksTheHistoryCorrupt(self):
         self.failQuery(corruption())
@@ -1373,6 +1374,145 @@ class RecorderTests(RecorderCase):
         self.assertFalse(recorder.available())
         recorder.stop()
 
+
+
+class RecoveryTests(RecorderCase):
+    def kill(self):
+        # a power loss or a SIGKILL ends the run with no stop, so nothing more is written, while every commit that returned is on the disk
+        self.recorder.store.closeQuietly()
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic, boottime=self.clock.boottime)
+
+    def dayLevels(self):
+        return [slot[1] for slot in self.recorder.levels(KEY, "day")["slots"]]
+
+    def heartbeat(self):
+        with self.db() as db:
+            return db.execute("select at - ? from heartbeat", (START,)).fetchone()[0]
+
+    def gaps(self):
+        return [row[0] for row in self.rows() if row[1] == history.ORIGIN_GAP]
+
+    def testAKilledRunLeavesAGapWhereItWasLastSeen(self):
+        self.event(0, 80)
+        self.at(5 * 60 + 10)
+        self.kill()
+        self.clock.now = START + 24 * 60 * 60
+        self.assertTrue(self.recorder.available())
+        # the day ends now and starts at the reading, so nothing is known from the heartbeat on
+        self.assertEqual(set(self.dayLevels()), {None})
+        self.assertEqual(self.gaps(), [5 * 60 + 10])
+
+    def testAKilledRunGapsAfterAReadingNewerThanItsHeartbeat(self):
+        self.event(0, 80)
+        self.event(100, 79)
+        self.kill()
+        self.clock.now = START + 5000
+        self.assertTrue(self.recorder.available())
+        self.assertEqual(self.gaps(), [100])
+
+    def testAHeartbeatFromAClockThatWasAheadPutsTheGapNoLaterThanNow(self):
+        self.event(0, 80)
+        self.clock.jump(2 * 60 * 60)
+        self.at(2 * 60 * 60 + 400)
+        self.assertEqual(self.heartbeat(), 2 * 60 * 60 + 400)
+        self.kill()
+        # the clock was set right before the next start
+        self.clock.jump(-2 * 60 * 60)
+        self.at(450)
+        self.assertTrue(self.recorder.available())
+        self.event(500, 79)
+        self.assertIn((450, history.ORIGIN_GAP, None, None, None), self.rows())
+        self.assertEqual(self.rows()[-1], (500, history.ORIGIN_EVENT, 79, 0, 0))
+
+    def testAMouseWhoseLastRowIsAGapGetsNoOther(self):
+        self.event(0, 80)
+        self.marker(100, history.ORIGIN_GAP)
+        self.at(1000)
+        self.kill()
+        self.clock.now = START + 5000
+        self.assertTrue(self.recorder.available())
+        self.assertEqual(self.gaps(), [100])
+
+    def testTwoKillsInARowAddOneGap(self):
+        self.event(0, 80)
+        self.kill()
+        self.clock.now = START + 5000
+        self.assertTrue(self.recorder.available())
+        self.kill()
+        self.clock.now = START + 9000
+        self.assertTrue(self.recorder.available())
+        self.assertEqual(len(self.gaps()), 1)
+
+    def testAHistoryFromBeforeTheHeartbeatOpensWithTodaysGap(self):
+        self.event(0, 80)
+        self.recorder.stop()
+        with self.db() as db:
+            db.execute("drop table heartbeat")
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic, boottime=self.clock.boottime)
+        self.clock.now = START + 5000
+        self.assertTrue(self.recorder.available())
+        self.assertEqual(self.gaps(), [])
+        with self.db() as db:
+            self.assertEqual(db.execute("pragma user_version").fetchone()[0], 1)
+        self.assertEqual(self.heartbeat(), 5000)
+        self.event(6000, 79)
+        self.assertEqual(self.rows()[-2:], [(6000, history.ORIGIN_GAP, None, None, None), (6000, history.ORIGIN_EVENT, 79, 0, 0)])
+
+    def testTheHeartbeatIsSavedAtMostEveryFiveMinutes(self):
+        self.event(0, 80)
+        opened = self.heartbeat()
+        self.at(5 * 60)
+        self.assertEqual(self.heartbeat(), opened)
+        self.at(opened + 5 * 60)
+        self.assertEqual(self.heartbeat(), opened + 5 * 60)
+        self.at(opened + 5 * 60 + 100)
+        self.assertEqual(self.heartbeat(), opened + 5 * 60)
+
+    def testNoHeartbeatIsSavedWithoutAMouse(self):
+        self.assertTrue(self.recorder.available())
+        self.at(60 * 60)
+        self.recorder.stop()
+        self.assertEqual(self.heartbeat(), 0)
+
+    def testAHeartbeatThatCantBeSavedLeavesTheReadingsAlone(self):
+        self.event(0, 80)
+        self.failQuery(sqlite3.OperationalError("database or disk is full"), "into heartbeat")
+        self.at(400)
+        self.assertIn("Couldn't save to the history: database or disk is full", self.errors.getvalue())
+        self.event(500, 79)
+        self.assertEqual(self.rows()[-1], (500, history.ORIGIN_EVENT, 79, 0, 0))
+
+    def testAHistoryThatCantSaveAsItOpensStillOpensForReading(self):
+        self.event(0, 80)
+        self.kill()
+        real = sqlite3.connect
+
+        class FailingDb:
+            def __init__(self, db):
+                self.db = db
+
+            def execute(self, sql, *args):
+                if ("heartbeat" in sql):
+                    raise sqlite3.OperationalError("attempt to write a readonly database")
+                return self.db.execute(sql, *args)
+
+            def close(self):
+                self.db.close()
+        with mock.patch.object(sqlite3, "connect", lambda *args, **kwargs: FailingDb(real(*args, **kwargs))):
+            self.assertTrue(self.recorder.available())
+        self.assertIn("Couldn't save to the history: attempt to write a readonly database", self.errors.getvalue())
+        self.assertEqual(self.recorder.summary(KEY)["name"], "PRO X3 SUPERSTRIKE")
+
+    def testACleanStopLeavesAUPowerMouseAGapAtTheStop(self):
+        # the UPower history writes no gap row when the service stops, so the next start puts one where the last run stopped
+        self.recorder.addReading(KEY, battery(80), history.ORIGIN_UPOWER, source=history.SOURCE_UPOWER, at=START)
+        self.at(2)
+        self.at(1000)
+        self.recorder.stop()
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic, boottime=self.clock.boottime)
+        self.clock.now = START + 9000
+        self.assertTrue(self.recorder.available())
+        self.assertEqual([row[:2] for row in self.rows()], [(0, history.ORIGIN_UPOWER), (1000, history.ORIGIN_GAP)])
 
 
 class SummaryTests(RecorderCase):

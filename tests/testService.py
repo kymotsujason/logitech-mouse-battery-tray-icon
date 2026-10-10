@@ -572,9 +572,8 @@ class HistoryServiceTests(unittest.TestCase):
 
     def testGetLevelsAnswersEveryRangeForAMouseThatWasRead(self):
         self.startWithMouse()
-        # the stop writes the rows still waiting out the wake set
-        self.recorder.stop()
-        self.recorder.store.lastAttempt = None
+        # the recorder's own timer writes the rows once the wake set is over, while a stop would end the run and leave the next open a gap where it stopped
+        self.assertTrue(waitUntil(lambda: not any(entry.pending or entry.held for entry in self.recorder.entries.values()), timeout=5.0))
         # a slot ends at the query's second and leaves out a reading made in it
         QTest.qWait(1100)
         for rangeName in history.LEVEL_RANGES:
