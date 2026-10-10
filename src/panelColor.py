@@ -46,7 +46,8 @@ def readIni(path):
         return None
     groups = {}
     group = groups.setdefault("", {})
-    for line in text.splitlines():
+    # KConfig ends a line only at a newline, so a Unicode line separator inside a value stays part of it
+    for line in text.split("\n"):
         stripped = line.strip()
         if (stripped.startswith("[") and stripped.endswith("]")):
             group = groups.setdefault(stripped[1:-1], {})

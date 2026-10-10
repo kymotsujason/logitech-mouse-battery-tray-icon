@@ -1,6 +1,7 @@
 import contextlib
 import errno
 import os
+import secrets
 import stat
 
 FILE_NAME = "logitech-mouse-battery.desktop"
@@ -18,7 +19,8 @@ def overridePath(configHome):
 def parseEntry(text):
     keys = {}
     inEntry = False
-    for line in text.splitlines():
+    # a desktop entry's lines end only at a newline, while splitlines would also end one at a Unicode line separator inside a value
+    for line in text.split("\n"):
         stripped = line.strip()
         if (stripped.startswith("[")):
             inEntry = (stripped == "[Desktop Entry]")
@@ -116,7 +118,7 @@ def readFile(folder, name, shown):
         info = os.fstat(fd)
         if (not stat.S_ISREG(info.st_mode)):
             raise OSError(errno.EINVAL, "Not a regular file", os.path.join(shown, name))
-        with os.fdopen(fd, encoding="utf-8", errors="surrogateescape", closefd=False) as f:
+        with os.fdopen(fd, encoding="utf-8", errors="surrogateescape", newline="", closefd=False) as f:
             return (f.read(), info)
     finally:
         os.close(fd)
@@ -130,12 +132,11 @@ def writeText(folder, name, shown, info, text):
         # root passes os.access for a 0400 file, so the owner's write bit is checked directly
         if ((info.st_mode & stat.S_IWUSR) == 0):
             raise PermissionError(errno.EACCES, "Permission denied, the file is read only", os.path.join(shown, name))
-    temp = name + ".new"
-    # a leftover or planted file at the temporary name goes first, and the new one is made fresh without following a link, so the text can't land in another file
-    with contextlib.suppress(FileNotFoundError):
-        os.unlink(temp, dir_fd=folder)
+    # each write gets a temporary name of its own, made fresh without following a link, so the text can't land in another file and two writers at once can't publish each other's unfinished file
+    temp = name + "." + secrets.token_hex(8) + ".new"
+    # opened before the cleanup below takes over, so a name that already exists is never removed as if it were this write's
+    fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o666, dir_fd=folder)
     try:
-        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o666, dir_fd=folder)
         try:
             with os.fdopen(fd, "w", encoding="utf-8", errors="surrogateescape", closefd=False) as f:
                 f.write(text)
@@ -173,7 +174,10 @@ def setHidden(text, value, gnomeEnabled):
     result = []
     inEntry = False
     written = False
-    for line in text.splitlines():
+    lines = text.split("\n")
+    if (lines[-1] == ""):
+        lines.pop()
+    for line in lines:
         stripped = line.strip()
         key = stripped.partition("=")[0].strip()
         if (stripped.startswith("[")):

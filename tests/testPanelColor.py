@@ -181,6 +181,11 @@ class PlantedIniTests(unittest.TestCase):
         os.symlink(self.target, self.path)
         self.assertEqual(panelColor.readIni(self.path), {"": {}, "KDE": {"AnimationDurationFactor": "0.5"}})
 
+    def testALineSeparatorInsideAValueStartsNoKey(self):
+        with open(self.path, "w", encoding="utf-8") as f:
+            f.write("[KDE]\nName=a\u2028AnimationDurationFactor=0.5\n")
+        self.assertEqual(panelColor.readIni(self.path), {"": {}, "KDE": {"Name": "a\u2028AnimationDurationFactor=0.5"}})
+
     def testAFifoAtTheNameDoesntHang(self):
         os.mkfifo(self.path)
         self.assertIsNone(panelColor.readIni(self.path))

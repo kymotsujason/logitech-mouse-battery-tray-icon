@@ -94,6 +94,24 @@ class AutostartTests(unittest.TestCase):
         self.assertEqual(message, "[Errno 13] Permission denied, the folder belongs to uid " + str(ACCOUNT) + ", not this account: '" + os.path.realpath(os.path.dirname(self.path)) + "'")
         self.assertEqual(self.read(), original)
 
+    def testTurningItOffKeepsALineSeparatorInsideAValue(self):
+        # a desktop entry's lines end only at a newline, so a Unicode line separator is part of its value
+        os.makedirs(os.path.dirname(self.path))
+        with open(self.path, "w", encoding="utf-8") as f:
+            f.write("[Desktop Entry]\nType=Application\nName=Mouse Battery\nComment=first\u2028Hidden=false\nExec=logitech-mouse-battery\n")
+        autostart.setEnabled(self.configHome, False)
+        with open(self.path, encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn("\nComment=first\u2028Hidden=false\n", text)
+        self.assertIn("\nHidden=true\n", text)
+        self.assertFalse(autostart.isEnabled(self.configHome))
+
+    def testALineSeparatorInsideAValueStartsNoKey(self):
+        os.makedirs(os.path.dirname(self.path))
+        with open(self.path, "w", encoding="utf-8") as f:
+            f.write("[Desktop Entry]\nType=Application\nName=Mouse Battery\u2028Hidden=true\nExec=logitech-mouse-battery\n")
+        self.assertTrue(autostart.isEnabled(self.configHome))
+
     def testTurningItOnDeletesAnOverrideWithoutExec(self):
         os.makedirs(os.path.dirname(self.path))
         with open(self.path, "w") as f:
