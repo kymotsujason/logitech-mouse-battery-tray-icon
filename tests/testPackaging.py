@@ -440,7 +440,7 @@ class WorkflowTests(unittest.TestCase):
         check = self.read("release.yml").split("\n  release:\n", 1)[0]
         self.assertIn('if ! python3 packaging/releaseNotes.py --check "$version"; then\n', check)
         self.assertEqual(check.count("releaseNotes.py"), 1)
-        self.assertIn("::error::CHANGELOG.md has no dated section with entries for $version", check)
+        self.assertIn("::error::CHANGELOG.md can't give release notes for $version", check)
         self.assertLess(check.index("releaseNotes.py"), check.index("released=false"))
 
     def checkStep(self):
@@ -478,13 +478,13 @@ class WorkflowTests(unittest.TestCase):
         return (result.returncode, result.stdout + result.stderr, outputs)
 
     def testTheCheckJobStopsWithoutADatedSectionWithEntries(self):
-        for name, changelog in (("undated", "# Changelog\n\n## 1.1.1, unreleased\n\n### Fixed\n\n- A thing.\n"), ("missing", "# Changelog\n\n## 1.1.0, 2026-10-02\n\n### Fixed\n\n- A thing.\n"), ("empty", "# Changelog\n\n## 1.1.1, 2026-10-08\n\n### Fixed\n\n")):
+        for name, changelog in (("undated", "# Changelog\n\n## 1.1.1, unreleased\n\n### Fixed\n\n- A thing.\n"), ("missing", "# Changelog\n\n## 1.1.0, 2026-10-02\n\n### Fixed\n\n- A thing.\n"), ("empty", "# Changelog\n\n## 1.1.1, 2026-10-08\n\n### Fixed\n\n"), ("commented", "# Changelog\n\n## 1.1.1, 2026-10-08\n\n### Fixed\n\n- A thing. <!-- a note -->\n")):
             with self.subTest(changelog=name):
                 code, output, outputs = self.runCheck(changelog)
                 self.assertNotEqual(code, 0, output)
                 self.assertNotIn("released=false", outputs)
                 self.assertNotIn("has no release yet", output)
-                self.assertIn("::error::CHANGELOG.md has no dated section with entries for 1.1.1", output)
+                self.assertIn("::error::CHANGELOG.md can't give release notes for 1.1.1", output)
 
     def testTheCheckJobPublishesADatedSection(self):
         code, output, outputs = self.runCheck("# Changelog\n\n## 1.1.1, 2026-10-08\n\n### Fixed\n\n- A thing.\n")

@@ -17,18 +17,6 @@ def heading(line):
     return (version.strip(), date.strip())
 
 
-def uncommented(text):
-    # GitHub hides an HTML comment, so a bullet inside one is no entry and stays out of the notes, and one left open runs to the end of the file as an HTML block does
-    marked = re.sub(r"<!--.*?(-->|\Z)", "\0", text, flags=re.S)
-    lines = []
-    for line in marked.splitlines():
-        if ("\0" not in line):
-            lines.append(line)
-        elif (line.replace("\0", "").strip() != ""):
-            lines.append(line.replace("\0", "").rstrip())
-    return lines
-
-
 def section(lines, version):
     found = None
     for line in lines:
@@ -65,7 +53,7 @@ def main(argv):
     path = arguments[1] if len(arguments) == 2 else os.path.join(REPO, "CHANGELOG.md")
     try:
         with open(path, encoding="utf-8") as f:
-            lines = uncommented(f.read())
+            lines = f.read().splitlines()
     except (OSError, UnicodeDecodeError) as error:
         print("Couldn't read " + path + ": " + str(error), file=sys.stderr)
         return 1
@@ -74,6 +62,10 @@ def main(argv):
         print(path + " has no section for " + version + ", so add one before releasing", file=sys.stderr)
         return 1
     date, body = found
+    # GitHub hides an HTML comment, and telling one apart from a literal "<!--" in code takes a Markdown parser, so a section holding one is refused instead of stripped
+    if (any("<!--" in line for line in body)):
+        print(path + " has \"<!--\" under " + version + ", which GitHub may hide as an HTML comment, so remove it or write it another way before releasing", file=sys.stderr)
+        return 1
     # a heading with nothing under it would publish a release whose notes are only the footer
     if (not any(line.strip().startswith("- ") for line in body)):
         print(path + " has no entries under " + version + ", so add at least one before releasing", file=sys.stderr)

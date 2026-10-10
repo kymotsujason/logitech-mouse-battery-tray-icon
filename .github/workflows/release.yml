@@ -40,7 +40,7 @@ jobs:
             echo "v$version already has a release, so there's nothing to publish"
           elif grep -q "release not found" /tmp/view.log; then
             if ! python3 packaging/releaseNotes.py --check "$version"; then
-              echo "::error::CHANGELOG.md has no dated section with entries for $version, so add, date, or fill one before releasing"
+              echo "::error::CHANGELOG.md can't give release notes for $version, so fix what the line above says before releasing"
               exit 1
             fi
             echo "released=false" >> "$GITHUB_OUTPUT"
