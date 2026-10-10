@@ -1,6 +1,6 @@
 import time
 
-from PyQt6.QtCore import QPointF, QRectF, Qt
+from PyQt6.QtCore import QPointF, QRectF, Qt, QVariantAnimation
 from PyQt6.QtGui import QBrush, QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import QWidget
 
@@ -109,12 +109,38 @@ class LevelChart(Chart):
         self.rangeName = "week"
         self.message = None
         self.hover = None
+        self.morphMs = 0
+        self.fromRects = None
+        self.morphProgress = 1.0
+        self.morph = QVariantAnimation(self)
+        self.morph.setEasingCurve(glass.easeOut())
+        self.morph.setStartValue(0.0)
+        self.morph.setEndValue(1.0)
+        self.morph.valueChanged.connect(self.onMorphStep)
         self.setMouseTracking(True)
+
+    def onMorphStep(self, value):
+        self.morphProgress = value
+        self.update()
+
+    def shownRect(self, index):
+        target = self.barRect(index)
+        if (target is None or self.fromRects is None or self.morphProgress >= 1.0):
+            return target
+        start = self.fromRects[index]
+        if (start is None):
+            start = QRectF(target.x(), target.bottom(), target.width(), 0.0)
+        p = self.morphProgress
+        return QRectF(start.x() + (target.x() - start.x()) * p, start.y() + (target.y() - start.y()) * p, start.width() + (target.width() - start.width()) * p, start.height() + (target.height() - start.height()) * p)
 
     def setSlots(self, slots, voltage=False, rangeName="week", message=None, rough=False):
         # every state change sets the slots again, so the bar under the pointer keeps its readout until the range changes, a message takes the bars' place, or the bar is gone
         if (rangeName != self.rangeName or message is not None or (self.hover is not None and self.hover >= len(slots))):
             self.hover = None
+        morphs = self.morphMs > 0 and self.isVisible() and rangeName == self.rangeName and message is None and self.message is None and len(slots) == len(self.slots) and slots != self.slots
+        # taken before the slots change, so a morph in progress carries on from what's drawn
+        rects = [self.shownRect(index) for index in range(len(self.slots))] if morphs else None
+        self.morph.stop()
         self.slots = slots
         self.voltage = voltage
         self.rough = rough
@@ -123,6 +149,11 @@ class LevelChart(Chart):
         self.setAccessibleName(self.title)
         # message stands in for the bars while a range loads or can't be read
         self.message = message
+        self.fromRects = rects
+        self.morphProgress = 0.0 if morphs else 1.0
+        if (morphs):
+            self.morph.setDuration(self.morphMs)
+            self.morph.start()
         self.update()
 
     def isSpan(self):
@@ -284,7 +315,7 @@ class LevelChart(Chart):
         low, high, labels = self.scale()
         self.paintGrid(painter, area, labels)
         for index, slot in enumerate(self.slots):
-            rect = self.barRect(index)
+            rect = self.shownRect(index)
             if (rect is None):
                 continue
             path = QPainterPath()

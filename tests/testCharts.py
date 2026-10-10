@@ -97,6 +97,83 @@ class LevelChartTests(ChartCase):
         chart.setSlots(slots()[:20])
         self.assertIsNone(chart.hover)
 
+    def testASameRangeRefreshMovesTheBarsToTheirNewHeights(self):
+        chart = self.make(charts.LevelChart())
+        chart.resize(700, 238)
+        chart.morphMs = 100
+        chart.setSlots(slots(percent=40))
+        chart.show()
+        before = chart.barRect(3)
+        chart.setSlots(slots(percent=80))
+        after = chart.barRect(3)
+        self.assertEqual(chart.morphProgress, 0.0)
+        self.assertEqual(chart.shownRect(3), before)
+        chart.morph.setCurrentTime(50)
+        halfway = chart.shownRect(3)
+        self.assertLess(after.y(), halfway.y())
+        self.assertLess(halfway.y(), before.y())
+        chart.morph.setCurrentTime(100)
+        self.assertEqual(chart.morphProgress, 1.0)
+        self.assertEqual(chart.shownRect(3), after)
+
+    def testANewRefreshMidMorphStartsFromWhatIsDrawn(self):
+        chart = self.make(charts.LevelChart())
+        chart.resize(700, 238)
+        chart.morphMs = 100
+        chart.setSlots(slots(percent=40))
+        chart.show()
+        chart.setSlots(slots(percent=80))
+        chart.morph.setCurrentTime(50)
+        drawn = chart.shownRect(3)
+        chart.setSlots(slots(percent=20))
+        self.assertEqual(chart.fromRects[3], drawn)
+        self.assertEqual(chart.morphProgress, 0.0)
+
+    def testABarThatHadNoRectGrowsFromItsBottom(self):
+        chart = self.make(charts.LevelChart())
+        chart.resize(700, 238)
+        chart.morphMs = 100
+        first = slots(percent=40)
+        first[3] = [first[3][0], None, None, None, False]
+        chart.setSlots(first)
+        chart.show()
+        chart.setSlots(slots(percent=40))
+        target = chart.barRect(3)
+        start = chart.shownRect(3)
+        self.assertEqual(start.y(), target.bottom())
+        self.assertEqual(start.height(), 0.0)
+        self.assertEqual(start.width(), target.width())
+
+    def testOnlyASameRangeRefreshMorphs(self):
+        chart = self.make(charts.LevelChart())
+        chart.resize(700, 238)
+        chart.morphMs = 100
+        chart.setSlots(slots(percent=40))
+        chart.show()
+        changes = (
+            {"slots": slots(percent=80), "rangeName": "day"},
+            {"slots": slots(percent=80), "message": "Loading"},
+            {"slots": slots(percent=80)[:50]},
+            {"slots": slots(percent=40)},
+        )
+        for change in changes:
+            chart.setSlots(change["slots"], rangeName=change.get("rangeName", "week"), message=change.get("message"))
+            self.assertIsNone(chart.fromRects)
+            self.assertEqual(chart.morphProgress, 1.0)
+            chart.setSlots(slots(percent=40))
+
+    def testAZeroDurationOrAHiddenChartChangesAtOnce(self):
+        chart = self.make(charts.LevelChart())
+        chart.resize(700, 238)
+        chart.setSlots(slots(percent=40))
+        chart.show()
+        chart.setSlots(slots(percent=80))
+        self.assertIsNone(chart.fromRects)
+        chart.morphMs = 100
+        chart.hide()
+        chart.setSlots(slots(percent=40))
+        self.assertIsNone(chart.fromRects)
+
     def testAVoltageAxisSpansTheWeek(self):
         chart = self.make(charts.LevelChart())
         chart.setSlots([[NOW, None, None, 3800 + index, False] for index in range(84)], voltage=True)

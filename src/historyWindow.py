@@ -58,6 +58,7 @@ THUMB_SLIDE_MS = 250
 MENU_OPEN_MS = 150
 MENU_CLOSE_MS = 120
 GLOW_FADE_MS = 400
+BAR_MORPH_MS = 250
 FROST_EVERY_MS = 50
 SLEEP_CHOICES = ((0, "Off"), (30, "Every 30 seconds"), (60, "Every minute"), (300, "Every 5 minutes"))
 # the button shows the choice short, so the label beside it fits, while its menu names each one in full
@@ -1044,7 +1045,7 @@ class HistoryWindow(QWidget):
                 self.finishAnimations()
 
     def finishAnimations(self):
-        for animation in (self.glowAnimation, self.paneCrossfade.animation, self.chartCrossfade.animation, self.segments.animation, self.rangeControl.animation, self.sidebar.pillAnimation, self.choiceMenu.animation):
+        for animation in (self.glowAnimation, self.paneCrossfade.animation, self.chartCrossfade.animation, self.levelChart.morph, self.segments.animation, self.rangeControl.animation, self.sidebar.pillAnimation, self.choiceMenu.animation):
             if (animation.state() == QAbstractAnimation.State.Running):
                 animation.setCurrentTime(animation.duration())
 
@@ -1459,6 +1460,9 @@ class HistoryWindow(QWidget):
 
     def fillLevels(self, summary, key, voltage, rough):
         rangeName = self.levelRange
+        # a morph never runs on top of a crossfade of the same chart
+        crossfading = self.chartCrossfade.animation.state() == QAbstractAnimation.State.Running
+        self.levelChart.morphMs = 0 if crossfading else int(BAR_MORPH_MS * self.motionFactor)
         if (rangeName == "week"):
             # the history reply already holds the week, so the default range costs no call
             if (self.levelChartKey == key and self.levelChart.rangeName != rangeName):
@@ -1500,6 +1504,7 @@ class HistoryWindow(QWidget):
             return
         # a new effect on the chart replaces the old one, so a fade still running ends before that
         self.chartCrossfade.finish()
+        self.levelChart.morphMs = 0
         if (self.levelChart.graphicsEffect() is not self.chartFade):
             self.chartFade = QGraphicsOpacityEffect(self.levelChart)
             self.levelChart.setGraphicsEffect(self.chartFade)
