@@ -837,8 +837,29 @@ class WindowTests(WindowCase):
         for animation in running:
             self.assertEqual(animation.state(), QAbstractAnimation.State.Stopped)
         self.assertEqual((window.paneFade.opacity(), window.paneFade.isEnabled(), window.chartFade.isEnabled()), (1.0, False, False))
-        self.assertEqual(window.segments.thumbX, window.segments.segmentX(2))
+        self.assertEqual(window.segments.thumb, window.segments.segmentRect(2))
         self.assertEqual(window.glow, QColor("#FF0000"))
+
+    def testTheThumbGrowsAsItSlides(self):
+        window = self.opened(entry())
+        window.motionFactor = 1.0
+        segments = window.segments
+        segments.choose(1)
+        segments.animation.setCurrentTime(segments.animation.duration() // 2)
+        self.assertTrue(76 < segments.thumb.width() < 134, segments.thumb.width())
+        self.assertTrue(segments.segmentX(0) < segments.thumb.x() < segments.segmentX(1), segments.thumb.x())
+        segments.animation.setCurrentTime(segments.animation.duration())
+        self.assertEqual(segments.thumb, segments.segmentRect(1))
+
+    def testASecondClickMidSlideCarriesOnFromWhereTheThumbIs(self):
+        window = self.opened(entry())
+        window.motionFactor = 1.0
+        segments = window.segments
+        segments.choose(2)
+        segments.animation.setCurrentTime(segments.animation.duration() // 2)
+        before = QRectF(segments.thumb)
+        segments.choose(0)
+        self.assertEqual(segments.animation.startValue(), before)
 
     def testAPickDuringAFadePicksUpWhereItIs(self):
         window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"), )

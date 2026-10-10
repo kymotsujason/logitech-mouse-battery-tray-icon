@@ -261,8 +261,9 @@ class SegmentedControl(QWidget):
         # a control inside a panel draws its own track, while the main one sits on a panel the window paints
         self.track = track
         self.inset = 4.0 if height >= 28 else 2.0
+        self.barHeight = height
         self.index = index
-        self.thumbX = self.segmentX(index)
+        self.thumb = self.segmentRect(index)
         self.animation = QVariantAnimation(self)
         self.animation.setEasingCurve(glass.easeOut())
         self.animation.valueChanged.connect(self.onSlide)
@@ -274,6 +275,9 @@ class SegmentedControl(QWidget):
     def segmentX(self, index):
         return self.inset + sum(self.widths[:index])
 
+    def segmentRect(self, index):
+        return QRectF(self.segmentX(index), self.inset, self.widths[index], self.barHeight - 2 * self.inset)
+
     def choose(self, index, animate=True):
         if (index == self.index):
             return
@@ -281,17 +285,17 @@ class SegmentedControl(QWidget):
         duration = int(THUMB_SLIDE_MS * self.owner.motionFactor)
         self.animation.stop()
         if (animate and duration > 0):
-            self.animation.setStartValue(self.thumbX)
-            self.animation.setEndValue(self.segmentX(index))
+            self.animation.setStartValue(QRectF(self.thumb))
+            self.animation.setEndValue(self.segmentRect(index))
             self.animation.setDuration(duration)
             self.animation.start()
         else:
-            self.thumbX = self.segmentX(index)
+            self.thumb = self.segmentRect(index)
             self.update()
         self.chosen.emit(index)
 
     def onSlide(self, value):
-        self.thumbX = value
+        self.thumb = QRectF(value)
         self.update()
 
     def mousePressEvent(self, event):
@@ -334,7 +338,7 @@ class SegmentedControl(QWidget):
             painter.setBrush(glass.rgba(theme.grid))
             painter.drawRoundedRect(QRectF(self.rect()), self.height() / 2, self.height() / 2)
         if (frost is not None):
-            thumb = QRectF(self.thumbX, self.inset, self.widths[self.index], self.height() - 2 * self.inset)
+            thumb = QRectF(self.thumb)
             glass.paintPanel(painter, thumb, thumb.height() / 2, frost, theme, strong=True, offset=QPointF(self.mapTo(self.owner, self.rect().topLeft())))
         for index, name in enumerate(self.names):
             painter.setFont(font(self.fontSize, QFont.Weight.DemiBold if index == self.index else QFont.Weight.Normal))
