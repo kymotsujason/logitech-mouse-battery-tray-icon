@@ -160,6 +160,10 @@ class NodeWorker(threading.Thread):
         raise ValueError("unknown work item " + repr(kind))
 
 
+def requestName(kind, slot):
+    return kind if slot is None else kind + ", slot " + str(slot)
+
+
 def singleShotTimer(parent, interval, slot):
     timer = QTimer(parent)
     timer.setSingleShot(True)
@@ -249,6 +253,8 @@ class ReceiverList(QObject):
         self.mice = []
         self.stopped = False
         self.reportedErrors = set()
+        # the error last printed for each node, request kind, and slot whose request failed, so a request that keeps failing prints once and says when it works again
+        self.failedRequests = {}
         # the reason last printed for each node and slot still unknown after its follow up search, so a slot that fails the same way at each report prints once
         self.unresolvedSlots = {}
         # what was last printed for each path, so a node that keeps opening and dying prints its open once instead of each cycle
@@ -525,6 +531,21 @@ class ReceiverList(QObject):
     def forgetErrors(self, path):
         self.reportedErrors = {entry for entry in self.reportedErrors if entry[0] != path}
 
+    def reportRequestFailed(self, path, item, error):
+        kind = item[0]
+        slot = None if kind == "search" else item[1]
+        detail = errno.errorcode.get(error.errno) if (isinstance(error, OSError) and error.errno) else None
+        detail = detail or str(error) or type(error).__name__
+        # a stalled hub can turn away each retry of a request for a while, so only a new error inside one failure prints
+        if (self.failedRequests.get((path, kind, slot)) == detail):
+            return
+        self.failedRequests[(path, kind, slot)] = detail
+        printLine("Request failed on " + path + ": " + detail + " (" + requestName(kind, slot) + ")")
+
+    def noteRequestWorked(self, path, kind, slot):
+        if (self.failedRequests.pop((path, kind, slot), None) is not None):
+            printLine("Request works again on " + path + " (" + requestName(kind, slot) + ")")
+
     def closeNodes(self, paths):
         # every worker hears the stop first, so busy nodes share one wait instead of taking turns on the Qt thread
         for path in paths:
@@ -537,6 +558,8 @@ class ReceiverList(QObject):
         state = self.nodes.pop(path, None)
         if (state is None):
             return
+        # the node's loss or removal is already in the journal, and a node opened at this path later starts with no failed requests
+        self.failedRequests = {entry: detail for entry, detail in self.failedRequests.items() if entry[0] != path}
         for timer in (state.retryTimer, state.identifyTimer, state.stableTimer):
             if (timer is not None):
                 timer.stop()
@@ -621,12 +644,16 @@ class ReceiverList(QObject):
         if (kind == "report"):
             self.onReport(state, message[2], message[3])
         elif (kind == "searched"):
+            self.noteRequestWorked(state.path, "search", None)
             self.onSearched(state, message[2], message[3])
         elif (kind == "read"):
+            self.noteRequestWorked(state.path, "read", message[2])
             self.onRead(state, message[2], message[3], message[4], message[5] if len(message) > 5 else None)
         elif (kind == "identified"):
+            self.noteRequestWorked(state.path, "identify", message[2])
             self.onIdentified(state, message[2], message[3], message[4])
         elif (kind == "wakeFound"):
+            self.noteRequestWorked(state.path, "wake", message[2])
             self.onWakeFound(state, message[2], message[3])
         elif (kind == "failed"):
             self.onFailed(state, message[2], message[3] if len(message) > 3 else None)
@@ -684,7 +711,7 @@ class ReceiverList(QObject):
 
     def onFailed(self, state, item, error=None):
         if (error is not None):
-            self.reportError(state.path, "Request failed on", error)
+            self.reportRequestFailed(state.path, item, error)
         kind = item[0]
         if (kind == "search"):
             self.finishSearch(state)

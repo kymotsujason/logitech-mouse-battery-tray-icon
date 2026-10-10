@@ -1207,8 +1207,83 @@ class ReceiverListTests(unittest.TestCase):
         with mock.patch.object(hidpp.HidppNode, "writeReport", flakyWrite):
             self.mice.readAll()
             self.assertTrue(waitUntil(lambda: failed and not self.mice.isBusy()))
-        self.assertEqual((self.keys(), list(self.mice.nodes), self.mice.denied), (["02bc524c"], [RECEIVER], set()))
-        self.assertEqual(self.errors.getvalue(), "Opened " + RECEIVER + "\nRequest failed on " + RECEIVER + ": ETIMEDOUT\n")
+            self.assertEqual((self.keys(), list(self.mice.nodes), self.mice.denied), (["02bc524c"], [RECEIVER], set()))
+            # the failed read's retry is the one that works
+            self.assertTrue(waitUntil(lambda: "works again" in self.errors.getvalue()))
+        self.assertEqual(self.errors.getvalue(), "Opened " + RECEIVER + "\nRequest failed on " + RECEIVER + ": ETIMEDOUT (read, slot 1)\nRequest works again on " + RECEIVER + " (read, slot 1)\n")
+
+    def failWrites(self):
+        realWrite = hidpp.HidppNode.writeReport
+        failures = [0]
+
+        def flakyWrite(node, *args):
+            if (failures[0]):
+                failures[0] -= 1
+                raise OSError(errno.ETIMEDOUT, "Connection timed out")
+            return realWrite(node, *args)
+        patch = mock.patch.object(hidpp.HidppNode, "writeReport", flakyWrite)
+        patch.start()
+        self.addCleanup(patch.stop)
+        return failures
+
+    def testARequestThatFailsAgainAfterItWorkedPrintsAgain(self):
+        self.nodes.add(RECEIVER, mouseHandler())
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"] and not self.mice.isBusy()))
+        failures = self.failWrites()
+        failed = "Request failed on " + RECEIVER + ": ETIMEDOUT (read, slot 1)\n"
+        worked = "Request works again on " + RECEIVER + " (read, slot 1)\n"
+        for i in range(2):
+            failures[0] = 1
+            self.mice.readAll()
+            # the failed read's retry is the one that works, which ends the failure, so the next one is news
+            self.assertTrue(waitUntil(lambda: self.errors.getvalue().count(worked) == i + 1))
+        self.assertEqual(self.errors.getvalue(), "Opened " + RECEIVER + "\n" + (failed + worked) * 2)
+
+    def testARequestThatKeepsFailingPrintsOnceUntilItWorks(self):
+        self.nodes.add(RECEIVER, mouseHandler())
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"] and not self.mice.isBusy()))
+        failures = self.failWrites()
+        # the read and its first retry fail, which stays under the node's transient limit, and the second retry works
+        failures[0] = 2
+        self.mice.readAll()
+        self.assertTrue(waitUntil(lambda: "works again" in self.errors.getvalue()))
+        self.assertEqual(failures[0], 0)
+        self.assertEqual(self.errors.getvalue(), "Opened " + RECEIVER + "\nRequest failed on " + RECEIVER + ": ETIMEDOUT (read, slot 1)\nRequest works again on " + RECEIVER + " (read, slot 1)\n")
+
+    def testFailedRequestsAreTrackedApartByKindAndSlot(self):
+        self.nodes.add(RECEIVER, mouseHandler())
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"] and not self.mice.isBusy()))
+        state = self.mice.nodes[RECEIVER]
+        worker = state.worker
+        error = OSError(errno.ETIMEDOUT, "Connection timed out")
+        self.mice.onMessage(("failed", worker, ("read", 1, FEATURE, 0.0), error))
+        self.mice.onMessage(("failed", worker, ("search", frozenset(), 0.0), error))
+        self.mice.onMessage(("failed", worker, ("read", 2, FEATURE, 0.0), error))
+        # a new error inside the same failure is news, while the same one again isn't
+        self.mice.onMessage(("failed", worker, ("read", 1, FEATURE, 0.0), OSError(errno.EAGAIN, "Resource temporarily unavailable")))
+        self.mice.onMessage(("failed", worker, ("read", 1, FEATURE, 0.0), OSError(errno.EAGAIN, "Resource temporarily unavailable")))
+        state.retryTimer.stop()
+        # the search working says nothing about the reads
+        self.mice.onMessage(("searched", worker, hidpp.SearchResult((), frozenset(), frozenset()), 0.0))
+        prefix = "Request failed on " + RECEIVER + ": "
+        self.assertEqual(self.errors.getvalue(), "Opened " + RECEIVER + "\n" + prefix + "ETIMEDOUT (read, slot 1)\n" + prefix + "ETIMEDOUT (search)\n" + prefix + "ETIMEDOUT (read, slot 2)\n" + prefix + "EAGAIN (read, slot 1)\nRequest works again on " + RECEIVER + " (search)\n")
+
+    def testAFailedRequestOnANodeThatClosesIsForgottenQuietly(self):
+        self.nodes.add(RECEIVER, mouseHandler())
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"] and not self.mice.isBusy()))
+        worker = self.mice.nodes[RECEIVER].worker
+        self.mice.onMessage(("failed", worker, ("read", 1, FEATURE, 0.0), OSError(errno.ETIMEDOUT, "Connection timed out")))
+        self.mice.onLost(self.mice.nodes[RECEIVER], OSError(errno.EIO, "Input/output error"))
+        # the denied retry opens the node again, and its first search and reads are a new node's, so they don't say the old request works
+        self.assertTrue(waitUntil(lambda: RECEIVER in self.mice.nodes and self.keys() == ["02bc524c"] and not self.mice.isBusy()))
+        self.mice.readAll()
+        self.assertTrue(waitUntil(lambda: not self.mice.isBusy()))
+        self.assertNotIn("works again", self.errors.getvalue())
+        self.assertEqual(self.mice.failedRequests, {})
 
     def putToSleep(self, receiver):
         receiver.handler = silent
