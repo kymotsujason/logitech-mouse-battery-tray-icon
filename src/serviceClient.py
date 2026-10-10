@@ -79,6 +79,8 @@ class ServiceWatcher(QObject):
         self.problems = set()
         # a ReadAll can fail while GetState answers, so its trouble is printed once until a ReadAll goes through instead of once per GetState
         self.readProblems = set()
+        # the error each failing history or levels request last printed, by method and range, until one of that kind answers
+        self.requestProblems = {}
 
     def start(self):
         # subscribing by the service's name before the first call keeps a forged signal out and a change in between in
@@ -136,6 +138,16 @@ class ServiceWatcher(QObject):
         if (not self.readRetryTimer.isActive()):
             self.readRetryTimer.start(int(serviceState.READ_ALL_REFILL_SECONDS * 1000))
 
+    def reportRequest(self, kind, label, error):
+        if (self.requestProblems.get(kind) == error):
+            return
+        self.requestProblems[kind] = error
+        printLine("Couldn't get " + label + " from the battery service: " + " ".join(kind) + ": " + error)
+
+    def requestWorks(self, kind, label):
+        if (self.requestProblems.pop(kind, None) is not None):
+            printLine("Got " + label + " from the battery service again: " + " ".join(kind))
+
     def getHistory(self, key, onAnswer):
         # onAnswer gets the summary and None, or None and the error name, from the event loop
         message = QDBusMessage.createMethodCall(serviceState.SERVICE_NAME, serviceState.OBJECT_PATH, serviceState.INTERFACE, "GetHistory")
@@ -145,9 +157,14 @@ class ServiceWatcher(QObject):
         def onReply(reply):
             error = dbusCalls.failure(reply)
             if (error is not None):
+                self.reportRequest(("GetHistory",), "a history", error)
                 onAnswer(None, error)
                 return
             summary = historyFrom(reply, key)
+            if (summary is None):
+                self.reportRequest(("GetHistory",), "a history", UNDECODABLE)
+            else:
+                self.requestWorks(("GetHistory",), "a history")
             onAnswer(summary, None if summary is not None else UNDECODABLE)
 
         dbusCalls.callLater(self.bus, message, onReply, self, HISTORY_TIMEOUT_MS)
@@ -161,9 +178,14 @@ class ServiceWatcher(QObject):
         def onReply(reply):
             error = dbusCalls.failure(reply)
             if (error is not None):
+                self.reportRequest(("GetLevels", rangeName), "levels", error)
                 onAnswer(None, error)
                 return
             levels = levelsFrom(reply, key, rangeName)
+            if (levels is None):
+                self.reportRequest(("GetLevels", rangeName), "levels", UNDECODABLE)
+            else:
+                self.requestWorks(("GetLevels", rangeName), "levels")
             onAnswer(levels, None if levels is not None else UNDECODABLE)
 
         dbusCalls.callLater(self.bus, message, onReply, self, HISTORY_TIMEOUT_MS)

@@ -283,6 +283,43 @@ class ServiceWatcherTests(unittest.TestCase):
         self.assertTrue(waitUntil(lambda: answers))
         self.assertEqual(answers, [(None, serviceState.HISTORY_UNAVAILABLE)])
 
+    def askHistory(self):
+        answers = []
+        self.watcher.getHistory("02bc524c", lambda summary, error: answers.append((summary, error)))
+        self.assertTrue(waitUntil(lambda: answers))
+        return answers
+
+    def testAFailedHistoryIsPrintedOnceAndItsReturnOnce(self):
+        self.privateBus = PrivateBus()
+        self.startFake()
+        self.startWatcher()
+        for i in range(3):
+            self.askHistory()
+        lines = self.errorLines()
+        self.assertEqual(lines, ["Couldn't get a history from the battery service: GetHistory: " + serviceState.HISTORY_UNAVAILABLE])
+        with open(self.stateFile + ".history", "w") as f:
+            f.write('{"version": 1, "key": "02bc524c", "sessions": []}')
+        self.askHistory()
+        self.askHistory()
+        self.assertEqual(self.errorLines()[1:], ["Got a history from the battery service again: GetHistory"])
+
+    def testFailedLevelsArePrintedOncePerRangeAndTheirReturnOnce(self):
+        self.privateBus = PrivateBus()
+        self.startFake()
+        self.startWatcher()
+        for rangeName in ("year", "year", "all"):
+            answers = []
+            self.watcher.getLevels("02bc524c", rangeName, lambda levels, error: answers.append((levels, error)))
+            self.assertTrue(waitUntil(lambda: answers))
+        failed = "Couldn't get levels from the battery service: GetLevels "
+        self.assertEqual(self.errorLines(), [failed + "year: " + serviceState.HISTORY_UNAVAILABLE, failed + "all: " + serviceState.HISTORY_UNAVAILABLE])
+        with open(self.stateFile + ".levels", "w") as f:
+            f.write('{"version": 1, "key": "02bc524c", "range": "year", "slots": []}')
+        answers = []
+        self.watcher.getLevels("02bc524c", "year", lambda levels, error: answers.append((levels, error)))
+        self.assertTrue(waitUntil(lambda: answers))
+        self.assertEqual(self.errorLines()[2:], ["Got levels from the battery service again: GetLevels year"])
+
     def testAHistoryTheServiceNeverAnswersTimesOut(self):
         self.privateBus = PrivateBus()
         self.setMethodAnswer("GetHistory", "hang")
