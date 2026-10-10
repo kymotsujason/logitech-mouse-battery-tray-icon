@@ -1362,7 +1362,7 @@ class HistoryWindow(QWidget):
             wantWidth, wantHeight = max(leastWidth, min(wantWidth, room.width())), max(leastHeight, min(wantHeight, room.height()))
         if (wantWidth != self.width() or wantHeight != self.height()):
             self.resize(wantWidth, wantHeight)
-        if (not self.sidebar.isVisibleTo(self) and self.width() > leastWidth and self.property("hadSidebar")):
+        if (not self.sidebar.isVisibleTo(self) and self.width() > leastWidth and self.property("hadSidebar") and not self.isMaximized() and not self.isFullScreen()):
             # the window shrinks back by the sidebar's width once the sidebar goes
             self.resize(max(leastWidth, self.width() - SIDEBAR_WIDTH), self.height())
         self.setProperty("hadSidebar", self.sidebar.isVisibleTo(self))

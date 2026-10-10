@@ -1223,6 +1223,34 @@ class WindowTests(WindowCase):
             window.layoutParts()
         self.assertEqual((window.width(), window.height()), (1400, 900))
 
+    def testRemovingTheSecondMouseLeavesAMaximizedWindowMaximized(self):
+        window = self.opened(entry(), entry(key="second"))
+        window.showMaximized()
+        QApplication.processEvents()
+        self.assertTrue(window.isMaximized())
+        size = window.size()
+        self.state(entry())
+        QApplication.processEvents()
+        self.assertTrue(window.isMaximized())
+        self.assertEqual(window.size(), size)
+
+    def testRemovingTheSecondMouseLeavesAFullScreenWindowFullScreen(self):
+        window = self.opened(entry(), entry(key="second"))
+        window.showFullScreen()
+        QApplication.processEvents()
+        self.assertTrue(window.isFullScreen())
+        size = window.size()
+        self.state(entry())
+        QApplication.processEvents()
+        self.assertTrue(window.isFullScreen())
+        self.assertEqual(window.size(), size)
+
+    def testRemovingTheSecondMouseStillShrinksANormalWindow(self):
+        window = self.opened(entry(), entry(key="second"))
+        before = window.width()
+        self.state(entry())
+        self.assertEqual(window.width(), before - historyWindow.SIDEBAR_WIDTH)
+
     def testTheMouseIconDrawsAgainOnAScreenWithAnotherScale(self):
         window = self.opened(entry())
         window.mouseIcon.grab()
