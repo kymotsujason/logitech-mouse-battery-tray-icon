@@ -1380,8 +1380,29 @@ class ReceiverListTests(unittest.TestCase):
         with mock.patch.object(hidpp, "findHidppNodes", side_effect=OSError(errno.ENOENT, "No such file or directory")):
             self.mice.scanNodes()
         self.mice.settleTimer.stop()
-        self.assertEqual(self.errors.getvalue(), "Couldn't list HID++ nodes: EMFILE\nOpened " + RECEIVER + "\nCouldn't list HID++ nodes: ENOENT\n")
+        self.assertEqual(self.errors.getvalue(), "Couldn't list HID++ nodes: EMFILE\nListed the HID++ nodes again\nOpened " + RECEIVER + "\nCouldn't list HID++ nodes: ENOENT\n")
         self.assertEqual(list(self.mice.nodes), [RECEIVER])
+
+    def testAListingThatWorksAgainAfterAFailureSaysSo(self):
+        with mock.patch.object(hidpp, "findHidppNodes", side_effect=OSError(errno.EMFILE, "Too many open files")):
+            self.mice.start()
+            self.mice.settleTimer.stop()
+            self.mice.scanNodes()
+        self.mice.settleTimer.stop()
+        # an empty listing is a listing that works, and the scans after it are the quiet normal case
+        self.mice.scanNodes()
+        self.mice.scanNodes()
+        self.assertEqual(self.errors.getvalue(), "Couldn't list HID++ nodes: EMFILE\nListed the HID++ nodes again\n")
+
+    def testADeniedRetryWhoseListingWorksAgainSaysSo(self):
+        self.nodes.deny(RECEIVER)
+        self.mice.start()
+        self.mice.deniedTimer.stop()
+        with mock.patch.object(hidpp, "findHidppNodes", side_effect=OSError(errno.EMFILE, "Too many open files")):
+            self.mice.retryDenied()
+        self.mice.deniedTimer.stop()
+        self.mice.retryDenied()
+        self.assertEqual(self.errors.getvalue(), "Couldn't open " + RECEIVER + ": EACCES\nCouldn't list HID++ nodes: EMFILE\nListed the HID++ nodes again\n")
 
     def makeSysfs(self, *names):
         root = tempfile.mkdtemp()
@@ -1452,6 +1473,56 @@ class ReceiverListTests(unittest.TestCase):
         self.mice.deniedTimer.stop()
         self.mice.retryDenied()
         self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"]))
+
+    def startWithAnUnreadableSecondReceiver(self, firstDenied):
+        second = "/dev/hidraw10"
+        if (firstDenied):
+            self.nodes.deny(RECEIVER)
+        else:
+            self.nodes.add(RECEIVER, mouseHandler(unitId=bytes.fromhex("aaaaaaaa")))
+        self.nodes.add(second, mouseHandler())
+        self.nodes.failRead(second, OSError(errno.EMFILE, "Too many open files"))
+        self.mice.start()
+        if (not firstDenied):
+            self.assertTrue(waitUntil(lambda: self.keys() == ["aaaaaaaa"]))
+        self.assertNotIn(second, self.mice.nodes)
+        self.nodes.readAgain(second)
+        return second
+
+    def testANodeThatReadsAgainAtAnotherReceiversDeniedRetryOpens(self):
+        second = self.startWithAnUnreadableSecondReceiver(firstDenied=True)
+        # the denied receiver's retry is the listing that sees the entry read again, and nothing in /dev changes to run a scan after it
+        self.mice.deniedTimer.stop()
+        self.mice.retryDenied()
+        self.assertEqual((list(self.mice.nodes), self.mice.denied), ([second], {RECEIVER}))
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"]))
+
+    def testANodeThatReadsAgainAtAnotherReceiversLossOpens(self):
+        second = self.startWithAnUnreadableSecondReceiver(firstDenied=False)
+        self.mice.onLost(self.mice.nodes[RECEIVER], OSError(errno.EIO, "Input/output error"))
+        self.assertEqual((list(self.mice.nodes), self.mice.denied), ([second], {RECEIVER}))
+        self.assertTrue(waitUntil(lambda: "02bc524c" in self.keys()))
+
+    def testANodeThatReadsAgainButIsDeniedAtAnotherReceiversRemovalJoinsTheDeniedRetry(self):
+        second = self.startWithAnUnreadableSecondReceiver(firstDenied=False)
+        self.nodes.deny(second)
+        # the lost receiver isn't listed anymore, so the loss denies nothing of its own to arm the retry
+        self.nodes.hide(RECEIVER)
+        self.mice.onLost(self.mice.nodes[RECEIVER], OSError(errno.ENODEV, "No such device"))
+        self.assertEqual((list(self.mice.nodes), self.mice.denied), ([], {second}))
+        self.assertTrue(self.mice.deniedTimer.isActive())
+        self.nodes.allow(second, mouseHandler())
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"]))
+
+    def testANodeThatReadsAgainWhileDevSettlesWaitsForTheScan(self):
+        second = self.startWithAnUnreadableSecondReceiver(firstDenied=True)
+        self.mice.onDevChanged("/dev")
+        self.mice.deniedTimer.stop()
+        self.mice.retryDenied()
+        # udev may not have set the node's access yet, so the settle wait's scan opens it
+        self.assertEqual(list(self.mice.nodes), [])
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"]))
+        self.assertNotIn("Couldn't open " + second, self.errors.getvalue())
 
     def testAnUnreadableEntryPrintsOncePerErrorAndBacksOff(self):
         path = "/dev/hidraw40"

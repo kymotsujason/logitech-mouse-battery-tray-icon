@@ -361,6 +361,7 @@ class ReceiverList(QObject):
         self.settleTimer.start(max(1, int(min(SETTLE_MS, SETTLE_CEILING_MS - waited))))
 
     def listNodes(self):
+        # the second value is each listed node whose sysfs entry reads again, which only a scan opens on its own, so every other caller hands it to openRecovered
         unreadable = {}
         try:
             paths = hidpp.findHidppNodes(unreadable=unreadable)
@@ -369,14 +370,16 @@ class ReceiverList(QObject):
             if (not self.listingFailed):
                 self.listingFailed = True
                 printLine("Couldn't list HID++ nodes: " + (errno.errorcode.get(error.errno) or str(error)))
-            return None
-        self.listingFailed = False
+            return (None, set())
+        if (self.listingFailed):
+            self.listingFailed = False
+            printLine("Listed the HID++ nodes again")
         self.listedOnce = True
-        self.noteUnreadable(paths, unreadable)
-        return paths
+        return (paths, self.noteUnreadable(paths, unreadable))
 
     def noteUnreadable(self, paths, unreadable):
         details = {path: errno.errorcode.get(error.errno) or str(error) for path, error in unreadable.items()}
+        recovered = {path for path in self.unreadable if path not in details and path in paths}
         for path, detail in sorted(details.items()):
             if (self.unreadable.get(path) != detail):
                 # a node or an error the last listing didn't have starts the wait over at its shortest
@@ -393,6 +396,17 @@ class ReceiverList(QObject):
             self.unreadableRetryMs = DENIED_RETRY_MS
         elif (not self.unreadableTimer.isActive() or self.unreadableTimer.remainingTime() > self.unreadableRetryMs):
             self.unreadableTimer.start(self.unreadableRetryMs)
+        return recovered
+
+    def openRecovered(self, paths):
+        # a /dev change still settling has its scan coming, which opens these once udev has set their access
+        if (not paths or self.settleTimer.isActive()):
+            return
+        for path in sorted(paths):
+            # a denied node keeps to its own backoff, as it does at a scan
+            if (path not in self.nodes and path not in self.denied):
+                self.openNode(path)
+        self.updateDeniedTimer()
 
     def retryUnreadable(self):
         # only a /dev change runs a scan otherwise, and an entry that keeps failing, such as one a hardened setup keeps from this account, is looked at less often each time
@@ -402,7 +416,8 @@ class ReceiverList(QObject):
     def scanNodes(self):
         self.settleSince = None
         before = (set(self.nodes), set(self.denied), self.isSearching())
-        paths = self.listNodes()
+        # the opens below cover every listed node, so a node whose entry reads again needs nothing of its own
+        paths = self.listNodes()[0]
         if (paths is None):
             # a listing that failed can't say what was plugged in or taken out, so nothing changes, and the single shot timer has to come back since only a /dev change arms it otherwise
             self.settleTimer.start(SETTLE_MS)
@@ -534,7 +549,7 @@ class ReceiverList(QObject):
     def retryDenied(self):
         before = (set(self.nodes), set(self.denied))
         # a denied path discovery can't vouch for may be a different device that took its number, so nothing opens when the listing fails, while the single shot timer still has to come back
-        paths = self.listNodes()
+        paths, recovered = self.listNodes()
         # doubled before the opens, so a new device node one of them meets starts its wait over at the shortest
         self.deniedRetryMs = min(self.deniedRetryMs * 2, DENIED_RETRY_MAX_MS)
         if (paths is not None):
@@ -543,6 +558,7 @@ class ReceiverList(QObject):
                 # a denied node whose sysfs entry couldn't be read stays denied, since discovery can't vouch for it, and waits for the next retry
                 if (path in paths):
                     self.openNode(path)
+            self.openRecovered(recovered)
         self.deniedTimer.stop()
         self.updateDeniedTimer()
         if ((set(self.nodes), set(self.denied)) != before):
@@ -699,7 +715,7 @@ class ReceiverList(QObject):
             self.forgetErrors(path)
             self.deniedRetryMs = DENIED_RETRY_MS
         # a node discovery no longer lists was unplugged, which reads as an I/O error just like a failing one
-        paths = self.listNodes()
+        paths, recovered = self.listNodes()
         # a listing that fails, such as one out of fds, or one that couldn't read this node's sysfs entry, can't say the node was unplugged, so it's closed and retried like a failing one
         listed = paths is None or path in paths or path in self.unreadable
         if (listed):
@@ -711,6 +727,8 @@ class ReceiverList(QObject):
             self.deny(path, nodeSignature(path))
             self.updateDeniedTimer()
         self.searchAll()
+        # opened after the search of every node, since each open runs its own
+        self.openRecovered(recovered)
         self.changed.emit()
 
     def registerFound(self, state, found, linkUp=False, queuedAt=0.0):
