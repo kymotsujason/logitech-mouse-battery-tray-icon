@@ -84,7 +84,7 @@ class InstallWatcher(QObject):
         self.checkAgain = False
         self.checkTimedOut = False
         self.checkTimer.start(CHECK_TIMEOUT_MS)
-        check.start(PYTHON, ["-B", "-c", "import tray"])
+        check.start(PYTHON, ["-B", "-s", "-c", "import tray"])
 
     def onCheckTimeout(self):
         self.checkTimedOut = True
@@ -131,6 +131,6 @@ class InstallWatcher(QObject):
         # the lock file is opened without inheritance (PEP 446), so the exec closes it and the new version takes the lock
         printLine("Starting version " + newVersion + " in place of " + VERSION)
         try:
-            os.execv(sys.executable, [sys.executable, "-B", os.path.join(APP_FOLDER, "tray.py")] + self.extraArguments())
+            os.execv(sys.executable, [sys.executable, "-B", "-s", os.path.join(APP_FOLDER, "tray.py")] + self.extraArguments())
         except OSError as error:
             printLine("Version " + newVersion + " couldn't start (" + str(error) + "), so " + VERSION + " keeps running")

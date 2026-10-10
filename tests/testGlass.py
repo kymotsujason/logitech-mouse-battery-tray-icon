@@ -15,6 +15,17 @@ import hidpp
 app = QApplication.instance() or QApplication([])
 
 
+
+def luminance(name):
+    channels = [int(name[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+    channels = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+    return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
+
+
+def contrast(first, second):
+    lighter, darker = sorted((luminance(first), luminance(second)), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
 class ThemeTests(unittest.TestCase):
     def testThePortalsChoiceWins(self):
         light = QPalette()
@@ -25,6 +36,20 @@ class ThemeTests(unittest.TestCase):
         self.assertFalse(glass.isDark(2, dark))
         self.assertTrue(glass.isDark(0, dark))
         self.assertFalse(glass.isDark(0, light))
+
+    def testStatusTextReadsAtFourAndAHalfToOneOnEachTheme(self):
+        # the lightest panel the sidebar draws in the light theme, measured from a render, and each theme's own backdrop
+        backgrounds = {glass.LIGHT: ("#F7FBF9", glass.LIGHT.base), glass.DARK: (glass.DARK.base,)}
+        for theme, colors in backgrounds.items():
+            for text in (theme.greenText, theme.redText):
+                for background in colors:
+                    self.assertGreaterEqual(contrast(text, background), 4.5, (theme.dark, text, background))
+
+    def testTheGlowTurnsRedForARoughLowReading(self):
+        class Mouse:
+            reading = hidpp.BatteryReading(None, 0, level="low")
+            asleep = False
+        self.assertEqual(glass.stateColor(glass.DARK, Mouse(), False).name(), QColor(glass.DARK.red).name())
 
     def testTheGlowFollowsTheIconsOrder(self):
         theme = glass.DARK

@@ -18,6 +18,9 @@ INTEGRITY_FLAG = "history.check-integrity"
 SCHEMA_VERSION = 1
 OPEN_RETRY_SECONDS = 600
 HOLD_SECONDS = 10
+# the hold already keeps a change of percent alone to one row per 10 s, so this only bites on codes, power, and markers that flood in
+WRITE_BURST = 30
+WRITE_REFILL_SECONDS = HOLD_SECONDS
 # the probe saw a wake's battery event come with or after its wireless status event, but only on two wakes, so a reading this close before a wake counts as part of it
 WAKE_SET_SECONDS = 2
 MILLIVOLT_STEP = 20
@@ -27,6 +30,7 @@ CORRUPTION_CODES = (sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB)
 FAILED_OPEN = "open"
 FAILED_SAVE = "save"
 FAILED_READ = "read"
+FAILED_BUDGET = "budget "
 
 ORIGIN_EVENT = 0
 ORIGIN_READ = 1
@@ -213,7 +217,8 @@ class Store:
             self.say("The history was written by a newer version of Mouse Battery, so it's left as it is")
             return False
         self.db.execute("pragma journal_mode=wal")
-        self.db.execute("pragma synchronous=normal")
+        # a laptop can lose power with the history open, and FULL keeps every commit that returned, at the cost of a sync per commit, which the write budget keeps rare
+        self.db.execute("pragma synchronous=full")
         if (version == 0):
             with self.transaction():
                 for statement in SCHEMA:
@@ -581,6 +586,8 @@ class MouseEntry:
         self.lastWriteAt = None
         self.revision = 0
         self.needsGap = False
+        self.budget = WRITE_BURST
+        self.budgetAt = None
         # the name often comes after the mouse's row was made, so it's saved with the next write
         self.nameChanged = False
         # the newest reading seen, saved or not, and whether a marker came after it, for the rule that clears reports on its own
@@ -600,6 +607,8 @@ class Recorder(QObject):
         self.clock = clock
         self.monotonic = monotonic
         self.entries = {}
+        # one count for the whole recorder, so a mouse forgotten and seen again never gets a revision an old reply already has
+        self.revisions = 0
         self.timer = None
         if (timers):
             self.timer = QTimer(self)
@@ -616,6 +625,22 @@ class Recorder(QObject):
             entry = MouseEntry(key, not pathKey)
             self.entries[key] = entry
         return entry
+
+    def forget(self, key, source=SOURCE_HIDPP):
+        # a mouse that left is dropped after its rows go out, so identities that come and go don't pile up, and one that comes back loads its saved flags again
+        entry = self.entries.get(key)
+        if (entry is None or (entry.source is not None and entry.source != source)):
+            return
+        pending = entry.pending
+        entry.pending = []
+        for row in pending:
+            self.process(entry, row)
+        self.flushHeld(entry)
+        # a flag change the database hasn't taken yet would be lost, so that entry stays until a save goes through, unless no save ever will
+        if (entry.pendingFlags and entry.persist and self.store is not None and not self.store.neverOpens()):
+            return
+        del self.entries[key]
+        self.schedule()
 
     def reportsItself(self, key):
         entry = self.entries.get(key)
@@ -934,6 +959,11 @@ class Recorder(QObject):
         # loading can find the key saved as HID++, and a UPower reading already waiting doesn't belong in that history
         if (row.origin == ORIGIN_UPOWER and entry.source == SOURCE_HIDPP):
             return
+        if (saving and not self.takeBudget(entry)):
+            # a row left out is handled like a failed write, so the next one saved follows a gap and nothing across it counts as whole
+            entry.needsGap = True
+            self.store.say("Mouse " + entry.key + " sent more changes than the history saves, so some were left out", FAILED_BUDGET + entry.key)
+            return
         if (saving):
             try:
                 with self.store.transaction() as db:
@@ -953,7 +983,11 @@ class Recorder(QObject):
             entry.nameChanged = False
             entry.pendingFlags = {}
             entry.track = track
-            entry.revision += 1
+            self.revisions += 1
+            entry.revision = self.revisions
+            # only a budget back to full counts as over, so a slow flood that keeps nibbling at it can't fill the journal with pairs of lines
+            if (entry.budget >= WRITE_BURST - 1):
+                self.store.works(FAILED_BUDGET + entry.key, "Mouse " + entry.key + "'s changes are saved again")
             self.noteWrite(entry, row)
             self.changed.emit(entry.key)
             return
@@ -971,6 +1005,16 @@ class Recorder(QObject):
         # nothing was saved, so the revision stays, but the service still has to pick up the new flag
         if (flagChanged):
             self.changed.emit(entry.key)
+
+    def takeBudget(self, entry):
+        now = self.monotonic()
+        if (entry.budgetAt is not None):
+            entry.budget = min(WRITE_BURST, entry.budget + (now - entry.budgetAt) / WRITE_REFILL_SECONDS)
+        entry.budgetAt = now
+        if (entry.budget < 1):
+            return False
+        entry.budget -= 1
+        return True
 
     def noteWrite(self, entry, row):
         # a wake set's reading or a search's reading can have come in before the row written last, and the hold still counts from the latest write

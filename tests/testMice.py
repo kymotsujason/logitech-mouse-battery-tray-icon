@@ -354,6 +354,31 @@ class MouseListTests(unittest.TestCase):
         self.mice.removeUPower(path)
         self.assertEqual(self.keys(), [])
 
+    def testAUPowerReadingTakesTheTimeUPowerReadItAt(self):
+        self.mice.applyUPower(upower.UPowerMouse(UPOWER_PATH, "12ab34cd", "MX Master 3", hidpp.BatteryReading(55, 0), updatedAt=1000.0))
+        self.assertEqual(self.mouse().lastRead, 1000.0)
+
+    def testAUPowerReadingFromTheFutureTakesTheTimeItCameIn(self):
+        with mock.patch.object(mice.time, "time", return_value=2000.0):
+            self.mice.applyUPower(upower.UPowerMouse(UPOWER_PATH, "12ab34cd", "MX Master 3", hidpp.BatteryReading(55, 0), updatedAt=9000.0))
+        self.assertEqual(self.mouse().lastRead, 2000.0)
+
+    def testAnOlderUPowerReadingDoesntReplaceANewerServiceReading(self):
+        self.mice.applyService(state(entry(key="12ab34cd", percent=40, lastRead=1900.0)))
+        self.mice.applyUPower(upower.UPowerMouse(UPOWER_PATH, "12ab34cd", "MX Master 3", hidpp.BatteryReading(80, 0), updatedAt=1000.0))
+        self.assertEqual((self.mouse().reading.percent, self.mouse().lastRead, self.mouse().upowerPath), (40, 1900.0, UPOWER_PATH))
+
+    def testAnOlderUPowerReadingAfterTheServiceIsLostMarksTheMouseCurrent(self):
+        self.mice.applyService(state(entry(key="12ab34cd", percent=40, lastRead=1900.0)))
+        self.mice.applyService(None)
+        self.mice.applyUPower(upower.UPowerMouse(UPOWER_PATH, "12ab34cd", "MX Master 3", hidpp.BatteryReading(80, 0), updatedAt=1000.0))
+        self.assertEqual((self.mouse().reading.percent, self.mouse().stale, self.mouse().asleep), (40, False, False))
+
+    def testAUPowerPathThatGainsASerialStaysOneMouse(self):
+        self.mice.applyUPower(upower.UPowerMouse(UPOWER_PATH, UPOWER_PATH, "MX Master 3", hidpp.BatteryReading(55, 0), pathKey=True))
+        self.mice.applyUPower(upower.UPowerMouse(UPOWER_PATH, "12ab34cd", "MX Master 3", hidpp.BatteryReading(54, 0)))
+        self.assertEqual(self.keys(), ["12ab34cd"])
+
     def testAChangedUPowerReadingCountsAsWaking(self):
         path = "/org/freedesktop/UPower/devices/mouse_hidpp_battery_1"
         self.mice.applyUPower(upower.UPowerMouse(path, "12ab34cd", "MX Master 3", hidpp.BatteryReading(55, 0)))

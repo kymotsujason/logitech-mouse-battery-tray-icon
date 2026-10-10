@@ -73,7 +73,7 @@ class WorkerTests(unittest.TestCase):
         self.worker.queueWork(("read", 1, FEATURE, 0.0))
         message = nextMessage(self.messages, "read")
         self.assertIs(message[1], self.worker)
-        self.assertEqual(message[2:], (1, (hidpp.ANSWER, hidpp.BatteryReading(81, 0, power=0)), 0.0))
+        self.assertEqual(message[2:], (1, (hidpp.ANSWER, hidpp.BatteryReading(81, 0, power=0)), 0.0, None))
 
     def testSearchResultIsPosted(self):
         self.startWorker(mouseHandler())
@@ -928,6 +928,26 @@ class ReceiverListTests(unittest.TestCase):
         receiver.send(bytes([0x11, 1, 5, 0x00, 64, 0x04, 0, 0]).ljust(20, b"\x00"))
         self.assertTrue(waitUntil(lambda: self.mouse().reading == hidpp.BatteryReading(64, 0, power=0)))
 
+    def testAMouseWhoseReadsRunOutOfRetriesSaysSoOnceWithItsError(self):
+        receiver = self.nodes.add(RECEIVER, mouseHandler(answers={(5, 0): [0x0F, 0x02]}))
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: batteryReads(receiver) == 4))
+        QTest.qWait(1500)
+        self.mice.readAll()
+        self.assertTrue(waitUntil(lambda: batteryReads(receiver) == 5))
+        QTest.qWait(100)
+        lines = [line for line in self.errors.getvalue().splitlines() if "battery" in line]
+        self.assertEqual(lines, ["Mouse 02bc524c on " + RECEIVER + " slot 1 keeps answering its battery read with error 0x05, so it's read again at its next event or timed read"])
+
+    def testAMouseThatAnswersAgainAfterRunningOutOfRetriesSaysSo(self):
+        receiver = self.nodes.add(RECEIVER, mouseHandler(answers={(5, 0): [0x0F, 0x02]}))
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: "keeps answering" in self.errors.getvalue()))
+        receiver.handler = mouseHandler()
+        self.mice.readAll()
+        self.assertTrue(waitUntil(lambda: self.mouse().reading is not None))
+        self.assertIn("Mouse 02bc524c answers its battery read again\n", self.errors.getvalue())
+
     def holdTwoBusyNodes(self):
         self.nodes.add(RECEIVER, mouseHandler())
         self.nodes.add(CABLE, mouseHandler(slot=0xFF, unitId=bytes.fromhex("aaaaaaaa")))
@@ -1731,6 +1751,12 @@ class ReceiverHistoryTests(unittest.TestCase):
     def testTheFirstRegistrationWritesAGapBeforeItsReading(self):
         self.start()
         self.assertEqual(self.origins(), [history.ORIGIN_GAP, history.ORIGIN_READ])
+
+    def testARemovedMouseLeavesNoRecorderEntry(self):
+        self.start()
+        key = self.mouse().key
+        self.mice.removeMouse(self.mouse())
+        self.assertNotIn(key, self.recorder.entries)
 
     def testTheWirelessStatusIndexReachesTheMouseAndTheRecorder(self):
         self.start()

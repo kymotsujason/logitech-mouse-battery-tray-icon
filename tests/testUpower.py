@@ -92,6 +92,11 @@ class ReadingTests(unittest.TestCase):
         for value in (float("nan"), float("inf")):
             self.assertIsNone(upower.mouseFromProperties(PATH, mouseProperties(Percentage=value)).reading.percent)
 
+    def testUpdateTimeIsKeptAndZeroMeansUnknown(self):
+        self.assertEqual(upower.mouseFromProperties(PATH, mouseProperties(UpdateTime=1800000000)).updatedAt, 1800000000)
+        self.assertIsNone(upower.mouseFromProperties(PATH, mouseProperties(UpdateTime=0)).updatedAt)
+        self.assertIsNone(upower.mouseFromProperties(PATH, mouseProperties()).updatedAt)
+
     def testAModelWithControlCharactersReadsClean(self):
         self.assertEqual(upower.mouseFromProperties(PATH, mouseProperties(Model="MX\x1b[2J Master")).name, "MX[2J Master")
 
@@ -275,7 +280,7 @@ class RetryTests(unittest.TestCase):
                 watcher.retryTimer.stop()
                 watcher.refresh(PATH)
                 self.assertTrue(waitFor(lambda: len(bus.calls) == asked and not watcher.refreshing))
-        self.assertEqual(errors.getvalue(), "UPower answered org.freedesktop.DBus.Error.NoReply\n" * 2)
+        self.assertEqual(errors.getvalue(), ("UPower answered org.freedesktop.DBus.Error.NoReply for " + PATH + "\n") * 2)
         self.assertEqual(len(self.changed), 1)
 
     def testFailedCallsAreRetriedWhenTheirPrintFails(self):
@@ -380,6 +385,33 @@ class RetryTests(unittest.TestCase):
         self.assertTrue(waitFor(lambda: watcher.retryTimer.isActive()))
         watcher.stop()
         self.assertFalse(watcher.retryTimer.isActive())
+
+    def testAReplyForADeviceRemovedMeanwhileIsSetAside(self):
+        bus, watcher = self.makeWatcher(lambda message: message.createReply([mouseProperties()]))
+        watcher.paths.add(PATH)
+        watcher.refresh(PATH)
+        watcher.onDeviceRemoved(FakeMessage("", [PATH]))
+        settle()
+        self.assertEqual((self.changed, self.removed, PATH in watcher.paths, watcher.refreshing), ([], [PATH], False, {}))
+
+    def testADeviceAddedAgainWhileItsOldCallIsOutIsReadOnce(self):
+        bus, watcher = self.makeWatcher(lambda message: message.createReply([mouseProperties()]))
+        watcher.paths.add(PATH)
+        watcher.refresh(PATH)
+        watcher.onDeviceRemoved(FakeMessage("", [PATH]))
+        watcher.onDeviceAdded(FakeMessage("", [PATH]))
+        settle()
+        self.assertEqual((len(bus.calls), len(self.changed), PATH in watcher.paths), (2, 1, True))
+
+    def testChangesDuringAFailingCallStillBackOff(self):
+        bus, watcher = self.makeWatcher(failWith("org.freedesktop.DBus.Error.NoReply"))
+        watcher.paths.add(PATH)
+        watcher.refresh(PATH)
+        watcher.onPropertiesChanged(FakeMessage(PATH, [upower.DEVICE_INTERFACE, {}, []]))
+        self.assertTrue(waitFor(lambda: PATH in watcher.retryPaths))
+        settle()
+        self.assertEqual((len(bus.calls), watcher.retryTimer.isActive(), watcher.refreshAgain), (1, True, set()))
+        self.assertEqual(sys.stderr.getvalue(), "UPower answered org.freedesktop.DBus.Error.NoReply for " + PATH + "\n")
 
     def testAReplyAfterAStopIsSetAside(self):
         bus, watcher = self.makeWatcher(lambda message: message.createReply([{"Type": 5, "NativePath": "hidpp_battery_0", "Serial": "1"}]))

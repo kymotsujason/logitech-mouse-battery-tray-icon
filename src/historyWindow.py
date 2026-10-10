@@ -3,7 +3,7 @@ import os
 import time
 
 from PyQt6 import sip
-from PyQt6.QtCore import QAbstractAnimation, QElapsedTimer, QPoint, QPointF, QRectF, QSizeF, Qt, QTimer, QVariantAnimation, QEasingCurve, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QAbstractAnimation, QElapsedTimer, QPoint, QPointF, QRectF, QSize, QSizeF, Qt, QTimer, QVariantAnimation, QEasingCurve, pyqtSignal, pyqtSlot
 from PyQt6.QtDBus import QDBusMessage
 from PyQt6.QtGui import QColor, QFont, QFontMetricsF, QIcon, QPainter, QPen, QRegion
 from PyQt6.QtWidgets import QApplication, QGraphicsOpacityEffect, QLabel, QWidget
@@ -37,6 +37,10 @@ CHART_HEIGHT = 238
 CHART_MIN_HEIGHT = 160
 # the layout's fixed parts, top margin to bottom margin, around the top row and the chart
 FIXED_HEIGHT = MARGIN + 20 + SEGMENT_HEIGHT + 14 + 16 + FORM_HEIGHT + MARGIN
+# the narrowest pane that keeps the name and status clear of the health box
+PANE_MIN_WIDTH = MARGIN + ICON_SIZE + 12 + 120 + 12 + HEALTH_WIDTH + MARGIN
+# a usual title bar, for the room the screen leaves before the window has shown and its frame is known
+FRAME_ALLOWANCE = 40
 FETCH_GAP_SECONDS = 30
 # the service writes a UPower reading once its wake set wait is over, and holds a change of the percent alone until HOLD_SECONDS after its last write, so a fetch after a change waits out both and a bit for the GetAll each side makes
 UPOWER_SETTLE_SECONDS = history.WAKE_SET_SECONDS + history.HOLD_SECONDS + 3
@@ -77,6 +81,7 @@ FINAL_ERRORS = RESTART_LEVEL_ERRORS + (serviceClient.UNDECODABLE,)
 # a refused range waits out the refill of its budget before it's asked for again
 LEVEL_RETRY_MS = serviceState.LEVELS_REFILL_SECONDS * 1000
 NOT_REFRESHED_TEXT = "Couldn't refresh the history."
+RANGE_NOT_REFRESHED_TEXT = "Couldn't refresh this range."
 
 
 def font(size, weight=QFont.Weight.Normal):
@@ -201,21 +206,43 @@ class MouseIcon(QWidget):
     def __init__(self, parent):
         super().__init__(parent)
         self.image = None
+        self.state = None
+        self.base = None
         self.setFixedSize(ICON_SIZE, ICON_SIZE)
 
     def setState(self, state, theme):
-        if (state is None):
-            self.image = None
-        else:
-            ratio = self.devicePixelRatioF()
-            # drawn at the screen's pixel ratio, so it stays sharp on a HiDPI screen
-            self.image = icon.renderImage(state, round(ICON_SIZE * ratio), theme.iconBase, number=False)
-            self.image.setDevicePixelRatio(ratio)
+        self.state = state
+        self.base = theme.iconBase
+        self.render()
         self.update()
 
+    def render(self):
+        if (self.state is None):
+            self.image = None
+            return
+        ratio = self.devicePixelRatioF()
+        # drawn at the screen's pixel ratio, so it stays sharp on a HiDPI screen
+        self.image = icon.renderImage(self.state, round(ICON_SIZE * ratio), self.base, number=False)
+        self.image.setDevicePixelRatio(ratio)
+
     def paintEvent(self, event):
+        # a window moved to a screen with another scale gets the icon drawn again for it
+        if (self.image is not None and self.image.devicePixelRatio() != self.devicePixelRatioF()):
+            self.render()
         if (self.image is not None):
             QPainter(self).drawImage(QRectF(0, 0, ICON_SIZE, ICON_SIZE), self.image)
+
+
+def isKeyFocus(event):
+    # only Tab and Shift+Tab draw a ring, since the window hands its first control focus when it's activated and a click shouldn't leave one either
+    return event.reason() in (Qt.FocusReason.TabFocusReason, Qt.FocusReason.BacktabFocusReason)
+
+
+def paintFocusRing(painter, rect, radius):
+    # the controls are painted, so each draws the keyboard focus itself, in the blue the glass uses for its highlight
+    painter.setPen(QPen(QColor(glass.BLUE), 2))
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), radius, radius)
 
 
 class SegmentedControl(QWidget):
@@ -236,6 +263,9 @@ class SegmentedControl(QWidget):
         self.animation.setEasingCurve(QEasingCurve.Type.OutCubic)
         self.animation.valueChanged.connect(self.onSlide)
         self.setFixedSize(int(sum(widths) + 2 * self.inset), height)
+        # Tab reaches it, while a click leaves no focus ring behind
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self.keyFocus = False
 
     def segmentX(self, index):
         return self.inset + sum(self.widths[:index])
@@ -269,6 +299,27 @@ class SegmentedControl(QWidget):
                 self.choose(index)
                 return
 
+    def focusInEvent(self, event):
+        self.keyFocus = isKeyFocus(event)
+        super().focusInEvent(event)
+
+    def focusOutEvent(self, event):
+        self.keyFocus = False
+        super().focusOutEvent(event)
+
+    def keyPressEvent(self, event):
+        key = event.key()
+        if (key == Qt.Key.Key_Left):
+            self.choose(max(0, self.index - 1))
+        elif (key == Qt.Key.Key_Right):
+            self.choose(min(len(self.names) - 1, self.index + 1))
+        elif (key == Qt.Key.Key_Home):
+            self.choose(0)
+        elif (key == Qt.Key.Key_End):
+            self.choose(len(self.names) - 1)
+        else:
+            super().keyPressEvent(event)
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -285,6 +336,8 @@ class SegmentedControl(QWidget):
             painter.setFont(font(self.fontSize, QFont.Weight.DemiBold if index == self.index else QFont.Weight.Normal))
             painter.setPen(QColor(theme.text))
             painter.drawText(QRectF(self.segmentX(index), 0, self.widths[index], self.height()), int(Qt.AlignmentFlag.AlignCenter), name)
+        if (self.hasFocus() and self.keyFocus):
+            paintFocusRing(painter, QRectF(self.rect()), self.height() / 2)
 
 
 class ChoiceMenu(QWidget):
@@ -297,6 +350,8 @@ class ChoiceMenu(QWidget):
         self.hover = 0
         self.onPick = None
         self.pressed = False
+        self.returnTo = None
+        self.returnReason = Qt.FocusReason.OtherFocusReason
         self.panel = QRectF()
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setMouseTracking(True)
@@ -321,6 +376,10 @@ class ChoiceMenu(QWidget):
         if (any(index != self.marked and self.rowRect(index).intersects(anchor) for index in range(len(choices)))):
             # kept inside the window the panel put another choice under part of the button, where a second click would pick it, so it opens above the button instead
             self.panel.moveBottom(max(anchor.top() - CHOICE_GAP, CHOICE_MARGIN + height))
+        # closing from the keys gives the focus back where it was, so Tab carries on from the button
+        focused = self.owner.focusWidget()
+        self.returnTo = focused if focused is not self else None
+        self.returnReason = Qt.FocusReason.TabFocusReason if getattr(focused, "keyFocus", False) else Qt.FocusReason.OtherFocusReason
         self.show()
         self.raise_()
         self.setFocus()
@@ -339,8 +398,20 @@ class ChoiceMenu(QWidget):
         return next((index for index in range(len(self.choices)) if self.rowRect(index).contains(point)), None)
 
     def choose(self, index):
-        self.hide()
+        self.dismiss()
         self.onPick(self.choices[index][0])
+
+    def dismiss(self):
+        self.hide()
+
+    def hideEvent(self, event):
+        # a hidden widget that held focus would pass it to the next control, so it goes back to where it came from, ring and all, before Qt does that
+        if (self.owner.focusWidget() is self):
+            if (self.returnTo is not None):
+                self.returnTo.setFocus(self.returnReason)
+            else:
+                self.clearFocus()
+        super().hideEvent(event)
 
     def mouseMoveEvent(self, event):
         index = self.rowAt(event.position())
@@ -374,7 +445,7 @@ class ChoiceMenu(QWidget):
     def keyPressEvent(self, event):
         key = event.key()
         if (key == Qt.Key.Key_Escape):
-            self.hide()
+            self.dismiss()
         elif (key in (Qt.Key.Key_Up, Qt.Key.Key_Down)):
             self.setHover(max(0, min(len(self.choices) - 1, self.hover + (1 if key == Qt.Key.Key_Down else -1))))
         elif (key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space)):
@@ -417,6 +488,8 @@ class PopupButton(QWidget):
         self.owner = window
         self.seconds = 0
         self.setFixedSize(76, 24)
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self.keyFocus = False
 
     def setSeconds(self, seconds):
         self.seconds = seconds
@@ -430,6 +503,23 @@ class PopupButton(QWidget):
     def mousePressEvent(self, event):
         if (event.button() != Qt.MouseButton.LeftButton):
             return
+        self.openMenu()
+
+    def focusInEvent(self, event):
+        self.keyFocus = isKeyFocus(event)
+        super().focusInEvent(event)
+
+    def focusOutEvent(self, event):
+        self.keyFocus = False
+        super().focusOutEvent(event)
+
+    def keyPressEvent(self, event):
+        if (event.key() in (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Up, Qt.Key.Key_Down)):
+            self.openMenu()
+        else:
+            super().keyPressEvent(event)
+
+    def openMenu(self):
         anchor = QRectF(QPointF(self.mapTo(self.owner, QPoint(0, 0))), QSizeF(self.size()))
         self.owner.choiceMenu.open(SLEEP_CHOICES, self.seconds, anchor, self.pick)
 
@@ -455,6 +545,8 @@ class PopupButton(QWidget):
         painter.drawLine(QPointF(x, middle - 5), QPointF(x + 3, middle - 2))
         painter.drawLine(QPointF(x - 3, middle + 2), QPointF(x, middle + 5))
         painter.drawLine(QPointF(x, middle + 5), QPointF(x + 3, middle + 2))
+        if (self.hasFocus() and self.keyFocus):
+            paintFocusRing(painter, QRectF(self.rect()), self.height() / 2)
 
 
 class Sidebar(QWidget):
@@ -465,6 +557,8 @@ class Sidebar(QWidget):
         self.owner = window
         self.rows = []
         self.selected = None
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self.keyFocus = False
 
     def setRows(self, rows, selected):
         # each row is (key, name, second line, capsule fill from 0 to 1 or None, color name of the second line)
@@ -486,6 +580,31 @@ class Sidebar(QWidget):
                 self.picked.emit(row[0])
                 return
 
+    def focusInEvent(self, event):
+        self.keyFocus = isKeyFocus(event)
+        super().focusInEvent(event)
+
+    def focusOutEvent(self, event):
+        self.keyFocus = False
+        super().focusOutEvent(event)
+
+    def keyPressEvent(self, event):
+        key = event.key()
+        if (key not in (Qt.Key.Key_Up, Qt.Key.Key_Down) or not self.rows):
+            super().keyPressEvent(event)
+            return
+        index = self.selectedIndex()
+        if (index is None):
+            index = 0
+        elif (key == Qt.Key.Key_Up):
+            index = max(0, index - 1)
+        else:
+            index = min(len(self.rows) - 1, index + 1)
+        self.picked.emit(self.rows[index][0])
+
+    def selectedIndex(self):
+        return next((index for index, row in enumerate(self.rows) if row[0] == self.selected), None)
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -505,6 +624,10 @@ class Sidebar(QWidget):
             painter.setFont(font(11))
             painter.setPen(QColor(secondColor))
             painter.drawText(QRectF(rect.x() + 44, rect.y() + 23, rect.width() - 52, 18), int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), second)
+        if (self.hasFocus() and self.keyFocus):
+            index = self.selectedIndex()
+            ring = self.rowRect(index) if index is not None else QRectF(self.rect())
+            paintFocusRing(painter, ring, ring.height() / 2 if index is not None else 12)
 
     def paintCapsule(self, painter, rect, fill, theme, color):
         painter.setPen(QPen(QColor(theme.secondary), 1))
@@ -543,7 +666,11 @@ class HistoryWindow(QWidget):
         self.replies = {}
         self.errors = {}
         self.notRefreshed = set()
-        self.pending = set()
+        # ranges whose reload failed while their old bars stayed up, until one answers
+        self.levelReloadFailed = set()
+        # each call still out by a number of its own, so a cache forgotten while one was out can't take its answer back in
+        self.pending = {}
+        self.callCount = 0
         self.lastFetch = {}
         self.upowerChangedAt = {}
         self.upowerSeen = {}
@@ -553,7 +680,7 @@ class HistoryWindow(QWidget):
         # the ranges asked for since each mouse's last history reply, while older slots stay drawn until their new answer
         self.freshLevels = set()
         self.levelErrors = {}
-        self.pendingLevels = set()
+        self.pendingLevels = {}
         self.selected = None
         self.wanted = None
         self.health = None
@@ -577,6 +704,7 @@ class HistoryWindow(QWidget):
             upowerWatcher.mouseRemoved.connect(self.onUPowerRemoved)
         QApplication.instance().paletteChanged.connect(self.onPaletteChanged)
         self.watchingPortal = False
+        self.portalChanges = {"color-scheme": 0, "reduced-motion": 0}
         self.blurred = False
 
     def makeParts(self, sleepCheckSeconds):
@@ -683,10 +811,14 @@ class HistoryWindow(QWidget):
         if (not self.watchingPortal):
             self.watchingPortal = True
             self.sessionBus.connect(panelColor.PORTAL_SERVICE, panelColor.PORTAL_PATH, panelColor.SETTINGS_INTERFACE, "SettingChanged", self.onPortalSetting)
-        panelColor.askPortalSetting(self.sessionBus, self, "color-scheme", lambda value, error: self.onPortalRead("color-scheme", value, error))
-        panelColor.askPortalSetting(self.sessionBus, self, "reduced-motion", lambda value, error: self.onPortalRead("reduced-motion", value, error))
+        for key in ("color-scheme", "reduced-motion"):
+            changes = self.portalChanges[key]
+            panelColor.askPortalSetting(self.sessionBus, self, key, lambda value, error, key=key, changes=changes: self.onPortalRead(key, value, error, changes))
 
-    def onPortalRead(self, key, value, error):
+    def onPortalRead(self, key, value, error, changes):
+        # a SettingChanged that came while the read was out is newer than its answer
+        if (changes != self.portalChanges[key]):
+            return
         # a read that timed out says nothing about the setting, while a portal older than the key answers with an error that does, and then motion follows AnimationDurationFactor alone
         if (error is None or error in (panelColor.NOT_FOUND, panelColor.UNKNOWN_METHOD)):
             self.setPortal(key, value if error is None else 0)
@@ -696,6 +828,7 @@ class HistoryWindow(QWidget):
         arguments = message.arguments()
         if (len(arguments) >= 3 and arguments[0] == panelColor.APPEARANCE and arguments[1] in ("color-scheme", "reduced-motion")):
             value = dbusCalls.plain(arguments[2])
+            self.portalChanges[arguments[1]] += 1
             self.setPortal(arguments[1], value if isinstance(value, int) else 0)
 
     def setPortal(self, key, value):
@@ -729,6 +862,8 @@ class HistoryWindow(QWidget):
         self.replies.clear()
         self.errors.clear()
         self.notRefreshed.clear()
+        # an answer still on its way comes from the old service, so it's set aside
+        self.pending.clear()
         # the new service writes a UPower mouse's first row after its hold, so the first fetch waits as it does after a UPower change
         now = time.monotonic()
         for key in self.upowerSeen:
@@ -788,11 +923,18 @@ class HistoryWindow(QWidget):
     def fetchLevels(self, key, rangeName):
         if ((key, rangeName) in self.pendingLevels or not self.isVisible()):
             return
-        self.pendingLevels.add((key, rangeName))
-        self.serviceWatcher.getLevels(key, rangeName, lambda levels, error: self.onLevels(key, rangeName, levels, error))
+        call = self.nextCall()
+        self.pendingLevels[(key, rangeName)] = call
+        self.serviceWatcher.getLevels(key, rangeName, lambda levels, error: self.onLevels(key, rangeName, levels, error, call))
 
-    def onLevels(self, key, rangeName, levels, error):
-        self.pendingLevels.discard((key, rangeName))
+    def nextCall(self):
+        self.callCount += 1
+        return self.callCount
+
+    def onLevels(self, key, rangeName, levels, error, call):
+        if (self.pendingLevels.get((key, rangeName)) != call):
+            return
+        del self.pendingLevels[(key, rangeName)]
         # close cleared the errors so the next open tries once more, and an error landing after it would undo that and start a retry for a hidden window
         if (levels is None and not self.isVisible()):
             return
@@ -800,8 +942,12 @@ class HistoryWindow(QWidget):
             self.levels.setdefault(key, {})[rangeName] = levels["slots"]
             self.freshLevels.add((key, rangeName))
             self.levelErrors.pop((key, rangeName), None)
+            self.levelReloadFailed.discard((key, rangeName))
         else:
             self.levelErrors[(key, rangeName)] = error
+            # a refusal is asked again in seconds, so only another failure says the bars weren't refreshed
+            if (rangeName in self.levels.get(key, {}) and error != serviceState.READ_ALL_LIMITED):
+                self.levelReloadFailed.add((key, rangeName))
             if (error not in FINAL_ERRORS):
                 self.levelRetryTimer.start(LEVEL_RETRY_MS if error == serviceState.READ_ALL_LIMITED else RETRY_MS)
         self.refresh()
@@ -817,7 +963,11 @@ class HistoryWindow(QWidget):
             self.levels.clear()
             self.freshLevels.clear()
             self.levelErrors.clear()
+            self.pendingLevels.clear()
+            self.levelReloadFailed.clear()
             return
+        # an answer still on its way was asked before this, so it's set aside and the range asked again
+        self.pendingLevels = {item: call for item, call in self.pendingLevels.items() if item[0] != key}
         # the slots stay drawn until the new answer, so a new reading never blanks the chart
         self.freshLevels = {item for item in self.freshLevels if item[0] != key}
         for item in [item for item in self.levelErrors if item[0] == key]:
@@ -844,6 +994,15 @@ class HistoryWindow(QWidget):
             self.chartAnimation.start()
         else:
             self.chartFade.setEnabled(False)
+        mouse = self.selectedMouse()
+        if (mouse is not None):
+            self.updateRefreshLine(mouse.key)
+            self.layoutParts()
+
+    def updateRefreshLine(self, key):
+        # the old bars stay up when a reload fails, so the line under the health box says they weren't refreshed while the level chart shows them
+        rangeFailed = self.segments.index == 0 and self.levelRange != "week" and (key, self.levelRange) in self.levelReloadFailed
+        self.refreshLabel.setText(NOT_REFRESHED_TEXT if key in self.notRefreshed else RANGE_NOT_REFRESHED_TEXT if rangeFailed else "")
 
     def closeEvent(self, event):
         # the window is kept for the next click, and so are its replies, its ranges, and any answer still on its way, so the next open shows them and isOld decides what to fetch, while an error gets one more try then
@@ -927,17 +1086,20 @@ class HistoryWindow(QWidget):
         if (mouse is None):
             return
         self.lastFetch[key] = now
-        self.pending.add(key)
+        call = self.nextCall()
+        self.pending[key] = call
         revision = mouse.historyRevision
-        self.serviceWatcher.getHistory(key, lambda summary, error: self.onHistory(key, revision, now, summary, error))
+        self.serviceWatcher.getHistory(key, lambda summary, error: self.onHistory(key, revision, now, summary, error, call))
 
     def fetchSelected(self):
         mouse = self.selectedMouse()
         if (mouse is not None and self.isVisible()):
             self.considerFetch(mouse)
 
-    def onHistory(self, key, revision, askedAt, summary, error):
-        self.pending.discard(key)
+    def onHistory(self, key, revision, askedAt, summary, error, call):
+        if (self.pending.get(key) != call):
+            return
+        del self.pending[key]
         # close cleared the errors so the next open tries once more, and an error landing after it would undo that
         if (summary is None and not self.isVisible()):
             return
@@ -971,20 +1133,19 @@ class HistoryWindow(QWidget):
         reading = mouse.reading
         if (reading is None):
             return None
-        if (reading.percent is not None):
-            return reading.percent / 100
-        if (reading.level is not None and reading.level in charts.LEVEL_HEIGHTS):
-            return charts.LEVEL_HEIGHTS[reading.level] / 100
-        return None
+        # the same estimate the tray icon fills to, for a rough level or a voltage
+        percent = hidpp.estimatedPercent(reading)
+        return None if percent is None else percent / 100
 
     def secondColor(self, mouse):
         reading = mouse.reading
         if (reading is None or mouse.asleep):
             return self.theme.secondary
         if (reading.charging in (hidpp.CHARGING_CHARGING, hidpp.CHARGING_SLOW, hidpp.CHARGING_FULL)):
-            return self.theme.green
-        if (reading.percent is not None and reading.percent <= icon.RED_PERCENT):
-            return self.theme.red
+            return self.theme.greenText
+        percent = hidpp.estimatedPercent(reading)
+        if (percent is not None and percent <= icon.RED_PERCENT):
+            return self.theme.redText
         return self.theme.secondary
 
     def historyMessage(self, mouse):
@@ -1039,7 +1200,7 @@ class HistoryWindow(QWidget):
             self.fillHealth(theme)
             self.fillCharts(reply.summary, mouse.reading, mouse.key)
             self.fillForm(self.health)
-            self.refreshLabel.setText(NOT_REFRESHED_TEXT if mouse.key in self.notRefreshed else "")
+            self.updateRefreshLine(mouse.key)
         warning = self.health is not None and self.health.symbol == health.SYMBOL_WARNING
         self.setGlow(glass.stateColor(theme, mouse, warning))
 
@@ -1162,23 +1323,31 @@ class HistoryWindow(QWidget):
         sidebarWidth = SIDEBAR_WIDTH if self.sidebar.isVisibleTo(self) else 0
         healthHeight = self.healthHeight() if "health" in self.panels else HEALTH_MIN_HEIGHT
         top = max(TOP_ROW, healthHeight)
-        wantedHeight = min(MAX_HEIGHT, FIXED_HEIGHT + top + CHART_HEIGHT)
-        self.setMinimumSize(sidebarWidth + PANE_WIDTH, max(BASE_HEIGHT, wantedHeight))
-        if (self.width() < sidebarWidth + PANE_WIDTH or self.height() < wantedHeight):
-            self.resize(max(self.width(), sidebarWidth + PANE_WIDTH) if self.width() >= sidebarWidth + PANE_WIDTH else sidebarWidth + PANE_WIDTH, max(self.height(), wantedHeight))
-        if (not self.sidebar.isVisibleTo(self) and self.width() > PANE_WIDTH and self.minimumWidth() == PANE_WIDTH and self.property("hadSidebar")):
+        leastWidth = sidebarWidth + PANE_WIDTH
+        leastHeight = max(BASE_HEIGHT, min(MAX_HEIGHT, FIXED_HEIGHT + top + CHART_HEIGHT))
+        room = self.screenRoom()
+        if (room is not None):
+            # a small or scaled screen gets a window that fits, with a shorter chart and a narrower pane, so the setting at the bottom stays on screen
+            leastWidth = max(min(leastWidth, room.width()), sidebarWidth + PANE_MIN_WIDTH)
+            leastHeight = max(min(leastHeight, room.height()), FIXED_HEIGHT + top + CHART_MIN_HEIGHT)
+        self.setMinimumSize(leastWidth, leastHeight)
+        if (self.width() < leastWidth or self.height() < leastHeight):
+            self.resize(max(self.width(), leastWidth), max(self.height(), leastHeight))
+        if (not self.sidebar.isVisibleTo(self) and self.width() > leastWidth and self.property("hadSidebar")):
             # the window shrinks back by the sidebar's width once the sidebar goes
-            self.resize(self.width() - SIDEBAR_WIDTH, self.height())
+            self.resize(max(leastWidth, self.width() - SIDEBAR_WIDTH), self.height())
         self.setProperty("hadSidebar", self.sidebar.isVisibleTo(self))
         self.sidebar.setGeometry(0, 0, SIDEBAR_WIDTH, self.height())
         width = self.width() - sidebarWidth
         self.pane.setGeometry(sidebarWidth, 0, width, self.height())
         self.mouseIcon.move(MARGIN - 6, MARGIN)
         textX = MARGIN + ICON_SIZE + 12
-        self.nameLabel.setGeometry(textX, MARGIN + 10, 210, 18)
-        self.levelLabel.setGeometry(textX - 2, MARGIN + 28, 220, 50)
-        self.statusLabel.setGeometry(textX, MARGIN + 80, 210, 40)
         healthX = width - MARGIN - HEALTH_WIDTH
+        # a pane narrower than designed takes the room out of the text, never out of the health box
+        textWidth = min(210, healthX - textX - 12)
+        self.nameLabel.setGeometry(textX, MARGIN + 10, textWidth, 18)
+        self.levelLabel.setGeometry(textX - 2, MARGIN + 28, textWidth + 10, 50)
+        self.statusLabel.setGeometry(textX, MARGIN + 80, textWidth, 40)
         self.healthRect = QRectF(healthX, MARGIN, HEALTH_WIDTH, healthHeight)
         self.healthTitle.setGeometry(int(healthX + 18), MARGIN + 12, 200, 18)
         self.symbol.move(int(healthX + 18), MARGIN + 40)
@@ -1211,6 +1380,14 @@ class HistoryWindow(QWidget):
             widget.setGeometry(int(MARGIN + column * half + 18), formY + row * 36, int(half - 36), 36)
         self.popup.move(int(MARGIN + 2 * half - 18 - self.popup.width()), formY + 36 + 6)
         self.paneMessage.setGeometry(MARGIN, MARGIN, width - 2 * MARGIN, self.height() - 2 * MARGIN)
+
+    def screenRoom(self):
+        screen = self.screen()
+        if (screen is None):
+            return None
+        room = screen.availableGeometry()
+        frame = self.frameGeometry().height() - self.geometry().height()
+        return QSize(room.width(), room.height() - (frame if frame > 0 else FRAME_ALLOWANCE))
 
     def resizeEvent(self, event):
         self.choiceMenu.hide()

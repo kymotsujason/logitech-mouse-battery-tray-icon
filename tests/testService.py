@@ -650,6 +650,7 @@ class UPowerHistoryTests(unittest.TestCase):
         glue.watcher.mouseRemoved.emit("/org/freedesktop/UPower/devices/other")
         recorder.addReading.assert_called_once_with("9a1b2c3d", hidpp.BatteryReading(70, 0), history.ORIGIN_UPOWER, name="MX Master 3S", source=history.SOURCE_UPOWER, pathKey=False)
         recorder.addMarker.assert_called_once_with("9a1b2c3d", history.ORIGIN_GAP, source=history.SOURCE_UPOWER, pathKey=False)
+        recorder.forget.assert_called_once_with("9a1b2c3d", source=history.SOURCE_UPOWER)
 
     def testAPathKeyMouseKeepsItsFlagThroughTheRemoval(self):
         recorder = mock.Mock()
@@ -657,6 +658,15 @@ class UPowerHistoryTests(unittest.TestCase):
         glue.watcher.mouseChanged.emit(FakeUPowerMouse("/org/freedesktop/UPower/devices/mouse_1", "/dev/hidraw4#1", 40, pathKey=True))
         glue.watcher.mouseRemoved.emit("/org/freedesktop/UPower/devices/mouse_1")
         recorder.addMarker.assert_called_once_with("/dev/hidraw4#1", history.ORIGIN_GAP, source=history.SOURCE_UPOWER, pathKey=True)
+
+    def testAPathThatGainsASerialEndsItsPathKeysHistory(self):
+        recorder = mock.Mock()
+        glue = service.UPowerHistory(recorder, QDBusConnection("unconnected"))
+        path = "/org/freedesktop/UPower/devices/mouse_2"
+        glue.watcher.mouseChanged.emit(FakeUPowerMouse(path, path, 40, pathKey=True))
+        glue.watcher.mouseChanged.emit(FakeUPowerMouse(path, "9a1b2c3d", 40))
+        recorder.addMarker.assert_called_once_with(path, history.ORIGIN_GAP, source=history.SOURCE_UPOWER, pathKey=True)
+        recorder.forget.assert_called_once_with(path, source=history.SOURCE_UPOWER)
 
     def testStartWatchesTheOwnerAndStopsTheWatcher(self):
         glue = service.UPowerHistory(mock.Mock(), QDBusConnection("unconnected"))

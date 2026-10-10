@@ -35,6 +35,8 @@ class UPowerMouse:
     name: str | None
     reading: hidpp.BatteryReading
     pathKey: bool = False
+    # when UPower last read the device, in seconds since the epoch, or None when it didn't say
+    updatedAt: float | None = None
 
 
 def mouseFromProperties(path, props):
@@ -56,7 +58,9 @@ def mouseFromProperties(path, props):
         reading = hidpp.BatteryReading(None, charging, level=LEVEL_NAMES.get(level, "unknown level"))
     serial = str(values.get("Serial", "")).replace("-", "").lower()
     model = hidpp.cleanText(values.get("Model")) or None
-    return UPowerMouse(path, serial or path, model, reading, pathKey=not serial)
+    updatedAt = values.get("UpdateTime", 0)
+    updatedAt = float(updatedAt) if isinstance(updatedAt, (int, float)) and updatedAt > 0 else None
+    return UPowerMouse(path, serial or path, model, reading, pathKey=not serial, updatedAt=updatedAt)
 
 
 def methodCall(path, interface, method, arguments=None):
@@ -138,7 +142,9 @@ class UPowerWatcher(QObject):
         self.ownerWatcher = None
         # a reply to a call made before an owner change or a stop belongs to a UPower that's gone
         self.generation = 0
-        self.refreshing = set()
+        # each device's call still out, by a number of its own, so an answer that comes after the device was removed can't bring it back
+        self.refreshing = {}
+        self.callCount = 0
         self.refreshAgain = set()
         self.printedErrors = set()
 
@@ -198,12 +204,13 @@ class UPowerWatcher(QObject):
         for path in paths:
             self.refresh(path)
 
-    def reportError(self, error):
-        # the retries keep going quietly, so each kind of failure gets one line until UPower answers again
-        if (error in self.printedErrors):
+    def reportError(self, error, path=None):
+        # the retries keep going quietly, so each kind of failure gets one line until UPower answers again, naming the device when it's one device's call
+        line = "UPower answered " + error + ("" if path is None else " for " + path)
+        if (line in self.printedErrors):
             return
-        self.printedErrors.add(error)
-        printLine("UPower answered " + error)
+        self.printedErrors.add(line)
+        printLine(line)
 
     def scheduleRetry(self):
         if (not self.retryTimer.isActive()):
@@ -221,29 +228,33 @@ class UPowerWatcher(QObject):
         if (path in self.refreshing):
             self.refreshAgain.add(path)
             return
-        self.refreshing.add(path)
+        self.callCount += 1
+        call = self.callCount
+        self.refreshing[path] = call
         generation = self.generation
-        dbusCalls.callLater(self.bus, getAllCall(path), lambda reply: self.onRefreshed(generation, path, reply), self)
+        dbusCalls.callLater(self.bus, getAllCall(path), lambda reply: self.onRefreshed(generation, path, reply, call), self)
 
-    def onRefreshed(self, generation, path, reply):
-        if (generation != self.generation):
+    def onRefreshed(self, generation, path, reply, call):
+        if (generation != self.generation or self.refreshing.get(path) != call):
             return
-        self.refreshing.discard(path)
-        if (path in self.refreshAgain):
-            # the device changed after this call went out, so its answer may already be old
-            self.refreshAgain.discard(path)
-            self.refresh(path)
-            return
+        self.refreshing.pop(path, None)
         props, error = propertiesFrom(reply)
         if (error is not None):
+            # a failed call goes through its backoff even when the device changed meanwhile, and the retry reads those changes too
+            self.refreshAgain.discard(path)
             self.retryPaths.discard(path)
             if (error in GONE_ERRORS):
                 self.dropPath(path)
             elif (error not in ABSENT_ERRORS):
                 # a call that failed for another reason says nothing about the mouse, so it keeps its last reading until the retry
-                self.reportError(error)
+                self.reportError(error, path)
                 self.retryPaths.add(path)
                 self.scheduleRetry()
+            return
+        if (path in self.refreshAgain):
+            # the device changed after this call went out, so its answer may already be old
+            self.refreshAgain.discard(path)
+            self.refresh(path)
             return
         self.retryPaths.discard(path)
         if (not self.retryPaths and not self.enumerateDue):
@@ -269,6 +280,8 @@ class UPowerWatcher(QObject):
     def onDeviceRemoved(self, message):
         path = pathArgument(message)
         self.retryPaths.discard(path)
+        self.refreshing.pop(path, None)
+        self.refreshAgain.discard(path)
         self.dropPath(path)
 
     @pyqtSlot(QDBusMessage)

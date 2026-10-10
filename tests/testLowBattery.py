@@ -22,6 +22,26 @@ class WarnerTests(unittest.TestCase):
             self.warner.confirm(key, percent)
         return percent
 
+    def testARoughLevelWarnsAtLowAndAgainAtCritical(self):
+        results = [self.updateAndSend("m", hidpp.BatteryReading(None, 0, level=level), False) for level in ("good", "low", "low", "critical")]
+        self.assertEqual(results, [None, 10, None, 5])
+
+    def testAVoltageWarnsOnTheKernelsCurve(self):
+        self.assertEqual(self.updateAndSend("m", hidpp.BatteryReading(None, 0, millivolts=3700), False), None)
+        self.assertEqual(self.updateAndSend("m", hidpp.BatteryReading(None, 0, millivolts=3633), False), 4)
+
+    def testAnUnknownChargingStateStillWarns(self):
+        # UPower can't always say whether a mouse is charging, while a low percent still needs its warning
+        self.assertEqual(self.updateAndSend("m", hidpp.BatteryReading(9, hidpp.CHARGING_UNKNOWN), False), 9)
+
+    def testAVoltageMouseOnExternalPowerDoesntWarn(self):
+        # HID++ gives an unknown state only for a voltage mouse with external power on
+        self.assertIsNone(self.updateAndSend("m", hidpp.BatteryReading(None, hidpp.CHARGING_UNKNOWN, millivolts=3600), False))
+
+    def testAPendingChargeOrAChargingErrorDoesntWarn(self):
+        for charging in (hidpp.CHARGING_PENDING, hidpp.CHARGING_ERROR):
+            self.assertIsNone(self.updateAndSend("m", hidpp.BatteryReading(9, charging), False))
+
     def testWarnsOnceAtTenAndOnceAtFive(self):
         results = [self.updateAndSend("m", discharging(percent), False) for percent in (50, 10, 9, 5, 4)]
         self.assertEqual(results, [None, 10, None, 5, None])
@@ -52,9 +72,9 @@ class WarnerTests(unittest.TestCase):
         self.assertIsNone(self.updateAndSend("m", hidpp.BatteryReading(None, 1), True))
         self.assertIsNone(self.updateAndSend("m", discharging(8), False))
 
-    def testErrorPendingAndUnknownNeitherWarnNorReset(self):
+    def testErrorAndPendingNeitherWarnNorReset(self):
         self.updateAndSend("m", discharging(9), False)
-        for code in (4, 5, 6):
+        for code in (4, 5):
             self.assertIsNone(self.updateAndSend("m", hidpp.BatteryReading(3, code), False))
         self.assertIsNone(self.updateAndSend("m", discharging(8), False))
 

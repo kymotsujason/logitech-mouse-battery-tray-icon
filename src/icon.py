@@ -38,6 +38,8 @@ class IconState:
     charging: bool = False
     asleep: bool = False
     empty: bool = False
+    # the percent is an estimate from a rough level or a voltage, so it fills the mouse without a number
+    rough: bool = False
 
 
 def stateIconName(state):
@@ -114,7 +116,7 @@ def outlineRects(cells):
 
 
 def drawNumber(painter, state, size, baseColor):
-    if (state.percent is None or size < NUMBER_MIN_SIZE):
+    if (state.percent is None or state.rough or size < NUMBER_MIN_SIZE):
         return
     cells = numberLayout(str(max(0, min(100, state.percent))), size)[0]
     # the outline clears the fill and track around each digit, so the fill line never runs through one

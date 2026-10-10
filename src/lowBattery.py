@@ -29,18 +29,21 @@ class LowBatteryWarner:
         if (reading.charging in hidpp.EXTERNAL_POWER):
             self.sent.pop(key, None)
             return None
-        if (reading.charging != hidpp.CHARGING_DISCHARGING or reading.percent is None):
+        percent = hidpp.estimatedPercent(reading)
+        # an unknown state from UPower still warns, since some UPower mice never say whether they're charging, while HID++ gives one only for a voltage mouse on external power
+        unknownOffPower = reading.charging == hidpp.CHARGING_UNKNOWN and reading.millivolts is None
+        if ((reading.charging != hidpp.CHARGING_DISCHARGING and not unknownOffPower) or percent is None):
             return None
         # a charge the app never saw (suspend, mouse off, wall charger, new batteries) only shows as a high reading, and the margin over LOW_PERCENT keeps a wobbling level from warning twice
-        if (reading.percent > REARM_PERCENT):
+        if (percent > REARM_PERCENT):
             self.sent.pop(key, None)
             return None
         sent = self.sent.get(key, set())
-        if (reading.percent <= CRITICAL_PERCENT and CRITICAL_PERCENT not in sent):
-            return self.claim(key, CRITICAL_PERCENT, reading.percent)
+        if (percent <= CRITICAL_PERCENT and CRITICAL_PERCENT not in sent):
+            return self.claim(key, CRITICAL_PERCENT, percent)
         # the critical warning covers the low one, which keeps a low claim to readings above CRITICAL_PERCENT
-        if (reading.percent <= LOW_PERCENT and LOW_PERCENT not in sent and CRITICAL_PERCENT not in sent):
-            return self.claim(key, LOW_PERCENT, reading.percent)
+        if (percent <= LOW_PERCENT and LOW_PERCENT not in sent and CRITICAL_PERCENT not in sent):
+            return self.claim(key, LOW_PERCENT, percent)
         return None
 
     def claim(self, key, threshold, percent):

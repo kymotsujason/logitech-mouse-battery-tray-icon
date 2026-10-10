@@ -4,10 +4,10 @@ APP_DIR=/usr/share/logitech-mouse-battery
 
 case "$1" in
     "")
-        exec /usr/bin/python3 -B "$APP_DIR/tray.py"
+        exec /usr/bin/python3 -B -s "$APP_DIR/tray.py"
         ;;
     check)
-        exec /usr/bin/python3 -B "$APP_DIR/check.py"
+        exec /usr/bin/python3 -B -s "$APP_DIR/check.py"
         ;;
     --version)
         sed -n 's/^VERSION = "\([^"]*\)"$/\1/p' "$APP_DIR/version.py"

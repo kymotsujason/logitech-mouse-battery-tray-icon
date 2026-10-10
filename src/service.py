@@ -200,6 +200,11 @@ class UPowerHistory(QObject):
         self.watcher.stop()
 
     def onMouse(self, mouse):
+        # a serial can show up after a device's first reading, which ends the history kept under its path
+        old = self.paths.get(mouse.path)
+        if (old is not None and old[0] != mouse.key):
+            self.recorder.addMarker(old[0], history.ORIGIN_GAP, source=history.SOURCE_UPOWER, pathKey=old[1])
+            self.recorder.forget(old[0], source=history.SOURCE_UPOWER)
         self.paths[mouse.path] = (mouse.key, mouse.pathKey)
         self.recorder.addReading(mouse.key, mouse.reading, history.ORIGIN_UPOWER, name=mouse.name, source=history.SOURCE_UPOWER, pathKey=mouse.pathKey)
 
@@ -207,6 +212,7 @@ class UPowerHistory(QObject):
         found = self.paths.pop(path, None)
         if (found is not None):
             self.recorder.addMarker(found[0], history.ORIGIN_GAP, source=history.SOURCE_UPOWER, pathKey=found[1])
+            self.recorder.forget(found[0], source=history.SOURCE_UPOWER)
 
 
 def stateFolder(env):

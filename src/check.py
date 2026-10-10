@@ -105,6 +105,9 @@ def checkUPower(bus):
 
 def main(bus=None):
     signal.signal(signal.SIGINT, signal.SIG_DFL)
+    # a terminal whose locale isn't UTF-8 may not take every letter a mouse's name can hold, so one it can't show prints as a question mark
+    if (hasattr(sys.stdout, "reconfigure")):
+        sys.stdout.reconfigure(errors="replace")
     # QtDBus wants an application object before it talks to the system bus
     app = QCoreApplication.instance() or QCoreApplication(sys.argv[:1])
     if (bus is None):

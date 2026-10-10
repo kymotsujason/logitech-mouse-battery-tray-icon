@@ -60,6 +60,22 @@ class FindNodeTests(unittest.TestCase):
             self.assertEqual(hidpp.findHidppNodes(root, "/dev"), ["/dev/hidraw4"])
 
 
+class EstimateTests(unittest.TestCase):
+    def testAPercentIsKept(self):
+        self.assertEqual(hidpp.estimatedPercent(hidpp.BatteryReading(42, 0)), 42)
+
+    def testALowOrCriticalLevelSitsAtItsWarning(self):
+        self.assertEqual([hidpp.estimatedPercent(hidpp.BatteryReading(None, 0, level=level)) for level in ("critical", "low", "good", "full")], [5, 10, 70, 100])
+
+    def testAVoltageFollowsTheKernelsCurve(self):
+        # hid-logitech-hidpp's hidpp20_map_battery_capacity table, read from the kernel source on 2026-10-09
+        self.assertEqual([hidpp.estimatedPercent(hidpp.BatteryReading(None, 0, millivolts=mv)) for mv in (4200, 4186, 4185, 3700, 3537, 3536, 3300)], [100, 100, 99, 15, 1, 0, 0])
+
+    def testNothingToGoOnGivesNone(self):
+        self.assertIsNone(hidpp.estimatedPercent(hidpp.BatteryReading(None, 0)))
+        self.assertIsNone(hidpp.estimatedPercent(hidpp.BatteryReading(None, 0, level="unknown level")))
+
+
 class RequestTests(unittest.TestCase):
     def setUp(self):
         self.device = None
@@ -405,6 +421,11 @@ class SearchTests(unittest.TestCase):
         start = time.monotonic()
         self.assertEqual(hidpp.pingSlots(self.device.node(), timeout=1.0), [])
         self.assertLess(time.monotonic() - start, 0.5)
+
+    def testABusySlotIsLeftUnknownForTheFollowUpSearch(self):
+        self.device = FakeDevice(lambda request: [receiverError(request, code=hidpp.BUSY_ERROR if request[1] == 1 else 0x09)])
+        result = hidpp.searchNode(self.device.node(), pingTimeout=0.05)
+        self.assertEqual((result.mice, result.unknown), ((), frozenset({1})))
 
     def testSearchFindsTheMouse(self):
         self.device = FakeDevice(mouseHandler())

@@ -14,7 +14,7 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 from PyQt6 import sip
 from PyQt6.QtCore import QCoreApplication, QEvent
-from PyQt6.QtDBus import QDBusConnection
+from PyQt6.QtDBus import QDBusConnection, QDBusVariant
 from PyQt6.QtGui import QAction, QColor, QPalette, QSessionManager
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
@@ -76,6 +76,9 @@ class TrayTextTests(unittest.TestCase):
         self.assertEqual(tray.iconStateFor(makeMouse(hidpp.BatteryReading(81, 0))), IconState(percent=81))
         self.assertEqual(tray.iconStateFor(makeMouse(hidpp.BatteryReading(50, 2))), IconState(percent=50, charging=True))
         self.assertEqual(tray.iconStateFor(makeMouse(hidpp.BatteryReading(81, 0), asleep=True)), IconState(percent=81, asleep=True))
+        self.assertEqual(tray.iconStateFor(makeMouse(hidpp.BatteryReading(None, 0, level="low"))), IconState(percent=10, rough=True))
+        self.assertEqual(tray.iconStateFor(makeMouse(hidpp.BatteryReading(None, 0, millivolts=3700))), IconState(percent=15, rough=True))
+        self.assertEqual(tray.iconStateFor(makeMouse(hidpp.BatteryReading(None, 0, level="unknown level"))), IconState())
 
     def testMouseLines(self):
         self.assertEqual(tray.mouseLine(NAME, makeMouse(hidpp.BatteryReading(69, 0))), NAME + ", 69%")
@@ -105,7 +108,7 @@ class TrayTextTests(unittest.TestCase):
         return lines
 
     def testADeniedNodeIsShownNextToAnOpenOne(self):
-        self.assertEqual(self.linesFor(ServiceState(False, False, ("/dev/hidraw18",), ("/dev/hidraw30",), ())), ["Move your mouse to wake it.", "Can't read the receiver or cable. Unplug it and plug it back in."])
+        self.assertEqual(self.linesFor(ServiceState(False, False, ("/dev/hidraw18",), ("/dev/hidraw30",), ())), ["No mouse answered yet. Move your mouse to wake it.", "Can't read the receiver or cable. Unplug it and plug it back in."])
 
     def testADeniedNodeIsShownUnderTheMice(self):
         entry = ServiceEntry("02bc524c", False, NAME, "/dev/hidraw18", hidpp.BatteryReading(69, 0), False, LAST_READ, LAST_READ)
@@ -316,6 +319,13 @@ class AppTests(unittest.TestCase):
             for percent in (9, 8, 7):
                 mouseApp.mouseList.applyUPower(upower.UPowerMouse(PATH, "12ab34cd", "MX Master 3", hidpp.BatteryReading(percent, 0)))
         return sent
+
+    def testARoughLevelsNoticeSaysLowWithoutAPercent(self):
+        mouseApp = self.makeApp(True)
+        sent = []
+        with mock.patch.object(mouseApp.notifier, "send", lambda summary, body, **kwargs: sent.append(body)):
+            mouseApp.mouseList.applyUPower(upower.UPowerMouse(PATH, "12ab34cd", "MX Master 3", hidpp.BatteryReading(None, 0, level="critical")))
+        self.assertEqual(sent, ["MX Master 3's battery is critically low."])
 
     def testALowBatteryNoticeOnItsWayIsntSentAgain(self):
         mouseApp = self.makeApp(True)
@@ -609,11 +619,20 @@ class AppTests(unittest.TestCase):
         self.assertEqual((len(asked), mouseApp.portalScheme), (2, 1))
         self.assertNotEqual(mouseApp.cachedColor, QColor("#123456"))
 
+    def testAPortalReadFromBeforeASignalKeepsTheSignalsScheme(self):
+        mouseApp = self.makeApp(True)
+        held = []
+        with mock.patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": "GNOME"}), mock.patch.object(tray.panelColor, "askPortalColorScheme", lambda bus, owner, onAnswer: held.append(onAnswer)):
+            mouseApp.watchColors()
+        mouseApp.onPortalSetting(mock.Mock(arguments=lambda: [tray.panelColor.APPEARANCE, "color-scheme", QDBusVariant(2)]))
+        held[0](1, None)
+        self.assertEqual(mouseApp.portalScheme, 2)
+
     def testAFailedPortalReadKeepsTheSchemeASignalSet(self):
         mouseApp = self.makeApp(True)
         # SettingChanged already said prefer light while the read waited
         mouseApp.portalScheme = 2
-        mouseApp.onPortalScheme(0, notify.NO_REPLY, False)
+        mouseApp.onPortalScheme(0, notify.NO_REPLY, False, mouseApp.portalChanges)
         self.assertEqual(mouseApp.portalScheme, 2)
 
     def testTheColorSchemeIsReadWithoutABlockingCall(self):

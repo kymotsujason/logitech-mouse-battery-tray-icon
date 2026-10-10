@@ -18,7 +18,7 @@ class LauncherTests(unittest.TestCase):
         self.appDir = os.path.join(temp.name, "app")
         os.makedirs(self.appDir)
         for name in ("check", "tray"):
-            self.writeScript(name, "import sys\nprint('" + name + "', sys.flags.dont_write_bytecode, sys.argv[1:])\n")
+            self.writeScript(name, "import sys\nprint('" + name + "', sys.flags.dont_write_bytecode, sys.flags.no_user_site, sys.argv[1:])\n")
         shutil.copy(os.path.join(REPO, "src", "version.py"), self.appDir)
         with open(LAUNCHER) as f:
             text = f.read()
@@ -37,10 +37,10 @@ class LauncherTests(unittest.TestCase):
         return (result.returncode, result.stdout)
 
     def testCheckRunsTheTerminalCheckWithoutBytecode(self):
-        self.assertEqual(self.launch("check"), (0, "check 1 []\n"))
+        self.assertEqual(self.launch("check"), (0, "check 1 1 []\n"))
 
     def testNoArgumentRunsTheTray(self):
-        self.assertEqual(self.launch(), (0, "tray 1 []\n"))
+        self.assertEqual(self.launch(), (0, "tray 1 1 []\n"))
 
     def testVersionPrintsTheVersionFile(self):
         self.assertEqual(self.launch("--version"), (0, version.VERSION + "\n"))

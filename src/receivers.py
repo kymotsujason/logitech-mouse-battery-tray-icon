@@ -151,7 +151,8 @@ class NodeWorker(threading.Thread):
         if (kind == "search"):
             return ("searched", self, hidpp.searchNode(self.node, item[1]), item[2])
         if (kind == "read"):
-            return ("read", self, item[1], hidpp.readBattery(self.node, item[2]), item[3])
+            self.node.lastErrorCode = None
+            return ("read", self, item[1], hidpp.readBattery(self.node, item[2]), item[3], self.node.lastErrorCode)
         if (kind == "identify"):
             return ("identified", self, item[1], hidpp.identifySlot(self.node, item[1]), item[2])
         if (kind == "wake"):
@@ -192,6 +193,8 @@ class ReceiverMouse:
         self.batteryEventAt = None
         self.wakeTimer = None
         self.errorRetries = 0
+        # its reads ran out of retries and the log said so, so the next one that answers says it's back
+        self.errorReported = False
         # the wireless status feature's index from the last lookup that answered, which makes its events wakes
         self.wakeIndex = None
         # a lookup answered, so a wakeIndex of None means the mouse has no such feature
@@ -567,7 +570,7 @@ class ReceiverList(QObject):
         elif (kind == "searched"):
             self.onSearched(state, message[2], message[3])
         elif (kind == "read"):
-            self.onRead(state, message[2], message[3], message[4])
+            self.onRead(state, message[2], message[3], message[4], message[5] if len(message) > 5 else None)
         elif (kind == "identified"):
             self.onIdentified(state, message[2], message[3], message[4])
         elif (kind == "wakeFound"):
@@ -724,6 +727,7 @@ class ReceiverList(QObject):
     def removeMouse(self, mouse):
         if (mouse in self.mice):
             self.recorder.addMarker(mouse.key, history.ORIGIN_GAP, pathKey=mouse.pathKey)
+            self.recorder.forget(mouse.key)
         if (mouse.wakeTimer is not None):
             mouse.wakeTimer.stop()
             mouse.wakeTimer.deleteLater()
@@ -734,6 +738,9 @@ class ReceiverList(QObject):
     def applyReading(self, mouse, reading, woke=False, origin=history.ORIGIN_READ, arrived=None):
         now = time.time()
         mouse.errorRetries = 0
+        if (reading is not None and mouse.errorReported):
+            mouse.errorReported = False
+            printLine("Mouse " + mouse.key + " answers its battery read again")
         if (reading is None):
             self.markAsleep(mouse)
             return
@@ -764,7 +771,7 @@ class ReceiverList(QObject):
                 if ((mouse.historyRevision, mouse.reportsItself) != before):
                     self.changed.emit()
 
-    def applyOutcome(self, mouse, outcome, reading, queuedAt, woke=False, arrived=None):
+    def applyOutcome(self, mouse, outcome, reading, queuedAt, woke=False, arrived=None, errorCode=None):
         if (outcome == hidpp.ANSWER):
             self.applyReading(mouse, reading, woke=woke, arrived=arrived)
         elif (outcome == hidpp.ERROR):
@@ -772,6 +779,10 @@ class ReceiverList(QObject):
             if (mouse.errorRetries < ERROR_RETRY_LIMIT):
                 mouse.errorRetries += 1
                 self.retryLater(mouse)
+            elif (not mouse.errorReported):
+                mouse.errorReported = True
+                code = "" if errorCode is None else " 0x" + format(errorCode, "02x")
+                printLine("Mouse " + mouse.key + " on " + str(mouse.nodePath) + " slot " + str(mouse.slot) + " keeps answering its battery read with error" + code + ", so it's read again at its next event or timed read")
         elif (mouse.batteryEventAt is not None and mouse.batteryEventAt >= queuedAt):
             # a battery event that arrived while this request waited shows the mouse is awake, so it wins over the timeout
             return
@@ -841,13 +852,13 @@ class ReceiverList(QObject):
             if (mouse.nodePath is not None):
                 self.readMouse(mouse)
 
-    def onRead(self, state, slot, result, queuedAt):
+    def onRead(self, state, slot, result, queuedAt, errorCode=None):
         self.settleRead(state, slot)
         mouse = self.findByNode(state.path, slot)
         if (mouse is None):
             return
         outcome, reading = result
-        self.applyOutcome(mouse, outcome, reading, queuedAt)
+        self.applyOutcome(mouse, outcome, reading, queuedAt, errorCode=errorCode)
         self.changed.emit()
 
     def requestIdentify(self, state, slot):

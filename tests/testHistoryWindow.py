@@ -8,9 +8,9 @@ from unittest import mock
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 from PyQt6 import sip
-from PyQt6.QtCore import QAbstractAnimation, QObject, QPoint, QPointF, QRectF, QSizeF, Qt, pyqtSignal
+from PyQt6.QtCore import QAbstractAnimation, QEvent, QObject, QPoint, QPointF, QRectF, QSize, QSizeF, Qt, pyqtSignal
 from PyQt6.QtDBus import QDBusPendingCall, QDBusVariant
-from PyQt6.QtGui import QColor, QIcon, QImageReader, QPalette
+from PyQt6.QtGui import QColor, QFocusEvent, QIcon, QImageReader, QPalette
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QMenu, QWidget
 
@@ -112,6 +112,9 @@ class WindowCase(unittest.TestCase):
         QIcon.setThemeSearchPaths([])
         QIcon.setFallbackSearchPaths([PACKAGING])
         self.folder = tempfile.mkdtemp()
+        # the offscreen screen is 800 by 800, smaller than the window's design, so the tests get a desktop sized room unless one asks for less
+        self.room = mock.patch.object(historyWindow.HistoryWindow, "screenRoom", return_value=QSize(1920, 1040))
+        self.room.start()
         self.watcher = FakeWatcher()
         self.upower = FakeUPower()
         self.mouseList = mice.MouseList()
@@ -119,6 +122,7 @@ class WindowCase(unittest.TestCase):
 
     def tearDown(self):
         self.window.close()
+        self.room.stop()
         QIcon.setFallbackSearchPaths([])
         QIcon.setThemeSearchPaths(self.themePaths)
         # freed here instead of by the cyclic GC, which would free them all in one pass at an unknown moment
@@ -483,6 +487,17 @@ class WindowTests(WindowCase):
         self.watcher.serviceRestarted.emit()
         self.assertEqual(len(self.watcher.asked), 2)
 
+    def testAHistoryReplyFromBeforeAServiceRestartIsSetAside(self):
+        self.watcher.hold = True
+        window = self.opened(entry())
+        key, answer = self.watcher.waiting.pop()
+        self.watcher.serviceRestarted.emit()
+        answer(reply(key), None)
+        self.assertEqual(window.replies, {})
+        window.lastFetch.clear()
+        window.fetchSelected()
+        self.assertEqual(self.watcher.asked, [key, key])
+
     def testAServiceRestartWaitsOutTheSettleTimeForAUPowerMouse(self):
         # the new service writes a UPower mouse's first row only after its hold, so a fetch at the restart would miss it
         window = self.opened(entry())
@@ -637,6 +652,15 @@ class WindowTests(WindowCase):
         self.openWithPortal({"color-scheme": panelColor.NOT_FOUND, "reduced-motion": panelColor.UNKNOWN_METHOD}, panelColor.PREFER_DARK, 1)
         self.assertEqual((self.window.portalScheme, self.window.reducedMotion, self.window.motionFactor), (0, 0, 1.0))
 
+    def testAPortalReadThatLandsAfterASignalKeepsTheSignalsValue(self):
+        self.window.sessionBus = PortalBus({"color-scheme": panelColor.PREFER_DARK, "reduced-motion": 1})
+        self.state(entry())
+        self.window.open()
+        self.window.onPortalSetting(self.portalSignal("color-scheme", 0))
+        self.window.onPortalSetting(self.portalSignal("reduced-motion", 0))
+        QTest.qWait(50)
+        self.assertEqual((self.window.portalScheme, self.window.reducedMotion), (0, 0))
+
     def testOneFailedReadDoesntHoldBackTheOther(self):
         self.openWithPortal({"color-scheme": "org.freedesktop.DBus.Error.NoReply", "reduced-motion": 1}, panelColor.PREFER_DARK, 0)
         self.assertEqual((self.window.portalScheme, self.window.reducedMotion), (panelColor.PREFER_DARK, 1))
@@ -759,6 +783,17 @@ class WindowTests(WindowCase):
         self.state(entry(revision=2))
         self.assertEqual(self.watcher.levelAsks, [("02bc524c", "month")] * 2)
 
+    def testARangeReplyFromBeforeANewHistoryIsSetAside(self):
+        window = self.opened(entry())
+        self.watcher.holdLevels = True
+        window.pickRange("month")
+        key, rangeName, answer = self.watcher.waitingLevels.pop()
+        window.lastFetch.clear()
+        self.state(entry(revision=2))
+        answer(levelsReply(key, rangeName), None)
+        self.assertNotIn((key, rangeName), window.freshLevels)
+        self.assertEqual(self.watcher.levelAsks, [(key, "month")] * 2)
+
     def testALoadingRangeSaysSo(self):
         window = self.opened(entry())
         self.watcher.holdLevels = True
@@ -775,6 +810,35 @@ class WindowTests(WindowCase):
         self.assertEqual((window.levelChart.slots, window.levelChart.message), (before, None))
         self.assertEqual(self.watcher.levelAsks, [("02bc524c", "month")] * 2)
 
+    def testAFailedReloadKeepsTheOldBarsAndSaysSo(self):
+        window = self.opened(entry())
+        window.pickRange("month")
+        before = window.levelChart.slots
+        self.watcher.levelAnswers[("02bc524c", "month")] = (None, serviceState.HISTORY_UNAVAILABLE)
+        window.lastFetch.clear()
+        self.state(entry(revision=2))
+        self.assertEqual((window.levelChart.slots, window.refreshLabel.text()), (before, historyWindow.RANGE_NOT_REFRESHED_TEXT))
+        window.pickRange("week")
+        self.assertEqual(window.refreshLabel.text(), "")
+        del self.watcher.levelAnswers[("02bc524c", "month")]
+        window.pickRange("month")
+        window.retryLevels()
+        self.assertEqual(window.refreshLabel.text(), "")
+
+    def testTheRangeLineStaysThroughARetryAndOnlyWithTheLevelChart(self):
+        window = self.opened(entry())
+        window.pickRange("month")
+        self.watcher.levelAnswers[("02bc524c", "month")] = (None, serviceState.HISTORY_UNAVAILABLE)
+        window.lastFetch.clear()
+        self.state(entry(revision=2))
+        self.watcher.holdLevels = True
+        window.retryLevels()
+        self.assertEqual(window.refreshLabel.text(), historyWindow.RANGE_NOT_REFRESHED_TEXT)
+        window.segments.choose(1, animate=False)
+        self.assertEqual(window.refreshLabel.text(), "")
+        window.segments.choose(0, animate=False)
+        self.assertEqual(window.refreshLabel.text(), historyWindow.RANGE_NOT_REFRESHED_TEXT)
+
     def testARefusedReloadKeepsTheOldBars(self):
         window = self.opened(entry())
         window.pickRange("month")
@@ -782,7 +846,7 @@ class WindowTests(WindowCase):
         self.watcher.levelAnswers[("02bc524c", "month")] = (None, serviceState.READ_ALL_LIMITED)
         window.lastFetch.clear()
         self.state(entry(revision=2))
-        self.assertEqual((window.levelChart.slots, window.levelChart.message), (before, None))
+        self.assertEqual((window.levelChart.slots, window.levelChart.message, window.refreshLabel.text()), (before, None, ""))
         self.assertTrue(window.levelRetryTimer.isActive())
 
     def answerOnce(self, error):
@@ -957,6 +1021,107 @@ class WindowTests(WindowCase):
         QTest.keyClick(menu, Qt.Key.Key_Down)
         QTest.keyClick(menu, Qt.Key.Key_Return)
         self.assertEqual(picked, [60])
+
+    def testTheSidebarsStatusLineUsesTheThemesTextColors(self):
+        window = self.opened(entry(reading=hidpp.BatteryReading(62, 1)), entry(key="11111111", name="MX Master 3S", reading=hidpp.BatteryReading(12, 0)))
+        window.theme = glass.LIGHT
+        charging, low = (next(mouse for mouse in self.mouseList.mice if mouse.key == key) for key in ("02bc524c", "11111111"))
+        self.assertEqual((window.secondColor(charging), window.secondColor(low)), (glass.LIGHT.greenText, glass.LIGHT.redText))
+        low.reading = hidpp.BatteryReading(None, 0, level="low")
+        self.assertEqual(window.secondColor(low), glass.LIGHT.redText)
+
+    def testASmallScreenGetsAWindowThatFitsWithItsSettingInside(self):
+        # 1920 by 1080 at 200% leaves 960 by 540, and the title bar takes some of that
+        self.room.stop()
+        self.room = mock.patch.object(historyWindow.HistoryWindow, "screenRoom", return_value=QSize(960, 500))
+        self.room.start()
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))
+        self.assertLessEqual(window.width(), 960)
+        self.assertLessEqual(window.height(), 500)
+        self.assertLessEqual(window.popup.geometry().translated(window.pane.pos()).bottom(), window.height())
+        self.assertLessEqual(window.formRect.bottom(), window.height())
+        self.assertLessEqual(window.nameLabel.geometry().right(), window.healthRect.left())
+
+    def testTheMouseIconDrawsAgainOnAScreenWithAnotherScale(self):
+        window = self.opened(entry())
+        window.mouseIcon.grab()
+        with mock.patch.object(window.mouseIcon, "devicePixelRatioF", return_value=2.0):
+            window.mouseIcon.grab()
+        self.assertEqual(window.mouseIcon.image.devicePixelRatio(), 2.0)
+
+    def testTheSidebarCapsuleFillsToTheEstimate(self):
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))
+        mouse = next(each for each in self.mouseList.mice if each.key == "11111111")
+        fills = []
+        for reading in (hidpp.BatteryReading(None, 0, level="low"), hidpp.BatteryReading(None, 0, millivolts=3700)):
+            mouse.reading = reading
+            fills.append(window.capsuleFill(mouse))
+        self.assertEqual(fills, [0.10, 0.15])
+
+    def testTabReachesEachCustomControl(self):
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))
+        for control in (window.segments, window.rangeControl, window.popup, window.sidebar):
+            self.assertTrue(control.focusPolicy() & Qt.FocusPolicy.TabFocus, type(control).__name__)
+
+    def testTheArrowKeysMoveTheChartAndTheRange(self):
+        window = self.opened(entry())
+        QTest.keyClick(window.segments, Qt.Key.Key_Right)
+        self.assertEqual(window.segments.index, 1)
+        QTest.keyClick(window.segments, Qt.Key.Key_Left)
+        QTest.keyClick(window.segments, Qt.Key.Key_Left)
+        self.assertEqual(window.segments.index, 0)
+        QTest.keyClick(window.rangeControl, Qt.Key.Key_Right)
+        self.assertEqual(window.levelRange, "month")
+        QTest.keyClick(window.rangeControl, Qt.Key.Key_End)
+        self.assertEqual(window.levelRange, "all")
+        QTest.keyClick(window.rangeControl, Qt.Key.Key_Home)
+        self.assertEqual(window.levelRange, "day")
+
+    def testTheKeysOpenTheSleepMenuAndClosingItGivesFocusBack(self):
+        window = self.opened(entry())
+        for key in (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Down):
+            window.popup.setFocus()
+            QTest.keyClick(window.popup, key)
+            self.assertTrue(window.choiceMenu.isVisibleTo(window), key)
+            QTest.keyClick(window.choiceMenu, Qt.Key.Key_Escape)
+            self.assertFalse(window.choiceMenu.isVisibleTo(window))
+            self.assertIs(window.focusWidget(), window.popup)
+        window.popup.setFocus()
+        QTest.keyClick(window.popup, Qt.Key.Key_Space)
+        QTest.keyClick(window.choiceMenu, Qt.Key.Key_Down)
+        QTest.keyClick(window.choiceMenu, Qt.Key.Key_Return)
+        self.assertEqual((window.popup.seconds, window.focusWidget()), (30, window.popup))
+
+    def testUpAndDownPickTheNextMouse(self):
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))
+        QTest.keyClick(window.sidebar, Qt.Key.Key_Down)
+        self.assertEqual(window.selected, "11111111")
+        QTest.keyClick(window.sidebar, Qt.Key.Key_Down)
+        self.assertEqual(window.selected, "11111111")
+        QTest.keyClick(window.sidebar, Qt.Key.Key_Up)
+        self.assertEqual(window.selected, "02bc524c")
+
+    def testAFocusedControlDrawsAFocusRingOnlyWhenTheKeysPutItThere(self):
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))
+        for control in (window.segments, window.rangeControl, window.popup, window.sidebar):
+            plain = control.grab().toImage()
+            with mock.patch.object(control, "hasFocus", return_value=True):
+                # the window gives its first control focus when it's activated, which is no reason to draw a ring
+                QApplication.sendEvent(control, QFocusEvent(QEvent.Type.FocusIn, Qt.FocusReason.ActiveWindowFocusReason))
+                activated = control.grab().toImage()
+                QApplication.sendEvent(control, QFocusEvent(QEvent.Type.FocusIn, Qt.FocusReason.TabFocusReason))
+                ringed = control.grab().toImage()
+            self.assertEqual(plain, activated, type(control).__name__)
+            self.assertNotEqual(plain, ringed, type(control).__name__)
+
+    def testAMenuPickedWithTheMouseGivesFocusBackWithoutARing(self):
+        window = self.opened(entry())
+        window.popup.setFocus(Qt.FocusReason.MouseFocusReason)
+        QTest.mouseClick(window.popup, Qt.MouseButton.LeftButton)
+        menu = window.choiceMenu
+        QTest.mouseClick(menu, Qt.MouseButton.LeftButton, pos=self.rowCenter(menu, 1))
+        self.assertFalse(menu.isVisibleTo(window))
+        self.assertFalse(window.popup.keyFocus)
 
     def testEscapeAndAClickOutsideCloseItWithoutAPick(self):
         window, menu = self.openMenu()

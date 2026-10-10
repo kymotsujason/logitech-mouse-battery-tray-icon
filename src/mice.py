@@ -18,7 +18,7 @@ STATUS_NONE = "none"
 STATUS_NO_SERVICE = "noService"
 STATUS_TEXT = {
     STATUS_SEARCHING: "Looking for mice...",
-    STATUS_WAITING: "Move your mouse to wake it.",
+    STATUS_WAITING: "No mouse answered yet. Move your mouse to wake it.",
     STATUS_DENIED: "Can't read the receiver or cable. Unplug it and plug it back in.",
     STATUS_NONE: "No Logitech mouse found.",
     STATUS_NO_SERVICE: "Can't reach the battery service.",
@@ -208,7 +208,7 @@ class MouseList(QObject):
         if (mouse.upowerPath is None and mouse in self.mice):
             self.removeMouse(mouse)
 
-    def applyReading(self, mouse, reading, woke=False):
+    def applyReading(self, mouse, reading, woke=False, readAt=None):
         now = time.time()
         mouse.stale = False
         if (reading is None):
@@ -218,7 +218,7 @@ class MouseList(QObject):
                 mouse.wokeAt = now
             mouse.reading = reading
             mouse.asleep = False
-            mouse.lastRead = now
+            mouse.lastRead = now if readAt is None else readAt
         self.warn(mouse)
 
     def mouseFor(self, key, pathKey=False):
@@ -241,24 +241,42 @@ class MouseList(QObject):
         self.warner.giveBack(key, percent)
 
     def applyUPower(self, upowerMouse):
+        # a device's serial can show up after its first reading, which moves it from its path key to its serial
+        for other in list(self.mice):
+            if (other.upowerPath == upowerMouse.path and other.key != upowerMouse.key):
+                self.dropUPowerHalf(other)
         mouse = self.mouseFor(upowerMouse.key, pathKey=upowerMouse.pathKey)
         mouse.upowerPath = upowerMouse.path
         if (mouse.name is None):
             mouse.name = upowerMouse.name
+        # UPower says when it read the device, which a clock running behind can put in the future
+        readAt = upowerMouse.updatedAt
+        if (readAt is not None and readAt > time.time()):
+            readAt = None
+        if (readAt is not None and not mouse.readFromUPower and isLater(mouse.lastRead, readAt)):
+            # the service read this mouse after UPower last did, so its reading stays, while UPower still shows the mouse is there
+            mouse.stale = False
+            if (self.serviceLost()):
+                mouse.asleep = False
+            self.changed.emit()
+            return
         mouse.readFromUPower = True
         # UPower sends no sleep signal, so a changed reading is the only sign the mouse is in use
-        self.applyReading(mouse, upowerMouse.reading, woke=(mouse.reading != upowerMouse.reading))
+        self.applyReading(mouse, upowerMouse.reading, woke=(mouse.reading != upowerMouse.reading), readAt=readAt)
         self.changed.emit()
 
     def removeUPower(self, path):
         for mouse in list(self.mice):
             if (mouse.upowerPath == path):
-                mouse.upowerPath = None
-                if (mouse.nodePath is None):
-                    self.removeMouse(mouse)
-                else:
-                    self.takeServiceHalf(mouse)
+                self.dropUPowerHalf(mouse)
         self.changed.emit()
+
+    def dropUPowerHalf(self, mouse):
+        mouse.upowerPath = None
+        if (mouse.nodePath is None):
+            self.removeMouse(mouse)
+        else:
+            self.takeServiceHalf(mouse)
 
     def takeServiceHalf(self, mouse):
         # the reading is at least as new as the last entry, and a service whose mouse is already asleep sends no new entry

@@ -89,14 +89,20 @@ class InstallWatchTests(unittest.TestCase):
     def testANewVersionThatImportsRestartsTheApp(self):
         with tempfile.TemporaryDirectory() as folder:
             execv, errors = self.runCheck(folder, "")
-        self.assertEqual(execv.call_args.args[1], [sys.executable, "-B", os.path.join(folder, "tray.py")])
+        self.assertEqual(execv.call_args.args[1], [sys.executable, "-B", "-s", os.path.join(folder, "tray.py")])
         self.assertEqual(errors, "Starting version 9.9.9 in place of " + installWatch.VERSION + "\n")
 
     def testTheRestartCarriesWhatTheAppAsksToKeep(self):
         self.watcher = installWatch.InstallWatcher(lambda: ["--open-window"])
         with tempfile.TemporaryDirectory() as folder:
             execv, errors = self.runCheck(folder, "")
-        self.assertEqual(execv.call_args.args[1], [sys.executable, "-B", os.path.join(folder, "tray.py"), "--open-window"])
+        self.assertEqual(execv.call_args.args[1], [sys.executable, "-B", "-s", os.path.join(folder, "tray.py"), "--open-window"])
+
+    def testTheImportCheckLeavesTheUsersOwnPackagesOut(self):
+        with mock.patch.object(installWatch.QProcess, "start") as start:
+            self.watcher.startCheck("9.9.9")
+        self.assertEqual(start.call_args.args, (installWatch.PYTHON, ["-B", "-s", "-c", "import tray"]))
+        self.watcher.check = None
 
     def testABrokenTrayPyFailsTheRealImportCheckAndSaysWhy(self):
         with tempfile.TemporaryDirectory() as folder:

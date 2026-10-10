@@ -221,6 +221,10 @@ class WithoutNumberTests(unittest.TestCase):
         self.assertGreater(low.red(), 200)
         self.assertGreater(charging.green(), 150)
 
+    def testARoughReadingFillsWithoutANumber(self):
+        self.assertEqual(renderImage(IconState(percent=10, rough=True), 22, WHITE), renderImage(IconState(percent=10), 22, WHITE, number=False))
+        self.assertNotEqual(renderImage(IconState(percent=10, rough=True), 22, WHITE), renderImage(IconState(), 22, WHITE))
+
     def testTheTraysIconIsUnchanged(self):
         self.assertEqual(renderImage(IconState(percent=62), 22, WHITE), renderImage(IconState(percent=62), 22, WHITE, number=True))
 

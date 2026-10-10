@@ -86,6 +86,15 @@ class CheckTests(unittest.TestCase):
         found = [upower.UPowerMouse("/p", key, name, hidpp.BatteryReading(percent, 0))]
         return mock.patch.object(upower, "listMice", return_value=(found, []))
 
+    def testANameATerminalCantShowStillPrints(self):
+        # a terminal whose locale isn't UTF-8 can take less than a mouse name holds
+        raw = io.BytesIO()
+        output = io.TextIOWrapper(raw, encoding="ascii", errors="strict")
+        with self.withUPower(name="Souris s\u00e9rie"), redirect_stdout(output):
+            check.main(FakeServiceBus(stateText([])))
+        output.flush()
+        self.assertIn(b"Souris s?rie", raw.getvalue())
+
     def testPrintsTheMouseWithItsNode(self):
         self.assertEqual(self.runCheck(FakeServiceBus(stateText([MOUSE]))), (0, NAME + " (" + NODE + ")\n  81%, discharging\n"))
 

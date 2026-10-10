@@ -184,6 +184,11 @@ class StoreTests(RecorderCase):
         with self.db() as db:
             self.assertEqual(db.execute("pragma journal_mode").fetchone()[0], "wal")
 
+    def testEachCommitReachesTheDiskBeforeItsDone(self):
+        # synchronous is a setting of the connection, so it's read from the recorder's own
+        self.assertTrue(self.recorder.available())
+        self.assertEqual(self.recorder.store.db.execute("pragma synchronous").fetchone()[0], 2)
+
     def testADatabaseWrittenByThisCodeOpensAgain(self):
         self.event(0, 50)
         self.recorder.stop()
@@ -984,6 +989,16 @@ class RecorderTests(RecorderCase):
         self.assertEqual([row[:3] for row in self.rows()], [(0, 0, 50), (3600, 4, None), (3600, 0, 48)])
         self.assertIn("database or disk is full", self.errors.getvalue())
 
+    def testAWriteThatFailsPartwayLeavesNothingOfItBehind(self):
+        self.event(0, 50)
+        # the reading is inserted first, so failing the session update after it shows the rollback took the reading back out
+        self.failQuery(sqlite3.OperationalError("database or disk is full"), "update sessions")
+        self.event(1800, 49)
+        self.assertEqual([row[:3] for row in self.rows()], [(0, 0, 50)])
+        self.event(3600, 48)
+        self.assertEqual([row[:3] for row in self.rows()], [(0, 0, 50), (3600, 4, None), (3600, 0, 48)])
+        self.assertEqual([session[6] for session in self.sessions()], [2])
+
     def testASaveFailureThatComesBackAfterARecoveryIsPrintedAgain(self):
         self.event(0, 50)
         for seconds, percent in ((1800, 49), (5400, 47)):
@@ -991,6 +1006,97 @@ class RecorderTests(RecorderCase):
                 self.event(seconds, percent)
             self.event(seconds + 1800, percent - 1)
         self.assertEqual(self.errors.getvalue().splitlines(), ["Couldn't save to the history: database or disk is full", "The history is saving again"] * 2)
+
+    def testForgettingAMouseSavesWhatItHeldAndDropsItsEntry(self):
+        self.event(0, 50)
+        self.event(5, 49)
+        self.recorder.forget(KEY)
+        self.assertEqual([row[2] for row in self.rows()], [50, 49])
+        self.assertNotIn(KEY, self.recorder.entries)
+
+    def testAForgottenMouseComesBackWithItsSavedFlags(self):
+        self.recorder.setWakeSupport(KEY, True)
+        self.recorder.forget(KEY)
+        self.event(600, 50)
+        self.assertTrue(self.recorder.entries[KEY].track.wakeSupport)
+
+    def testAForgottenPathKeyStartsOverWithoutReportsItself(self):
+        key = "/dev/hidraw4#1"
+        self.recorder.entryFor(key, pathKey=True).track.reportsItselfSince = START
+        self.recorder.forget(key)
+        self.assertFalse(self.recorder.reportsItself(key))
+
+    def testAForgottenPathKeyWithItsWakeSupportIsDroppedToo(self):
+        # a path key's flags never reach the database, so they can't hold its entry back
+        key = "/dev/hidraw4#1"
+        self.recorder.setWakeSupport(key, True, pathKey=True)
+        self.recorder.forget(key)
+        self.assertNotIn(key, self.recorder.entries)
+
+    def testAForgottenKeyIsDroppedWhenTheHistoryNeverOpens(self):
+        recorder = history.Recorder(None, self.clock, timers=False, monotonic=self.clock.monotonic)
+        recorder.setWakeSupport(KEY, True)
+        recorder.forget(KEY)
+        self.assertNotIn(KEY, recorder.entries)
+
+    def testARevisionNeverComesBackAfterAForget(self):
+        self.event(0, 50)
+        self.marker(600, history.ORIGIN_WAKE)
+        before = self.recorder.revision(KEY)
+        self.recorder.forget(KEY)
+        self.event(1200, 49)
+        self.assertGreater(self.recorder.revision(KEY), before)
+
+    def testUPowerCantForgetAMouseReadOverHidpp(self):
+        self.event(0, 50)
+        self.recorder.forget(KEY, source=history.SOURCE_UPOWER)
+        self.assertIn(KEY, self.recorder.entries)
+
+    def flapCharging(self, seconds, count):
+        # every reading comes in at the same moment, as a device flooding the node would send them
+        self.clock.now = START + seconds
+        for i in range(count):
+            self.recorder.addReading(KEY, battery(50, (i + 1) % 2), history.ORIGIN_EVENT, at=START + seconds)
+        self.at(seconds + history.WAKE_SET_SECONDS)
+
+    def testAFlappingChargingCodeSavesNoMoreThanTheBudget(self):
+        self.flapCharging(0, 100)
+        self.assertEqual(len(self.rows()), history.WRITE_BURST)
+
+    def testAFloodOfWakesSavesNoMoreThanTheBudget(self):
+        self.event(0, 50)
+        for i in range(100):
+            self.marker(10, history.ORIGIN_WAKE)
+        self.assertEqual(len(self.rows()), history.WRITE_BURST)
+
+    def testASlowFloodSavesOneRowAndItsGapPerRefill(self):
+        self.flapCharging(0, 100)
+        for i in range(1, 11):
+            self.flapCharging(i * history.WRITE_REFILL_SECONDS, 10)
+        rows = self.rows()[history.WRITE_BURST:]
+        self.assertEqual([row[1] for row in rows], [history.ORIGIN_GAP, history.ORIGIN_EVENT] * 10)
+
+    def testRowsLeftOutByTheBudgetAreFollowedByAGapOnceItRefills(self):
+        self.flapCharging(0, 100)
+        self.event(3600, 49)
+        self.assertEqual(self.rows()[-2:], [(3600, history.ORIGIN_GAP, None, None, None), (3600, history.ORIGIN_EVENT, 49, 0, 0)])
+
+    def testTheBudgetSaysOnceWhenItLeavesRowsOutAndAgainOnceItsFull(self):
+        self.flapCharging(0, 100)
+        for i in range(1, 11):
+            self.flapCharging(i * history.WRITE_REFILL_SECONDS, 10)
+        self.event(3600, 49)
+        lines = self.errors.getvalue().splitlines()
+        self.assertEqual(lines, ["Mouse " + KEY + " sent more changes than the history saves, so some were left out", "Mouse " + KEY + "'s changes are saved again"])
+
+    def testAFullChargeAtOneStepEveryTwentySecondsKeepsEveryRow(self):
+        self.recorder.setWakeSupport(KEY, True)
+        for i in range(81):
+            self.event(i * 20, 20 + i, charging=1)
+        self.event(81 * 20, 100, charging=3)
+        rows = self.rows()
+        self.assertEqual(len(rows), 82)
+        self.assertNotIn(history.ORIGIN_GAP, [row[1] for row in rows])
 
     def testARestartReloadsTheOpenSession(self):
         self.recorder.setWakeSupport(KEY, True)

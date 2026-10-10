@@ -163,6 +163,8 @@ class HidppNode:
         # a worker that owns the node sets its stop flag and wake pipe here, so a stop ends the request it's waiting on instead of the whole search running out
         self.stopEvent = None
         self.wakeFd = None
+        # the code of the last error reply, which the outcome alone doesn't carry, for the log
+        self.lastErrorCode = None
 
     def isStopping(self):
         return self.stopEvent is not None and self.stopEvent.is_set()
@@ -232,6 +234,7 @@ class HidppNode:
                 continue
             if (len(reply) >= 5 and reply[1] == deviceIndex):
                 if (reply[2] in (RECEIVER_ERROR, DEVICE_ERROR) and reply[3] == featureIndex and reply[4] == funcSw):
+                    self.lastErrorCode = reply[5] if len(reply) > 5 else None
                     # a receiver error means it couldn't reach the device, except for busy, where the device is there
                     if (reply[2] == RECEIVER_ERROR and reply[5] != BUSY_ERROR):
                         return (UNREACHABLE, None)
@@ -332,7 +335,7 @@ def readUnitId(node, deviceIndex, deadline=None):
     return (ANSWER, None if unitId == "00000000" else unitId)
 
 
-def pingSlots(node, slots=None, timeout=None):
+def pingSlots(node, slots=None, timeout=None, busy=None):
     # every ping goes out before any answer is read, so silent slots cost one wait in total
     if (slots is None):
         slots = DEVICE_SLOTS
@@ -354,7 +357,10 @@ def pingSlots(node, slots=None, timeout=None):
         if (report is None):
             continue
         if (len(report) >= 5 and report[2] in (RECEIVER_ERROR, DEVICE_ERROR) and report[3] == FEATURE_ROOT and (report[1], report[4]) in pending):
-            del pending[(report[1], report[4])]
+            slot = pending.pop((report[1], report[4]))
+            # a busy receiver had the device there and couldn't pass the ping on, so the slot is looked at again instead of taken as empty
+            if (busy is not None and report[2] == RECEIVER_ERROR and len(report) >= 6 and report[5] == BUSY_ERROR):
+                busy.add(slot)
             continue
         if (len(report) >= 7 and report[2] == FEATURE_ROOT and (report[1], report[3]) in pending and report[6] == 0xAA):
             answered.append(pending.pop((report[1], report[3])))
@@ -405,7 +411,7 @@ def searchNode(node, skipped=frozenset(), pingTimeout=None, deadline=None):
     mice = []
     newSkipped = set()
     unknown = set()
-    for slot in pingSlots(node, [slot for slot in DEVICE_SLOTS if slot not in skipped], pingTimeout):
+    for slot in pingSlots(node, [slot for slot in DEVICE_SLOTS if slot not in skipped], pingTimeout, busy=unknown):
         # one slot's budget can't eat the whole search, and a search that runs out leaves the rest unknown so they're looked at again
         outcome, found = identifySlot(node, slot, min(deadline, time.monotonic() + IDENTIFY_BUDGET))
         if (outcome == FOUND):
@@ -528,6 +534,32 @@ def chargingName(code):
 
 # a rough level has no percent, so charts draw it at a fixed height
 LEVEL_HEIGHTS = {"full": 100, "high": 85, "good": 70, "normal": 55, "low": 25, "critical": 10}
+# low and critical stand at the two warning lines, so a mouse that only says it's low gets the low warning and a red icon
+ROUGH_WARNING_PERCENTS = {"low": 10, "critical": 5}
+# hid-logitech-hidpp's hidpp20_map_battery_capacity, from 100% down to 1%, which the kernel itself says won't fit every battery
+VOLTAGE_CURVE = (
+    4186, 4156, 4143, 4133, 4122, 4113, 4103, 4094, 4086, 4075,
+    4067, 4059, 4051, 4043, 4035, 4027, 4019, 4011, 4003, 3997,
+    3989, 3983, 3976, 3969, 3961, 3955, 3949, 3942, 3935, 3929,
+    3922, 3916, 3909, 3902, 3896, 3890, 3883, 3877, 3870, 3865,
+    3859, 3853, 3848, 3842, 3837, 3833, 3828, 3824, 3819, 3815,
+    3811, 3808, 3804, 3800, 3797, 3793, 3790, 3787, 3784, 3781,
+    3778, 3775, 3772, 3770, 3767, 3764, 3762, 3759, 3757, 3754,
+    3751, 3748, 3744, 3741, 3737, 3734, 3730, 3726, 3724, 3720,
+    3717, 3714, 3710, 3706, 3702, 3697, 3693, 3688, 3683, 3677,
+    3671, 3666, 3662, 3658, 3654, 3646, 3633, 3612, 3579, 3537,
+)
+
+
+def estimatedPercent(reading):
+    # a mouse that gives only a rough level or a voltage still needs a fill and its warnings
+    if (reading.percent is not None):
+        return reading.percent
+    if (reading.level is not None):
+        return ROUGH_WARNING_PERCENTS.get(reading.level, LEVEL_HEIGHTS.get(reading.level))
+    if (reading.millivolts is not None):
+        return next((len(VOLTAGE_CURVE) - index for index, millivolts in enumerate(VOLTAGE_CURVE) if reading.millivolts >= millivolts), 0)
+    return None
 
 
 def levelText(reading):

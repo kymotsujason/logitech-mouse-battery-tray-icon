@@ -15,6 +15,7 @@ import autostart
 import dbusCalls
 import hidpp
 import historyWindow
+import lowBattery
 import mice
 import panelColor
 import settings
@@ -42,7 +43,8 @@ def iconStateFor(mouse):
     if (mouse is None or mouse.reading is None):
         return IconState(empty=True)
     reading = mouse.reading
-    return IconState(percent=reading.percent, charging=(reading.charging in hidpp.EXTERNAL_POWER), asleep=mouse.asleep)
+    percent = hidpp.estimatedPercent(reading)
+    return IconState(percent=percent, charging=(reading.charging in hidpp.EXTERNAL_POWER), asleep=mouse.asleep, rough=(reading.percent is None and percent is not None))
 
 
 def mouseLine(name, mouse, now=None):
@@ -130,6 +132,7 @@ class MouseBatteryApp(QObject):
         self.shownTooltip = None
         self.statusActions = []
         self.portalScheme = 0
+        self.portalChanges = 0
         self.colorErrors = set()
         self.cachedColor = None
         self.aboutBox = None
@@ -267,7 +270,13 @@ class MouseBatteryApp(QObject):
 
     def onLowBattery(self, key, name, percent):
         # the warner counts the warning as sent from here on, so a reading that comes while it's on its way doesn't send it again
-        self.notifier.send("Mouse battery low", name + " has " + str(percent) + "% left.", onSent=lambda notificationId, error: self.onLowBatterySent(key, name, percent, notificationId, error))
+        mouse = next((each for each in self.mouseList.mice if each.key == key), None)
+        if (mouse is not None and mouse.reading is not None and mouse.reading.percent is None):
+            # a rough level or a voltage has no percent worth naming
+            body = name + "'s battery is " + ("critically low." if percent <= lowBattery.CRITICAL_PERCENT else "low.")
+        else:
+            body = name + " has " + str(percent) + "% left."
+        self.notifier.send("Mouse battery low", body, onSent=lambda notificationId, error: self.onLowBatterySent(key, name, percent, notificationId, error))
 
     def onLowBatterySent(self, key, name, percent, notificationId, error):
         if (notificationId is not None):
@@ -363,14 +372,18 @@ class MouseBatteryApp(QObject):
             self.colorTimer.start()
         if ("GNOME" in panelColor.desktopNames(os.environ)):
             self.sessionBus.connect(panelColor.PORTAL_SERVICE, panelColor.PORTAL_PATH, panelColor.SETTINGS_INTERFACE, "SettingChanged", self.onPortalSetting)
-            panelColor.askPortalColorScheme(self.sessionBus, self, lambda scheme, error: self.onPortalScheme(scheme, error, True))
+            self.askPortalScheme(True)
 
     def onPortalRetry(self):
-        panelColor.askPortalColorScheme(self.sessionBus, self, lambda scheme, error: self.onPortalScheme(scheme, error, False))
+        self.askPortalScheme(False)
 
-    def onPortalScheme(self, scheme, error, firstRead):
-        # a read that failed says nothing about the scheme, which a SettingChanged may have set while it waited
-        if (error is None):
+    def askPortalScheme(self, firstRead):
+        changes = self.portalChanges
+        panelColor.askPortalColorScheme(self.sessionBus, self, lambda scheme, error: self.onPortalScheme(scheme, error, firstRead, changes))
+
+    def onPortalScheme(self, scheme, error, firstRead, changes):
+        # a read that failed says nothing about the scheme, and a SettingChanged that came while it waited is newer than its answer
+        if (error is None and changes == self.portalChanges):
             self.portalScheme = scheme
         # the portal can still be starting at login, so a first read that got no answer gets one more try
         if (firstRead and error == NO_REPLY):
@@ -393,6 +406,7 @@ class MouseBatteryApp(QObject):
         arguments = message.arguments()
         if (len(arguments) >= 3 and arguments[0] == panelColor.APPEARANCE and arguments[1] == "color-scheme"):
             value = dbusCalls.plain(arguments[2])
+            self.portalChanges += 1
             self.portalScheme = value if isinstance(value, int) else 0
             self.clearColor()
             self.updateTray()
