@@ -6,7 +6,7 @@ from PyQt6 import sip
 from PyQt6.QtCore import QAbstractAnimation, QElapsedTimer, QPoint, QPointF, QRectF, QSize, QSizeF, Qt, QTimer, QVariantAnimation, QEasingCurve, pyqtSignal, pyqtSlot
 from PyQt6.QtDBus import QDBusMessage
 from PyQt6.QtGui import QColor, QFont, QFontMetricsF, QIcon, QPainter, QPen, QRegion
-from PyQt6.QtWidgets import QApplication, QGraphicsOpacityEffect, QLabel, QWidget
+from PyQt6.QtWidgets import QApplication, QGraphicsOpacityEffect, QLabel, QScrollBar, QWidget
 
 import charts
 import dbusCalls
@@ -663,6 +663,7 @@ class HistoryWindow(QWidget):
         self.frostImage = None
         self.frostKey = None
         self.watchedHandle = None
+        self.watchedScreen = None
         self.frostClock = QElapsedTimer()
         self.replies = {}
         self.errors = {}
@@ -696,6 +697,8 @@ class HistoryWindow(QWidget):
         self.health = None
         self.stateIconName = None
         self.panels = []
+        self.scrollX = 0
+        self.scrollY = 0
         self.makeParts(sleepCheckSeconds)
         self.fetchTimer = mice.singleShotTimer(self, 1000, self.fetchSelected)
         self.retryTimer = mice.singleShotTimer(self, RETRY_MS, self.fetchSelected)
@@ -713,6 +716,7 @@ class HistoryWindow(QWidget):
             upowerWatcher.mouseChanged.connect(self.onUPowerMouse)
             upowerWatcher.mouseRemoved.connect(self.onUPowerRemoved)
         QApplication.instance().paletteChanged.connect(self.onPaletteChanged)
+        QApplication.instance().focusChanged.connect(self.revealFocus)
         self.watchingPortal = False
         self.portalChanges = {"color-scheme": 0, "reduced-motion": 0}
         self.blurred = False
@@ -731,26 +735,35 @@ class HistoryWindow(QWidget):
         self.paneAnimation.setEasingCurve(QEasingCurve.Type.OutCubic)
         self.paneAnimation.valueChanged.connect(lambda value: self.paneFade.setOpacity(value))
         self.paneAnimation.finished.connect(lambda: self.paneFade.setEnabled(False))
-        self.mouseIcon = MouseIcon(self.pane)
-        self.nameLabel = label(self.pane, 12, QFont.Weight.Medium)
-        self.levelLabel = label(self.pane, 40, QFont.Weight.Bold)
-        self.statusLabel = label(self.pane, 13, wrap=True)
-        self.healthTitle = label(self.pane, 12, QFont.Weight.Medium)
+        # the pane clips and everything in it lives on the content, which slides under the pane when the screen has less room than the layout needs
+        self.content = QWidget(self.pane)
+        self.content.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.vScroll = QScrollBar(Qt.Orientation.Vertical, self)
+        self.hScroll = QScrollBar(Qt.Orientation.Horizontal, self)
+        self.vScroll.valueChanged.connect(lambda value: self.scrollTo(self.scrollX, value))
+        self.hScroll.valueChanged.connect(lambda value: self.scrollTo(value, self.scrollY))
+        self.vScroll.hide()
+        self.hScroll.hide()
+        self.mouseIcon = MouseIcon(self.content)
+        self.nameLabel = label(self.content, 12, QFont.Weight.Medium)
+        self.levelLabel = label(self.content, 40, QFont.Weight.Bold)
+        self.statusLabel = label(self.content, 13, wrap=True)
+        self.healthTitle = label(self.content, 12, QFont.Weight.Medium)
         self.healthTitle.setText("Battery Health")
-        self.symbol = HealthSymbol(self.pane)
-        self.lineLabels = [label(self.pane, 13 if index == 0 else 12, QFont.Weight.DemiBold if index == 0 else QFont.Weight.Normal, wrap=True) for index in range(3)]
-        self.refreshLabel = label(self.pane, 11, wrap=True)
+        self.symbol = HealthSymbol(self.content)
+        self.lineLabels = [label(self.content, 13 if index == 0 else 12, QFont.Weight.DemiBold if index == 0 else QFont.Weight.Normal, wrap=True) for index in range(3)]
+        self.refreshLabel = label(self.content, 11, wrap=True)
         self.segments = SegmentedControl(self)
-        self.segments.setParent(self.pane)
+        self.segments.setParent(self.content)
         self.segments.chosen.connect(self.showChart)
         self.nameSegments()
-        self.levelChart = charts.LevelChart(self.pane)
-        self.hoursChart = charts.LineChart("Hours per Charge", "h", charts.HOURS_EMPTY, charts.HOURS_CAPTION, self.pane)
-        self.chargingChart = charts.LineChart("Charging Speed", "min per 10%", charts.CHARGING_EMPTY, None, self.pane)
+        self.levelChart = charts.LevelChart(self.content)
+        self.hoursChart = charts.LineChart("Hours per Charge", "h", charts.HOURS_EMPTY, charts.HOURS_CAPTION, self.content)
+        self.chargingChart = charts.LineChart("Charging Speed", "min per 10%", charts.CHARGING_EMPTY, None, self.content)
         self.charts = [self.levelChart, self.hoursChart, self.chargingChart]
         # made after the charts, so it sits above the level chart's corner
         self.rangeControl = SegmentedControl(self, RANGE_LABELS, RANGE_WIDTHS, RANGE_HEIGHT, 11, track=True, index=RANGE_NAMES.index(self.levelRange))
-        self.rangeControl.setParent(self.pane)
+        self.rangeControl.setParent(self.content)
         self.rangeControl.chosen.connect(lambda index: self.pickRange(RANGE_NAMES[index]))
         self.nameRangeControl()
         self.chartFade = QGraphicsOpacityEffect(self.levelChart)
@@ -758,18 +771,18 @@ class HistoryWindow(QWidget):
         self.chartAnimation.setEasingCurve(QEasingCurve.Type.OutCubic)
         self.chartAnimation.valueChanged.connect(lambda value: self.chartFade.setOpacity(value))
         self.chartAnimation.finished.connect(lambda: self.chartFade.setEnabled(False))
-        self.formLabels = [label(self.pane, 13) for index in range(4)]
-        self.formValues = [label(self.pane, 13) for index in range(3)]
+        self.formLabels = [label(self.content, 13) for index in range(4)]
+        self.formValues = [label(self.content, 13) for index in range(3)]
         for widget, text in zip(self.formLabels, ("Charge cycles", "Last charged", "Charging speed", "Check whether mice are asleep")):
             widget.setText(text)
         for widget in self.formValues:
             widget.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.popup = PopupButton(self)
-        self.popup.setParent(self.pane)
+        self.popup.setParent(self.content)
         self.popup.setSeconds(sleepCheckSeconds)
         self.popup.picked.connect(self.sleepCheckChanged.emit)
         self.choiceMenu = ChoiceMenu(self)
-        self.message = label(self.pane, 13, wrap=True)
+        self.message = label(self.content, 13, wrap=True)
         self.message.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.paneMessage = label(self.pane, 13, wrap=True)
         self.paneMessage.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1338,9 +1351,9 @@ class HistoryWindow(QWidget):
         leastHeight = max(BASE_HEIGHT, min(MAX_HEIGHT, FIXED_HEIGHT + top + CHART_HEIGHT))
         room = self.screenRoom()
         if (room is not None):
-            # a small or scaled screen gets a window that fits, with a shorter chart and a narrower pane, so the setting at the bottom stays on screen
-            leastWidth = max(min(leastWidth, room.width()), sidebarWidth + PANE_MIN_WIDTH)
-            leastHeight = max(min(leastHeight, room.height()), FIXED_HEIGHT + top + CHART_MIN_HEIGHT)
+            # a window never asks for more than the screen has, and what doesn't fit below the layout's own smallest size scrolls
+            leastWidth = min(leastWidth, room.width())
+            leastHeight = min(leastHeight, room.height())
         self.setMinimumSize(leastWidth, leastHeight)
         wantWidth, wantHeight = max(self.width(), leastWidth), max(self.height(), leastHeight)
         if (room is not None and not self.isMaximized() and not self.isFullScreen()):
@@ -1353,8 +1366,11 @@ class HistoryWindow(QWidget):
             self.resize(max(leastWidth, self.width() - SIDEBAR_WIDTH), self.height())
         self.setProperty("hadSidebar", self.sidebar.isVisibleTo(self))
         self.sidebar.setGeometry(0, 0, SIDEBAR_WIDTH, self.height())
-        width = self.width() - sidebarWidth
-        self.pane.setGeometry(sidebarWidth, 0, width, self.height())
+        viewWidth = self.width() - sidebarWidth
+        width = max(viewWidth, PANE_MIN_WIDTH)
+        contentHeight = max(self.height(), FIXED_HEIGHT + top + CHART_MIN_HEIGHT)
+        self.pane.setGeometry(sidebarWidth, 0, viewWidth, self.height())
+        self.content.resize(width, contentHeight)
         self.mouseIcon.move(MARGIN - 6, MARGIN)
         textX = MARGIN + ICON_SIZE + 12
         healthX = width - MARGIN - HEALTH_WIDTH
@@ -1376,7 +1392,7 @@ class HistoryWindow(QWidget):
         self.segments.move(int((width - self.segments.width()) / 2), segmentY)
         self.segmentRect = QRectF((width - self.segments.width()) / 2, segmentY, self.segments.width(), SEGMENT_HEIGHT)
         chartY = segmentY + SEGMENT_HEIGHT + 14
-        chartHeight = max(CHART_MIN_HEIGHT, self.height() - chartY - 16 - FORM_HEIGHT - MARGIN)
+        chartHeight = max(CHART_MIN_HEIGHT, contentHeight - chartY - 16 - FORM_HEIGHT - MARGIN)
         self.chartRect = QRectF(MARGIN, chartY, width - 2 * MARGIN, chartHeight)
         for chart in self.charts:
             chart.setGeometry(self.chartRect.toRect())
@@ -1394,7 +1410,8 @@ class HistoryWindow(QWidget):
             column, row = index // 2, index % 2
             widget.setGeometry(int(MARGIN + column * half + 18), formY + row * 36, int(half - 36), 36)
         self.popup.move(int(MARGIN + 2 * half - 18 - self.popup.width()), formY + 36 + 6)
-        self.paneMessage.setGeometry(MARGIN, MARGIN, width - 2 * MARGIN, self.height() - 2 * MARGIN)
+        self.paneMessage.setGeometry(MARGIN, MARGIN, viewWidth - 2 * MARGIN, self.height() - 2 * MARGIN)
+        self.placeScrollBars(sidebarWidth, viewWidth, width, contentHeight)
 
     def watchScreen(self):
         handle = self.windowHandle()
@@ -1403,9 +1420,93 @@ class HistoryWindow(QWidget):
         self.watchedHandle = handle
         # a window moved to a smaller screen, or one whose scale changed, fits its new room
         handle.screenChanged.connect(self.screenChanged)
+        self.watchRoom(handle.screen())
+
+    def watchRoom(self, screen):
+        # the same screen can give less room without any screenChanged, through a new resolution, a new scale, or a panel that moved
+        if (screen is self.watchedScreen):
+            return
+        old = self.watchedScreen
+        self.watchedScreen = screen
+        if (old is not None):
+            for signal in (old.availableGeometryChanged, old.geometryChanged, old.logicalDotsPerInchChanged):
+                try:
+                    signal.disconnect(self.roomChanged)
+                except (TypeError, RuntimeError):
+                    # an unplugged screen can be gone already
+                    pass
+        if (screen is not None):
+            for signal in (screen.availableGeometryChanged, screen.geometryChanged, screen.logicalDotsPerInchChanged):
+                signal.connect(self.roomChanged)
+
+    def roomChanged(self, *arguments):
+        self.layoutParts()
 
     def screenChanged(self, screen):
+        self.watchRoom(screen)
         self.layoutParts()
+
+    def placeScrollBars(self, sidebarWidth, viewWidth, contentWidth, contentHeight):
+        across = contentWidth > viewWidth
+        down = contentHeight > self.height()
+        # a bar leaves the other axis shorter by its own width
+        bar = self.vScroll.sizeHint().width()
+        viewHeight = self.height() - (bar if across else 0)
+        viewWidth -= bar if down else 0
+        self.vScroll.setVisible(down)
+        self.hScroll.setVisible(across)
+        self.vScroll.setGeometry(self.width() - bar, 0, bar, viewHeight)
+        self.hScroll.setGeometry(sidebarWidth, self.height() - bar, viewWidth, bar)
+        self.vScroll.setRange(0, max(0, contentHeight - viewHeight))
+        self.vScroll.setPageStep(max(1, viewHeight))
+        self.hScroll.setRange(0, max(0, contentWidth - viewWidth))
+        self.hScroll.setPageStep(max(1, viewWidth))
+        self.scrollTo(self.scrollX, self.scrollY)
+
+    def scrollTo(self, x, y):
+        x = max(0, min(int(x), self.hScroll.maximum()))
+        y = max(0, min(int(y), self.vScroll.maximum()))
+        if (self.hScroll.value() != x):
+            self.hScroll.setValue(x)
+        if (self.vScroll.value() != y):
+            self.vScroll.setValue(y)
+        if ((x, y) == (self.scrollX, self.scrollY)):
+            self.content.move(-x, -y)
+            return
+        self.scrollX, self.scrollY = x, y
+        self.content.move(-x, -y)
+        self.choiceMenu.hide()
+        self.update()
+
+    def revealFocus(self, old, new):
+        if (new is None or new is self.content or not self.content.isAncestorOf(new)):
+            return
+        corner = new.mapTo(self.content, QPoint(0, 0))
+        viewWidth = self.hScroll.pageStep()
+        viewHeight = self.vScroll.pageStep()
+        x, y = self.scrollX, self.scrollY
+        if (corner.x() < x):
+            x = corner.x() - MARGIN
+        elif (corner.x() + new.width() > x + viewWidth):
+            x = corner.x() + new.width() - viewWidth + MARGIN
+        if (corner.y() < y):
+            y = corner.y() - MARGIN
+        elif (corner.y() + new.height() > y + viewHeight):
+            y = corner.y() + new.height() - viewHeight + MARGIN
+        self.scrollTo(x, y)
+
+    def wheelEvent(self, event):
+        if (not self.vScroll.isVisibleTo(self) and not self.hScroll.isVisibleTo(self)):
+            super().wheelEvent(event)
+            return
+        delta = event.pixelDelta()
+        if (delta.isNull()):
+            # a notch is 120 units, and the bars' own step is about 3 lines
+            delta = event.angleDelta() / 120 * 48
+        sideways = event.modifiers() & Qt.KeyboardModifier.ShiftModifier
+        dx, dy = (delta.y(), 0) if sideways else (delta.x(), delta.y())
+        self.scrollTo(self.scrollX - dx, self.scrollY - dy)
+        event.accept()
 
     def screenRoom(self):
         screen = self.screen()
@@ -1435,6 +1536,9 @@ class HistoryWindow(QWidget):
             glass.paintShadow(painter, sidebar, 18, theme)
             glass.paintPanel(painter, sidebar, 18, self.frostImage, theme)
         offset = SIDEBAR_WIDTH if self.sidebar.isVisibleTo(self) else 0
+        # the panels slide with the content and stop at the pane's edge
+        painter.setClipRect(QRectF(offset, 0, self.width() - offset, self.height()))
+        painter.translate(-self.scrollX, -self.scrollY)
         rects = {"health": (getattr(self, "healthRect", None), 18), "segments": (getattr(self, "segmentRect", None), SEGMENT_HEIGHT / 2), "chart": (getattr(self, "chartRect", None), 18), "form": (getattr(self, "formRect", None), 18)}
         for name in self.panels:
             rect, radius = rects[name]

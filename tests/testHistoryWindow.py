@@ -10,7 +10,7 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 from PyQt6 import sip
 from PyQt6.QtCore import QAbstractAnimation, QEvent, QObject, QPoint, QPointF, QRectF, QSize, QSizeF, Qt, pyqtSignal
 from PyQt6.QtDBus import QDBusPendingCall, QDBusVariant
-from PyQt6.QtGui import QColor, QFocusEvent, QIcon, QImageReader, QPalette
+from PyQt6.QtGui import QColor, QFocusEvent, QIcon, QImageReader, QPalette, QWheelEvent
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QMenu, QWidget
 
@@ -1094,6 +1094,100 @@ class WindowTests(WindowCase):
         self.smallRoom(960, 500)
         window.windowHandle().screenChanged.emit(window.screen())
         self.assertLessEqual((window.width(), window.height()), (960, 500))
+
+    def testTheSameScreenGettingSmallerShrinksTheWindow(self):
+        # a resolution or scale change, or a panel moving, changes the room without changing the screen
+        window = self.opened(entry(), entry(key="second"))
+        window.resize(1400, 900)
+        self.smallRoom(960, 500)
+        window.screen().availableGeometryChanged.emit(window.screen().availableGeometry())
+        self.assertLessEqual((window.width(), window.height()), (960, 500))
+
+    def testAScreenScaleChangeShrinksTheWindow(self):
+        window = self.opened(entry(), entry(key="second"))
+        window.resize(1400, 900)
+        self.smallRoom(960, 500)
+        window.screen().logicalDotsPerInchChanged.emit(192.0)
+        self.assertLessEqual((window.width(), window.height()), (960, 500))
+
+    def testAWindowStopsWatchingTheScreenItLeft(self):
+        window = self.opened(entry(), entry(key="second"))
+        old = window.screen()
+        other = mock.Mock()
+        window.watchRoom(other)
+        window.resize(1400, 900)
+        self.smallRoom(960, 500)
+        old.availableGeometryChanged.emit(old.availableGeometry())
+        self.assertEqual((window.width(), window.height()), (1400, 900))
+
+    def reachable(self, window, widget):
+        # the widget's bottom right corner in the window once the pane is scrolled as far as it goes
+        window.scrollTo(10 ** 6, 10 ** 6)
+        corner = widget.mapTo(window, widget.rect().bottomRight())
+        return corner.x() <= window.width() and corner.y() <= window.height()
+
+    def testAWindowOnATinyScreenStaysInsideItAndScrollsToTheSetting(self):
+        # 1366 by 768 at 200%, less the panel and the title bar
+        self.smallRoom(683, 344)
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))
+        self.assertLessEqual((window.width(), window.height()), (683, 344))
+        self.assertLessEqual((window.minimumWidth(), window.minimumHeight()), (683, 344))
+        self.assertTrue(self.reachable(window, window.popup))
+        self.assertTrue(self.reachable(window, window.rangeControl))
+
+    def testAWindowOnAScaledLaptopScreenStaysInsideIt(self):
+        # 1280 by 720 at 150%
+        self.smallRoom(853, 493)
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))
+        self.assertLessEqual((window.width(), window.height()), (853, 493))
+        self.assertLessEqual((window.minimumWidth(), window.minimumHeight()), (853, 493))
+        self.assertTrue(self.reachable(window, window.popup))
+
+    def testAWindowWithOneMouseOnATinyScreenFitsItsWidth(self):
+        self.smallRoom(683, 344)
+        window = self.opened(entry())
+        self.assertLessEqual((window.width(), window.height()), (683, 344))
+        self.assertFalse(window.hScroll.isVisibleTo(window))
+        self.assertTrue(window.vScroll.isVisibleTo(window))
+        self.assertTrue(self.reachable(window, window.popup))
+
+    def testNothingScrollsWhereTheWindowHasRoom(self):
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))
+        window.scrollTo(50, 50)
+        self.assertEqual((window.scrollX, window.scrollY), (0, 0))
+        self.assertFalse(window.vScroll.isVisibleTo(window) or window.hScroll.isVisibleTo(window))
+        self.assertEqual(window.content.pos(), QPoint(0, 0))
+
+    def testTheWheelScrollsATightWindow(self):
+        self.smallRoom(683, 344)
+        window = self.opened(entry())
+        point = QPointF(300, 100)
+        event = QWheelEvent(point, window.mapToGlobal(point), QPoint(0, 0), QPoint(0, -120), Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier, Qt.ScrollPhase.NoScrollPhase, False)
+        QApplication.sendEvent(window, event)
+        self.assertGreater(window.scrollY, 0)
+        before = window.scrollY
+        event = QWheelEvent(point, window.mapToGlobal(point), QPoint(0, 0), QPoint(0, 120), Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier, Qt.ScrollPhase.NoScrollPhase, False)
+        QApplication.sendEvent(window, event)
+        self.assertLess(window.scrollY, before)
+
+    def testFocusingTheSettingScrollsItIntoView(self):
+        self.smallRoom(683, 344)
+        window = self.opened(entry())
+        window.activateWindow()
+        QTest.qWaitForWindowActive(window)
+        window.scrollTo(0, 0)
+        window.popup.setFocus(Qt.FocusReason.TabFocusReason)
+        corner = window.popup.mapTo(window, window.popup.rect().bottomRight())
+        self.assertLessEqual(corner.y(), window.height())
+
+    def testGrowingTheScreenBackPutsTheScrollBack(self):
+        self.smallRoom(683, 344)
+        window = self.opened(entry())
+        window.scrollTo(0, 10 ** 6)
+        self.assertGreater(window.scrollY, 0)
+        self.smallRoom(1920, 1040)
+        window.resize(window.width(), 900)
+        self.assertEqual((window.scrollX, window.scrollY), (0, 0))
 
     def testAMaximizedWindowIsLeftToTheCompositor(self):
         window = self.opened(entry(), entry(key="second"))
