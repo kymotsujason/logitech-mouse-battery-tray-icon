@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
@@ -13,6 +14,8 @@ from PyQt6.QtWidgets import QApplication
 import panelColor
 
 app = QApplication.instance() or QApplication([])
+# the suite runs as root in the containers, so the tests act as a non root account and root's exemptions can't pass a test on their own
+ACCOUNT = os.getuid() or 1000
 
 
 class PortalBus:
@@ -143,6 +146,44 @@ class PanelColorTests(unittest.TestCase):
     def testRelativeDataDirsAreIgnored(self):
         dirs = panelColor.dataDirs({"XDG_DATA_HOME": "h", "XDG_DATA_DIRS": "a:/b"})
         self.assertEqual(dirs, [os.path.join(os.path.expanduser("~"), ".local", "share"), "/b"])
+
+
+
+class PlantedIniTests(unittest.TestCase):
+    # a run as root with another account's XDG_CONFIG_HOME reads their kdeglobals and plasmarc, so each file is told apart by the owner it reports
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.target = os.path.join(self.temp.name, "target")
+        with open(self.target, "w") as f:
+            f.write("[KDE]\nAnimationDurationFactor=0.5\n")
+        self.path = os.path.join(self.temp.name, "kdeglobals")
+        self.owners = {}
+        realUid = os.getuid()
+        realFstat = os.fstat
+
+        def ownerFor(fd, *args, **kwargs):
+            info = realFstat(fd, *args, **kwargs)
+            fields = list(info[:10])
+            fields[4] = self.owners.get(os.readlink("/proc/self/fd/" + str(fd)), ACCOUNT if info.st_uid == realUid else info.st_uid)
+            return os.stat_result(fields)
+
+        for patch in (mock.patch.object(os, "getuid", return_value=ACCOUNT), mock.patch.object(os, "fstat", ownerFor)):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def testALinkAnotherAccountMadeIsntFollowed(self):
+        os.symlink(self.target, self.path)
+        self.owners[self.path] = ACCOUNT + 1
+        self.assertIsNone(panelColor.readIni(self.path))
+
+    def testALinkThisAccountMadeIsFollowed(self):
+        os.symlink(self.target, self.path)
+        self.assertEqual(panelColor.readIni(self.path), {"": {}, "KDE": {"AnimationDurationFactor": "0.5"}})
+
+    def testAFifoAtTheNameDoesntHang(self):
+        os.mkfifo(self.path)
+        self.assertIsNone(panelColor.readIni(self.path))
 
 
 if (__name__ == "__main__"):

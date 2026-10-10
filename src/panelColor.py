@@ -3,6 +3,7 @@ import os
 from PyQt6.QtDBus import QDBusMessage
 from PyQt6.QtGui import QColor
 
+import autostart
 import dbusCalls
 
 WHITE = QColor(255, 255, 255)
@@ -30,10 +31,18 @@ def dataDirs(env):
 
 
 def readIni(path):
+    # found the way the autostart override is, so a run as root with another account's config never follows a link that account planted, and a FIFO or a device at the name can't hang the tray
     try:
-        with open(path, encoding="utf-8", errors="replace") as f:
-            text = f.read()
+        folder, name, shown = autostart.openFolder(path, False)
     except (OSError, ValueError):
+        return None
+    try:
+        text = autostart.readFile(folder, name, shown)[0]
+    except OSError:
+        return None
+    finally:
+        os.close(folder)
+    if (text is None):
         return None
     groups = {}
     group = groups.setdefault("", {})
