@@ -1042,6 +1042,42 @@ class WindowTests(WindowCase):
         self.assertLessEqual(window.formRect.bottom(), window.height())
         self.assertLessEqual(window.nameLabel.geometry().right(), window.healthRect.left())
 
+    def smallRoom(self, width, height):
+        self.room.stop()
+        self.room = mock.patch.object(historyWindow.HistoryWindow, "screenRoom", return_value=QSize(width, height))
+        self.room.start()
+
+    def testReopeningOnASmallerScreenShrinksTheWindowToIt(self):
+        window = self.opened(entry(), entry(key="second"))
+        window.resize(1400, 900)
+        window.close()
+        self.smallRoom(960, 500)
+        window.open()
+        self.assertLessEqual((window.width(), window.height()), (960, 500))
+        self.assertLessEqual(window.popup.geometry().translated(window.pane.pos()).bottom(), window.height())
+
+    def testAWindowTheUserMadeBiggerKeepsItsSizeWhereThereIsRoom(self):
+        window = self.opened(entry(), entry(key="second"))
+        window.resize(1400, 900)
+        window.close()
+        window.open()
+        self.assertEqual((window.width(), window.height()), (1400, 900))
+
+    def testAScreenChangeWhileOpenShrinksTheWindow(self):
+        window = self.opened(entry(), entry(key="second"))
+        window.resize(1400, 900)
+        self.smallRoom(960, 500)
+        window.windowHandle().screenChanged.emit(window.screen())
+        self.assertLessEqual((window.width(), window.height()), (960, 500))
+
+    def testAMaximizedWindowIsLeftToTheCompositor(self):
+        window = self.opened(entry(), entry(key="second"))
+        window.resize(1400, 900)
+        self.smallRoom(960, 500)
+        with mock.patch.object(window, "isMaximized", return_value=True):
+            window.layoutParts()
+        self.assertEqual((window.width(), window.height()), (1400, 900))
+
     def testTheMouseIconDrawsAgainOnAScreenWithAnotherScale(self):
         window = self.opened(entry())
         window.mouseIcon.grab()

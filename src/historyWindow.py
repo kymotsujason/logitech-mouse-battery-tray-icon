@@ -662,6 +662,7 @@ class HistoryWindow(QWidget):
         self.backdrop = None
         self.frostImage = None
         self.frostKey = None
+        self.watchedHandle = None
         self.frostClock = QElapsedTimer()
         self.replies = {}
         self.errors = {}
@@ -779,6 +780,7 @@ class HistoryWindow(QWidget):
             self.wanted = None
             self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
             self.show()
+            self.watchScreen()
             # the blur is asked for once the window has a handle, and a window without it keeps its painted backdrop opaque
             if (enableDesktopBlur(self)):
                 self.blurred = desktopBlurAvailable()
@@ -1331,8 +1333,12 @@ class HistoryWindow(QWidget):
             leastWidth = max(min(leastWidth, room.width()), sidebarWidth + PANE_MIN_WIDTH)
             leastHeight = max(min(leastHeight, room.height()), FIXED_HEIGHT + top + CHART_MIN_HEIGHT)
         self.setMinimumSize(leastWidth, leastHeight)
-        if (self.width() < leastWidth or self.height() < leastHeight):
-            self.resize(max(self.width(), leastWidth), max(self.height(), leastHeight))
+        wantWidth, wantHeight = max(self.width(), leastWidth), max(self.height(), leastHeight)
+        if (room is not None and not self.isMaximized() and not self.isFullScreen()):
+            # a window sized on a bigger screen shrinks to the room here, while one that already fits keeps the size the user gave it
+            wantWidth, wantHeight = max(leastWidth, min(wantWidth, room.width())), max(leastHeight, min(wantHeight, room.height()))
+        if (wantWidth != self.width() or wantHeight != self.height()):
+            self.resize(wantWidth, wantHeight)
         if (not self.sidebar.isVisibleTo(self) and self.width() > leastWidth and self.property("hadSidebar")):
             # the window shrinks back by the sidebar's width once the sidebar goes
             self.resize(max(leastWidth, self.width() - SIDEBAR_WIDTH), self.height())
@@ -1380,6 +1386,17 @@ class HistoryWindow(QWidget):
             widget.setGeometry(int(MARGIN + column * half + 18), formY + row * 36, int(half - 36), 36)
         self.popup.move(int(MARGIN + 2 * half - 18 - self.popup.width()), formY + 36 + 6)
         self.paneMessage.setGeometry(MARGIN, MARGIN, width - 2 * MARGIN, self.height() - 2 * MARGIN)
+
+    def watchScreen(self):
+        handle = self.windowHandle()
+        if (handle is None or handle is self.watchedHandle):
+            return
+        self.watchedHandle = handle
+        # a window moved to a smaller screen, or one whose scale changed, fits its new room
+        handle.screenChanged.connect(self.screenChanged)
+
+    def screenChanged(self, screen):
+        self.layoutParts()
 
     def screenRoom(self):
         screen = self.screen()
