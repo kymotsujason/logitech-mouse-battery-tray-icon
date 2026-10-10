@@ -440,8 +440,67 @@ class WorkflowTests(unittest.TestCase):
         check = self.read("release.yml").split("\n  release:\n", 1)[0]
         self.assertIn('if ! python3 packaging/releaseNotes.py --check "$version"; then\n', check)
         self.assertEqual(check.count("releaseNotes.py"), 1)
-        self.assertIn("::error::CHANGELOG.md has no dated section for $version", check)
+        self.assertIn("::error::CHANGELOG.md has no dated section with entries for $version", check)
         self.assertLess(check.index("releaseNotes.py"), check.index("released=false"))
+
+    def checkStep(self):
+        check = self.read("release.yml").split("\n  release:\n", 1)[0]
+        start = check.index("      - name: Find the version and whether it has a release\n")
+        lines = check[start:].split("\n        run: |\n", 1)[1].split("\n")
+        body = []
+        for line in lines:
+            if (line.strip() != "" and not line.startswith("          ")):
+                break
+            body.append(line[10:])
+        return "\n".join(body)
+
+    def runCheck(self, changelog, view="release not found", viewCode=1):
+        # the step runs in a copy of the repo's parts it reads, with a gh that answers the release lookup as told
+        with tempfile.TemporaryDirectory() as folder:
+            os.makedirs(os.path.join(folder, "bin"))
+            os.makedirs(os.path.join(folder, "src"))
+            os.makedirs(os.path.join(folder, "packaging"))
+            shutil.copy(os.path.join(PACKAGING, "releaseNotes.py"), os.path.join(folder, "packaging"))
+            with open(os.path.join(folder, "src", "version.py"), "w") as f:
+                f.write('VERSION = "1.1.1"\n')
+            with open(os.path.join(folder, "CHANGELOG.md"), "w") as f:
+                f.write(changelog)
+            gh = os.path.join(folder, "bin", "gh")
+            with open(gh, "w") as f:
+                f.write('#!/bin/sh\nprintf "%s\\n" "$FAKE_VIEW"\nexit "$FAKE_CODE"\n')
+            os.chmod(gh, 0o755)
+            output = os.path.join(folder, "output")
+            open(output, "w").close()
+            env = {"PATH": os.path.join(folder, "bin") + ":" + os.environ["PATH"], "FAKE_VIEW": view, "FAKE_CODE": str(viewCode), "GITHUB_OUTPUT": output, "GITHUB_REPOSITORY": "owner/repo"}
+            result = subprocess.run(["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", self.checkStep()], cwd=folder, env=env, capture_output=True, text=True)
+            with open(output) as f:
+                outputs = f.read().splitlines()
+        return (result.returncode, result.stdout + result.stderr, outputs)
+
+    def testTheCheckJobStopsWithoutADatedSectionWithEntries(self):
+        for name, changelog in (("undated", "# Changelog\n\n## 1.1.1, unreleased\n\n### Fixed\n\n- A thing.\n"), ("missing", "# Changelog\n\n## 1.1.0, 2026-10-02\n\n### Fixed\n\n- A thing.\n"), ("empty", "# Changelog\n\n## 1.1.1, 2026-10-08\n\n### Fixed\n\n")):
+            with self.subTest(changelog=name):
+                code, output, outputs = self.runCheck(changelog)
+                self.assertNotEqual(code, 0, output)
+                self.assertNotIn("released=false", outputs)
+                self.assertNotIn("has no release yet", output)
+                self.assertIn("::error::CHANGELOG.md has no dated section with entries for 1.1.1", output)
+
+    def testTheCheckJobPublishesADatedSection(self):
+        code, output, outputs = self.runCheck("# Changelog\n\n## 1.1.1, 2026-10-08\n\n### Fixed\n\n- A thing.\n")
+        self.assertEqual(code, 0, output)
+        self.assertEqual(outputs, ["version=1.1.1", "released=false"])
+
+    def testTheCheckJobSkipsAVersionWithARelease(self):
+        code, output, outputs = self.runCheck("# Changelog\n", view="title: v1.1.1", viewCode=0)
+        self.assertEqual(code, 0, output)
+        self.assertEqual(outputs, ["version=1.1.1", "released=true"])
+
+    def testTheCheckJobStopsWhenTheReleaseLookupFails(self):
+        code, output, outputs = self.runCheck("# Changelog\n\n## 1.1.1, 2026-10-08\n\n### Fixed\n\n- A thing.\n", view="HTTP 502: Bad Gateway")
+        self.assertNotEqual(code, 0, output)
+        self.assertEqual(outputs, ["version=1.1.1"])
+        self.assertIn("HTTP 502", output)
 
     def testTheReleaseChecksTheUpgradeBeforePublishing(self):
         release = self.releaseJob()
@@ -538,7 +597,7 @@ class WorkflowTests(unittest.TestCase):
             body.append(line[10:])
         return "\n".join(body)
 
-    def runPublish(self, releases):
+    def runPublish(self, releases, version="1.1.1"):
         # the fake hands the step's own --jq filter to jq, so the filter is what picks the drafts
         if (shutil.which("jq") is None):
             self.skipTest("jq isn't installed")
@@ -547,10 +606,12 @@ class WorkflowTests(unittest.TestCase):
             with open(gh, "w") as f:
                 f.write('#!/bin/sh\necho "$@" >> "$FAKE_FOLDER/calls"\nif [ "$1" = api ] && [ "$2" = --paginate ] && [ "$4" = --jq ]; then printf "%s" "$FAKE_LISTING" | jq -r "$5"; fi\n')
             os.chmod(gh, 0o755)
-            env = {"PATH": folder + ":" + os.environ["PATH"], "FAKE_FOLDER": folder, "FAKE_LISTING": json.dumps(releases), "VERSION": "1.1.1", "GITHUB_SHA": "a" * 40, "GITHUB_REPOSITORY": "owner/repo"}
-            result = subprocess.run(["bash", "-e", "-c", self.publishStep()], env=env, capture_output=True, text=True)
-            with open(os.path.join(folder, "calls")) as f:
-                calls = f.read().splitlines()
+            env = {"PATH": folder + ":" + os.environ["PATH"], "FAKE_FOLDER": folder, "FAKE_LISTING": json.dumps(releases), "VERSION": version, "GITHUB_SHA": "a" * 40, "GITHUB_REPOSITORY": "owner/repo"}
+            result = subprocess.run(["bash", "-e", "-c", self.publishStep()], cwd=REPO, env=env, capture_output=True, text=True)
+            calls = []
+            if (os.path.exists(os.path.join(folder, "calls"))):
+                with open(os.path.join(folder, "calls")) as f:
+                    calls = f.read().splitlines()
         return (result.returncode, result.stdout + result.stderr, calls)
 
     def release(self, releaseId, tag="v1.1.1", draft=True, author="github-actions[bot]"):
@@ -581,6 +642,12 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual([call for call in calls if "DELETE" in call], [])
         self.assertNotIn("draft", output)
         self.assertEqual(len(calls), 2)
+
+    def testAVersionWithoutNotesStopsThePublishBeforeAnyCall(self):
+        code, output, calls = self.runPublish([self.release(77)], version="9.9.9")
+        self.assertNotEqual(code, 0)
+        self.assertIn("no section for 9.9.9", output)
+        self.assertEqual(calls, [])
 
     def testTheDraftListingOnlyKeepsDraftsOfThisTag(self):
         self.assertIn(".draft and .tag_name == \\\"v$VERSION\\\"", self.publishStep())

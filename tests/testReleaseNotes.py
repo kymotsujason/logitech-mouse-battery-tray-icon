@@ -121,6 +121,23 @@ class ReleaseNotesTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("9.9.9", result.stderr)
 
+    def testASectionWithNoEntriesFailsTheCheckAndGivesNoNotes(self):
+        empties = {"empty": "## 1.2.0, 2026-10-10\n## 1.1.0, 2026-10-02", "whitespace": "## 1.2.0, 2026-10-10\n   \n\t\n\n## 1.1.0, 2026-10-02", "heading only": "## 1.2.0, 2026-10-10\n\n### Added\n\n## 1.1.0, 2026-10-02"}
+        populated = "## 1.2.0, 2026-10-10\n\n### Added\n\n- The newest thing.\n\n## 1.1.0, 2026-10-02"
+        self.assertIn(populated, SAMPLE)
+        for name, text in empties.items():
+            self.write(SAMPLE.replace(populated, text))
+            for args in (("--check", "1.2.0"), ("1.2.0",)):
+                with self.subTest(section=name, args=args):
+                    result = self.notes(*args, self.path)
+                    self.assertEqual((result.returncode, result.stdout), (1, ""))
+                    self.assertIn("1.2.0", result.stderr)
+                    self.assertEqual(len(result.stderr.strip().splitlines()), 1)
+
+    def testAPopulatedSectionPassesTheEntryCheck(self):
+        for args in (("--check", "1.2.0"), ("1.2.0",)):
+            self.assertEqual(self.notes(*args, self.path).returncode, 0, args)
+
     def testACrlfFileGivesTheSameNotes(self):
         self.write(SAMPLE, newline="\r\n")
         with open(self.path, "rb") as f:

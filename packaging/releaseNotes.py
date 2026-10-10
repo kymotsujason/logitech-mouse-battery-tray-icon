@@ -62,6 +62,10 @@ def main(argv):
         print(path + " has no section for " + version + ", so add one before releasing", file=sys.stderr)
         return 1
     date, body = found
+    # a heading with nothing under it would publish a release whose notes are only the footer
+    if (not any(line.strip().startswith("- ") for line in body)):
+        print(path + " has no entries under " + version + ", so add at least one before releasing", file=sys.stderr)
+        return 1
     if (check):
         if (not isDate(date)):
             print(path + " heads " + version + " with \"" + date + "\" instead of a YYYY-MM-DD date, so date it before releasing", file=sys.stderr)
