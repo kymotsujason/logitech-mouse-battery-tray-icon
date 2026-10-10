@@ -1199,6 +1199,37 @@ class RecorderTests(RecorderCase):
         self.event(1200, 61, charging=1, power=0)
         self.assertEqual([(s[0], s[1], s[2]) for s in self.sessions()], [(1, 0, 600), (0, 1200, None)])
 
+    def chargeWithPowers(self, powers, restartAfter=None):
+        self.recorder.setWakeSupport(KEY, True)
+        for index, power in enumerate(powers):
+            self.event(index * 600, 50 + index, charging=1, power=power)
+            if (index == restartAfter):
+                self.recorder.stop()
+                self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic)
+        return self.sessions()[0][5]
+
+    def testARestartKeepsEachPowersOwnCount(self):
+        # 1, 1, 2 was saved as 1 and reloaded as three readings of it, which outvoted the two of 2 that followed
+        self.assertEqual(self.chargeWithPowers((1, 1, 2, 2, 2), restartAfter=2), 2)
+
+    def testARestartKeepsATieWithTheFirstPowerSeen(self):
+        # the restart comes before the power was saved twice, so the tie has to come back in the order it was seen
+        self.assertEqual(self.chargeWithPowers((2, 1, 1, 2), restartAfter=1), 2)
+
+    def testARestartKeepsTheLowestOfTheSessionsOwnReadings(self):
+        self.recorder.setWakeSupport(KEY, True)
+        self.event(0, 40, charging=1, power=2)
+        # the charge's last reading and the full that ends it come in the same second
+        self.clock.now = START + 600
+        self.recorder.addReading(KEY, battery(41, charging=1, power=2), history.ORIGIN_EVENT, at=START + 600)
+        self.recorder.addReading(KEY, battery(100, charging=3, power=0), history.ORIGIN_EVENT, at=START + 600)
+        self.at(602)
+        self.recorder.stop()
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic)
+        for seconds, percent in ((2400, 99), (4200, 98), (6000, 97)):
+            self.event(seconds, percent)
+        self.assertEqual([(s[3], s[4], s[6]) for s in self.steps() if s[0] == history.DISCHARGE], [(99, 98, 0), (98, 97, 1)])
+
     def testASummaryAfterARestartKeepsTheSavedFlagsOfAMouseNotLoadedYet(self):
         self.recorder.setWakeSupport(KEY, True)
         self.event(0, 60)
