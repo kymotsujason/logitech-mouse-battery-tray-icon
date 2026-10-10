@@ -1,41 +1,73 @@
 import os
+import re
 import sys
+import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FOOTER = "Install steps are in the README."
+USAGE = "usage: python3 packaging/releaseNotes.py [--check] <VERSION> [CHANGELOG path]"
 
 
-def sectionLines(lines, version):
-    heading = "## " + version + ","
+def heading(line):
+    # a section heading is "## <version>, <date>", and Markdown allows more than one space after the hashes
+    match = re.match(r"##[ \t]+(.*)$", line)
+    if (match is None):
+        return None
+    version, comma, date = match.group(1).partition(",")
+    return (version.strip(), date.strip())
+
+
+def section(lines, version):
     found = None
     for line in lines:
-        if (line.startswith("## ")):
+        parts = heading(line)
+        if (parts is not None):
             if (found is not None):
                 break
-            if (line.startswith(heading)):
-                found = []
+            if (parts[0] == version):
+                found = (parts[1], [])
         elif (found is not None):
-            found.append(line)
+            found[1].append(line)
     return found
 
 
-def main(argv):
-    if (len(argv) not in (2, 3)):
-        print("usage: python3 packaging/releaseNotes.py <VERSION> [CHANGELOG path]", file=sys.stderr)
-        return 1
-    version = argv[1]
-    path = argv[2] if len(argv) == 3 else os.path.join(REPO, "CHANGELOG.md")
+def isDate(text):
+    if (re.fullmatch(r"\d{4}-\d{2}-\d{2}", text) is None):
+        return False
     try:
-        with open(path) as f:
+        time.strptime(text, "%Y-%m-%d")
+    except ValueError:
+        return False
+    return True
+
+
+def main(argv):
+    arguments = argv[1:]
+    check = "--check" in arguments
+    if (check):
+        arguments.remove("--check")
+    if (len(arguments) not in (1, 2)):
+        print(USAGE, file=sys.stderr)
+        return 1
+    version = arguments[0]
+    path = arguments[1] if len(arguments) == 2 else os.path.join(REPO, "CHANGELOG.md")
+    try:
+        with open(path, encoding="utf-8") as f:
             lines = f.read().splitlines()
     except (OSError, UnicodeDecodeError) as error:
         print("Couldn't read " + path + ": " + str(error), file=sys.stderr)
         return 1
-    found = sectionLines(lines, version)
+    found = section(lines, version)
     if (found is None):
         print(path + " has no section for " + version + ", so add one before releasing", file=sys.stderr)
         return 1
-    print("\n".join(found).strip("\n") + "\n\n" + FOOTER)
+    date, body = found
+    if (check):
+        if (not isDate(date)):
+            print(path + " heads " + version + " with \"" + date + "\" instead of a YYYY-MM-DD date, so date it before releasing", file=sys.stderr)
+            return 1
+        return 0
+    print("\n".join(body).strip("\n") + "\n\n" + FOOTER)
     return 0
 
 

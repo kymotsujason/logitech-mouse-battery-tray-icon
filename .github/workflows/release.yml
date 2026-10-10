@@ -39,8 +39,8 @@ jobs:
             echo "released=true" >> "$GITHUB_OUTPUT"
             echo "v$version already has a release, so there's nothing to publish"
           elif grep -q "release not found" /tmp/view.log; then
-            if ! python3 packaging/releaseNotes.py "$version" > /dev/null; then
-              echo "::error::CHANGELOG.md has no section for $version, so add one before releasing"
+            if ! python3 packaging/releaseNotes.py --check "$version"; then
+              echo "::error::CHANGELOG.md has no dated section for $version, so add or date one before releasing"
               exit 1
             fi
             echo "released=false" >> "$GITHUB_OUTPUT"
@@ -119,6 +119,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # the notes come first, so a changelog that can't give them stops the step before any draft is deleted
+          python3 packaging/releaseNotes.py "$VERSION" > /tmp/notes.md
           # the check job's read token and the tag lookup both skip drafts, so a draft a failed run left behind is cleared here, where the token can list it
           gh api --paginate "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.draft and .tag_name == \"v$VERSION\") | \"\(.id) \(.author.login)\"" > /tmp/drafts.log
           # a release this workflow's token made names github-actions[bot] as its author, and any other draft for the tag is the owner's own,
@@ -132,5 +134,4 @@ jobs:
             echo "found a draft release for v$VERSION from an earlier run, so it's replaced"
             gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
           done
-          python3 packaging/releaseNotes.py "$VERSION" > /tmp/notes.md
           gh release create "v$VERSION" --target "$GITHUB_SHA" --title "Mouse Battery $VERSION" --notes-file /tmp/notes.md dist/*.deb dist/*.rpm dist/*.pkg.tar.zst dist/*.tar.gz dist/SHA256SUMS

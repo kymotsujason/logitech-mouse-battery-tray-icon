@@ -431,12 +431,16 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn(' --notes-file /tmp/notes.md ', publish)
         self.assertNotIn("--notes ", publish)
         self.assertIn('python3 packaging/releaseNotes.py "$VERSION" > /tmp/notes.md\n', release)
-        self.assertLess(release.index("packaging/releaseNotes.py"), release.index("gh release create"))
+        # a failure to write the notes stops the step before it deletes a draft
+        self.assertLess(release.index("packaging/releaseNotes.py"), release.index("gh api --paginate"))
+        self.assertLess(release.index("gh api --paginate"), release.index("gh api -X DELETE"))
+        self.assertLess(release.index("gh api -X DELETE"), release.index("gh release create"))
 
     def testTheCheckJobFailsWhenTheVersionHasNoChangelogSection(self):
         check = self.read("release.yml").split("\n  release:\n", 1)[0]
-        self.assertIn('python3 packaging/releaseNotes.py "$version" > /dev/null', check)
-        self.assertIn("::error::CHANGELOG.md", check)
+        self.assertIn('if ! python3 packaging/releaseNotes.py --check "$version"; then\n', check)
+        self.assertEqual(check.count("releaseNotes.py"), 1)
+        self.assertIn("::error::CHANGELOG.md has no dated section for $version", check)
         self.assertLess(check.index("releaseNotes.py"), check.index("released=false"))
 
     def testTheReleaseChecksTheUpgradeBeforePublishing(self):

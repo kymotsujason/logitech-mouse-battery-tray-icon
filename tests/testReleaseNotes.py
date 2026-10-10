@@ -92,6 +92,62 @@ class ReleaseNotesTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertEqual(result.stdout, "")
 
+    def write(self, contents, newline=None):
+        with open(self.path, "w", encoding="utf-8", newline=newline) as f:
+            f.write(contents)
+
+    def testTheCheckFailsASectionHeadedUnreleased(self):
+        self.write(SAMPLE.replace("## 1.2.0, 2026-10-10", "## 1.2.0, unreleased"))
+        result = self.notes("--check", "1.2.0", self.path)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("1.2.0", result.stderr)
+        self.assertIn("unreleased", result.stderr)
+        self.assertEqual(len(result.stderr.strip().splitlines()), 1)
+
+    def testTheCheckFailsAHeadingWithoutAProperDate(self):
+        for heading in ("## 1.2.0, 2026-10", "## 1.2.0, 2026-13-40", "## 1.2.0, 10/10/2026", "## 1.2.0,"):
+            self.write(SAMPLE.replace("## 1.2.0, 2026-10-10", heading))
+            result = self.notes("--check", "1.2.0", self.path)
+            self.assertEqual(result.returncode, 1, heading)
+            self.assertIn("1.2.0", result.stderr, heading)
+
+    def testTheCheckPassesADatedSection(self):
+        result = self.notes("--check", "1.2.0", self.path)
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "", ""))
+
+    def testTheCheckFailsAMissingSection(self):
+        result = self.notes("--check", "9.9.9", self.path)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("9.9.9", result.stderr)
+
+    def testACrlfFileGivesTheSameNotes(self):
+        self.write(SAMPLE, newline="\r\n")
+        with open(self.path, "rb") as f:
+            self.assertIn(b"\r\n", f.read())
+        result = self.notes("1.1.0", self.path)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "### Changed\n\n- A middle thing.\n\n### Fixed\n\n- Another middle thing." + FOOTER)
+        self.assertEqual(self.notes("--check", "1.1.0", self.path).returncode, 0)
+
+    def testExtraSpacesAfterTheHashesStillMatch(self):
+        self.write(SAMPLE.replace("## 1.1.0, 2026-10-02", "##   1.1.0,  2026-10-02 "))
+        result = self.notes("1.1.0", self.path)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "### Changed\n\n- A middle thing.\n\n### Fixed\n\n- Another middle thing." + FOOTER)
+        self.assertEqual(self.notes("--check", "1.1.0", self.path).returncode, 0)
+
+    def testASuffixedVersionDoesntMatchItsRelease(self):
+        self.write(SAMPLE.replace("## 1.2.0, 2026-10-10", "## 1.2.0rc1, 2026-10-10"))
+        self.assertEqual(self.notes("1.2.0", self.path).returncode, 1)
+        self.assertEqual(self.notes("1.2.0rc1", self.path).stdout, "### Added\n\n- The newest thing." + FOOTER)
+
+    def testANonAsciiChangelogReadsAsUtf8(self):
+        self.write(SAMPLE.replace("The newest thing.", "The newest thing, caf\u00e9."))
+        result = subprocess.run([sys.executable, "-B", SCRIPT, "1.2.0", self.path], capture_output=True, env={**os.environ, "LC_ALL": "C", "LANG": "C", "PYTHONUTF8": "0", "PYTHONIOENCODING": "utf-8"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.decode("utf-8"), "### Added\n\n- The newest thing, caf\u00e9." + FOOTER)
+
     def testTheRealChangelogHasASectionForEveryTagAndTheCurrentVersion(self):
         for name in ("1.0.0", "1.0.1", "1.1.0", "1.1.1", version.VERSION):
             result = self.notes(name)
