@@ -74,6 +74,7 @@ class ReleaseNotesTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertEqual(result.stdout, "")
         self.assertIn("9.9.9", result.stderr)
+        self.assertIn("has no section for 9.9.9", result.stderr)
         self.assertEqual(len(result.stderr.strip().splitlines()), 1)
 
     def testAVersionThatPrefixesAnotherHeadingDoesntMatchIt(self):
@@ -103,6 +104,7 @@ class ReleaseNotesTests(unittest.TestCase):
         self.assertEqual(result.stdout, "")
         self.assertIn("1.2.0", result.stderr)
         self.assertIn("unreleased", result.stderr)
+        self.assertIn("instead of a YYYY-MM-DD date", result.stderr)
         self.assertEqual(len(result.stderr.strip().splitlines()), 1)
 
     def testTheCheckFailsAHeadingWithoutAProperDate(self):
@@ -111,6 +113,7 @@ class ReleaseNotesTests(unittest.TestCase):
             result = self.notes("--check", "1.2.0", self.path)
             self.assertEqual(result.returncode, 1, heading)
             self.assertIn("1.2.0", result.stderr, heading)
+            self.assertIn("instead of a YYYY-MM-DD date", result.stderr, heading)
 
     def testTheCheckPassesADatedSection(self):
         result = self.notes("--check", "1.2.0", self.path)
@@ -118,8 +121,9 @@ class ReleaseNotesTests(unittest.TestCase):
 
     def testTheCheckFailsAMissingSection(self):
         result = self.notes("--check", "9.9.9", self.path)
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("9.9.9", result.stderr)
+        self.assertEqual((result.returncode, result.stdout), (1, ""))
+        self.assertIn("has no section for 9.9.9", result.stderr)
+        self.assertEqual(len(result.stderr.strip().splitlines()), 1)
 
     def testASectionWithNoEntriesFailsTheCheckAndGivesNoNotes(self):
         empties = {"empty": "## 1.2.0, 2026-10-10\n## 1.1.0, 2026-10-02", "whitespace": "## 1.2.0, 2026-10-10\n   \n\t\n\n## 1.1.0, 2026-10-02", "heading only": "## 1.2.0, 2026-10-10\n\n### Added\n\n## 1.1.0, 2026-10-02"}
@@ -131,43 +135,60 @@ class ReleaseNotesTests(unittest.TestCase):
                 with self.subTest(section=name, args=args):
                     result = self.notes(*args, self.path)
                     self.assertEqual((result.returncode, result.stdout), (1, ""))
-                    self.assertIn("1.2.0", result.stderr)
+                    self.assertIn("has no entries under 1.2.0", result.stderr)
                     self.assertEqual(len(result.stderr.strip().splitlines()), 1)
 
     def testAPopulatedSectionPassesTheEntryCheck(self):
         for args in (("--check", "1.2.0"), ("1.2.0",)):
             self.assertEqual(self.notes(*args, self.path).returncode, 0, args)
 
-    def assertRefused(self, contents):
+    def assertRefused(self, contents, line):
         self.write(contents)
         for args in (("--check", "1.2.0"), ("1.2.0",)):
             with self.subTest(contents=contents, args=args):
                 result = self.notes(*args, self.path)
                 self.assertEqual((result.returncode, result.stdout), (1, ""))
+                self.assertIn(" line " + str(line) + " holds \"<\" or a code fence", result.stderr)
                 self.assertIn("1.2.0", result.stderr)
                 self.assertEqual(len(result.stderr.strip().splitlines()), 1)
+
+    def entryLine(self, contents):
+        return contents.splitlines().index("- The newest thing.") + 1
 
     def testASectionWithOnlyCommentedEntriesFails(self):
         populated = "### Added\n\n- The newest thing.\n"
         for comment in ("<!--\n- TODO write notes\n-->\n", "<!-- - TODO write notes -->\n", "<!--\n- TODO write notes\n"):
-            self.assertRefused(SAMPLE.replace(populated, "### Added\n\n" + comment))
+            self.assertRefused(SAMPLE.replace(populated, "### Added\n\n" + comment), self.entryLine(SAMPLE))
 
     def testASectionWithACommentBesideAnEntryFails(self):
-        for comment in ("<!--\n- TODO write notes\n-->\n- The newest thing.\n", "- The newest thing. <!-- a note to self -->\n", "- The newest thing.\n<!-- one more -->\n"):
-            self.assertRefused(SAMPLE.replace("- The newest thing.\n", comment))
+        for comment, offset in (("<!--\n- TODO write notes\n-->\n- The newest thing.\n", 0), ("- The newest thing. <!-- a note to self -->\n", 0), ("- The newest thing.\n<!-- one more -->\n", 1)):
+            self.assertRefused(SAMPLE.replace("- The newest thing.\n", comment), self.entryLine(SAMPLE) + offset)
 
     def testACommentOpenerInCodeFailsInsteadOfCuttingTheNotes(self):
         span = "- Render `<!--` as text in the label.\n- The newest thing.\n"
         fence = "- The newest thing.\n\n```html\n<!-- kept -->\n```\n\n- One more thing.\n"
-        for code in (span, fence):
-            self.assertRefused(SAMPLE.replace("- The newest thing.\n", code))
+        for code, offset in ((span, 0), (fence, 2)):
+            self.assertRefused(SAMPLE.replace("- The newest thing.\n", code), self.entryLine(SAMPLE) + offset)
 
-    def testACommentInAnotherSectionLeavesThisOneAlone(self):
-        self.write(SAMPLE.replace("- A middle thing.\n", "- A middle thing. <!-- a note to self -->\n"))
-        self.assertEqual(self.notes("--check", "1.2.0", self.path).returncode, 0)
-        result = self.notes("1.2.0", self.path)
-        self.assertEqual((result.returncode, result.stdout), (0, "### Added\n\n- The newest thing." + FOOTER))
-        self.assertEqual(self.notes("1.1.0", self.path).returncode, 1)
+    def testOtherHtmlBlocksHoldingAnEntryFail(self):
+        for html in ("<?notes\n- Hidden entry.\n?>\n", "<?notes\n- Hidden entry.\n", "<!X\n- Hidden entry.\n>\n", "  <div hidden>\n\n- Hidden entry.\n\n</div>\n", "- <?notes\n  - Hidden entry.\n  ?>\n", "> <?notes\n> - Hidden entry.\n"):
+            self.assertRefused(SAMPLE.replace("- The newest thing.\n", html), self.entryLine(SAMPLE))
+
+    def testAHeadingInsideACodeFenceFailsInsteadOfCuttingTheNotes(self):
+        for fence, offset in (("```markdown\n## Example\n```\n", 2), ("~~~\n## Example\n~~~\n", 2), ("- An entry with code.\n  ````\n  ## Example\n  ````\n", 3)):
+            self.assertRefused(SAMPLE.replace("- The newest thing.\n", "- The newest thing.\n\n" + fence + "\n- One more thing.\n"), self.entryLine(SAMPLE) + offset)
+
+    def testASectionCommentedOutAroundItsHeadingFails(self):
+        section = "## 1.2.0, 2026-10-10\n\n### Added\n\n- The newest thing.\n"
+        self.assertIn(section, SAMPLE)
+        line = SAMPLE.splitlines().index("## 1.2.0, 2026-10-10") + 1
+        self.assertRefused(SAMPLE.replace(section, "<!--\n" + section + "-->\n"), line)
+
+    # a hidden or code-only line anywhere can shift where GitHub ends a section, so one in another section refuses this one too, where it used to be left alone
+    def testRawHtmlInAnotherSectionRefusesEverySection(self):
+        line = SAMPLE.splitlines().index("- A middle thing.") + 1
+        self.assertRefused(SAMPLE.replace("- A middle thing.\n", "- A middle thing. <!-- a note to self -->\n"), line)
+        self.assertRefused(SAMPLE.replace("Intro text.\n", "Intro text, see <https://example.com>.\n"), 3)
 
     def testACrlfFileGivesTheSameNotes(self):
         self.write(SAMPLE, newline="\r\n")

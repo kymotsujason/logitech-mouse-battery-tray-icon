@@ -478,7 +478,7 @@ class WorkflowTests(unittest.TestCase):
         return (result.returncode, result.stdout + result.stderr, outputs)
 
     def testTheCheckJobStopsWithoutADatedSectionWithEntries(self):
-        for name, changelog in (("undated", "# Changelog\n\n## 1.1.1, unreleased\n\n### Fixed\n\n- A thing.\n"), ("missing", "# Changelog\n\n## 1.1.0, 2026-10-02\n\n### Fixed\n\n- A thing.\n"), ("empty", "# Changelog\n\n## 1.1.1, 2026-10-08\n\n### Fixed\n\n"), ("commented", "# Changelog\n\n## 1.1.1, 2026-10-08\n\n### Fixed\n\n- A thing. <!-- a note -->\n")):
+        for name, changelog in (("undated", "# Changelog\n\n## 1.1.1, unreleased\n\n### Fixed\n\n- A thing.\n"), ("missing", "# Changelog\n\n## 1.1.0, 2026-10-02\n\n### Fixed\n\n- A thing.\n"), ("empty", "# Changelog\n\n## 1.1.1, 2026-10-08\n\n### Fixed\n\n"), ("commented", "# Changelog\n\n## 1.1.1, 2026-10-08\n\n### Fixed\n\n- A thing. <!-- a note -->\n"), ("commented out", "# Changelog\n\n<!--\n## 1.1.1, 2026-10-08\n\n### Fixed\n\n- A thing.\n-->\n"), ("fenced", "# Changelog\n\n## 1.1.1, 2026-10-08\n\n### Fixed\n\n- A thing.\n\n```\n## Example\n```\n")):
             with self.subTest(changelog=name):
                 code, output, outputs = self.runCheck(changelog)
                 self.assertNotEqual(code, 0, output)

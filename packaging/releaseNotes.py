@@ -57,15 +57,16 @@ def main(argv):
     except (OSError, UnicodeDecodeError) as error:
         print("Couldn't read " + path + ": " + str(error), file=sys.stderr)
         return 1
+    # raw HTML can hide entries and a code fence can hold a heading that isn't one, and reading either as GitHub does takes a Markdown parser, so the whole file is refused before any section is read, since one above a heading changes that section too
+    for number, line in enumerate(lines, 1):
+        if ("<" in line or "```" in line or "~~~" in line):
+            print(path + " line " + str(number) + " holds \"<\" or a code fence, which GitHub may hide or show as code, so write that line another way before releasing " + version, file=sys.stderr)
+            return 1
     found = section(lines, version)
     if (found is None):
         print(path + " has no section for " + version + ", so add one before releasing", file=sys.stderr)
         return 1
     date, body = found
-    # GitHub hides an HTML comment, and telling one apart from a literal "<!--" in code takes a Markdown parser, so a section holding one is refused instead of stripped
-    if (any("<!--" in line for line in body)):
-        print(path + " has \"<!--\" under " + version + ", which GitHub may hide as an HTML comment, so remove it or write it another way before releasing", file=sys.stderr)
-        return 1
     # a heading with nothing under it would publish a release whose notes are only the footer
     if (not any(line.strip().startswith("- ") for line in body)):
         print(path + " has no entries under " + version + ", so add at least one before releasing", file=sys.stderr)
