@@ -187,7 +187,7 @@ class FigureTests(unittest.TestCase):
         self.assertEqual([fmt for fmt in asked if "%b" in fmt or "%a" in fmt], [])
 
     def testPowerLabels(self):
-        self.assertEqual([health.powerLabel(power) for power in (2, 1, 0, None)], ["wireless charger", "charger 1", "charger", "charger"])
+        self.assertEqual([health.powerLabel(power) for power in (2, 1, 0, None)], ["wireless charger", "cable", "charger", "charger"])
 
 
 if (__name__ == "__main__"):

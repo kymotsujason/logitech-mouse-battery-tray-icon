@@ -56,9 +56,11 @@ class Health:
 
 
 def powerLabel(power):
-    # only 0 and 2 have been measured, so other values are named by their number
+    # the X3 sent 2 on Jason's wireless pad and 1 on its cable (measured 2026-10-09), while other values are named by their number
     if (power == 2):
         return "wireless charger"
+    if (power == 1):
+        return "cable"
     if (power):
         return "charger " + str(power)
     return "charger"
