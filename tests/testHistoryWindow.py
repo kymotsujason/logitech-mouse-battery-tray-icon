@@ -150,6 +150,18 @@ class WindowTests(WindowCase):
         self.assertEqual((window.nameLabel.text(), window.levelLabel.text(), window.statusLabel.text()), ("PRO X3 SUPERSTRIKE", "62%", "In use"))
         self.assertEqual(window.lineLabels[0].text(), "Still learning. The first figures come after a few charges.")
 
+    def testThreeHealthLinesAllFitInsideTheHealthBox(self):
+        summary = reply("02bc524c")
+        summary["lastError"] = time.time()
+        summary["monthly"] = [{"month": "2020-01", "drain": 25.0, "charge": [], "drained": 0, "sessions": 1}]
+        self.watcher.answers["02bc524c"] = (summary, None)
+        window = self.opened(entry())
+        self.assertEqual([label.text() for label in window.lineLabels], [health.CHARGING_ERROR_TEXT, health.WEAR_STARTS_TEXT, "A full charge gives about 42 hours of use."])
+        for label in window.lineLabels:
+            self.assertTrue(label.isVisibleTo(window))
+            self.assertGreater(label.height(), 0)
+        self.assertLessEqual(window.lineLabels[2].geometry().bottom(), window.healthRect.bottom())
+
     def testItShowsLoadingUntilTheReplyComes(self):
         self.watcher.hold = True
         window = self.opened(entry())

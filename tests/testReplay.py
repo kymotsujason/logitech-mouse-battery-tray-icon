@@ -144,7 +144,7 @@ class ReplayTests(unittest.TestCase):
         summary = Replay(self.folder).run(30)
         result = health.assess(summary, hidpp.BatteryReading(100, 0), START + 30 * DAY)
         self.assertEqual([line.kind for line in result.lines], [health.LEARNING, health.INFO, health.INFO])
-        self.assertTrue(result.lines[0].text.startswith("Still learning. "))
+        self.assertEqual(result.lines[0].text, "Still learning. The wear check needs about 3 more charges.")
 
     def testTheSameUnevenCurveAllTheWayThroughIsDoingWell(self):
         summary = Replay(self.folder).run(120)

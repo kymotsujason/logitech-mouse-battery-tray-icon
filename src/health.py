@@ -36,6 +36,10 @@ NO_WAKES_TEXT = "This mouse doesn't say when it wakes, so drain can't be measure
 LARGE_STEPS_TEXT = "This mouse reports its level in large steps, so drain can't be measured."
 WAKES_UNSEEN_TEXT = "This mouse's wakes aren't visible yet, so drain isn't being measured."
 FIRST_FIGURES_TEXT = "Still learning. The first figures come after a few charges."
+WEAR_STARTS_TEXT = "Still learning. The wear check starts after a few more charges."
+WEAR_DEPTH_TEXT = "Still learning. The wear check needs charges that run the battery down to about 55%."
+CAPABILITY_TEXTS = (ROUGH_TEXT, VOLTAGE_TEXT, NO_WAKES_TEXT, LARGE_STEPS_TEXT, WAKES_UNSEEN_TEXT)
+USE_FRESH_DAYS = 7
 READY_SESSIONS = history.BASELINE_SESSIONS + history.WINDOW_SESSIONS + history.WINDOWS - 1
 
 
@@ -120,7 +124,7 @@ def chargeLine(comparisons):
     return Line(CHARGE_LINE_KIND, "Charging takes about " + str(n) + "% longer than it used to, so the battery may be wearing.")
 
 
-def drainMessage(summary, reading, readyRanges):
+def drainMessage(summary, reading, hasUse):
     if (reading is not None and reading.percent is None and reading.level is not None):
         return Line(LEARNING, ROUGH_TEXT)
     if (reading is not None and reading.percent is None and reading.millivolts is not None):
@@ -136,18 +140,35 @@ def drainMessage(summary, reading, readyRanges):
     counts = sorted((entry.get("sessions", 0) for entry in summary["drain"]["buckets"]), reverse=True)
     best = counts[READY_BUCKETS - 1] if len(counts) >= READY_BUCKETS else 0
     if (best < 1):
-        return Line(LEARNING, FIRST_FIGURES_TEXT)
+        # the monthly figure counts any unbroken step, so it can exist before a bucket has a session of three
+        if (counts and counts[0] > 0):
+            return Line(LEARNING, WEAR_DEPTH_TEXT)
+        return Line(LEARNING, WEAR_STARTS_TEXT if hasUse else FIRST_FIGURES_TEXT)
     left = max(1, READY_SESSIONS - best)
     return Line(LEARNING, "Still learning. The wear check needs about " + str(left) + " more " + ("charge" if left == 1 else "charges") + ".")
 
 
-def useLine(summary, reading):
+def useLine(summary, reading, now):
     if (reading is not None and reading.percent is None and (reading.level is not None or reading.millivolts is not None)):
         return None
-    for month in reversed(summary["monthly"]):
-        if (month["drain"] is not None):
-            return Line(INFO, "A full charge gives about " + duration(month["drain"] * 100) + " of use.")
-    return None
+    months = [month for month in summary["monthly"] if month["drain"] is not None]
+    if (not months):
+        return None
+    chosen = months[-1]
+    # the service groups months by UTC, and a month's first days can rest on one or two steps
+    moment = time.gmtime(now)
+    if (len(months) > 1 and chosen["month"] == "%04d-%02d" % (moment.tm_year, moment.tm_mon) and moment.tm_mday <= USE_FRESH_DAYS):
+        chosen = months[-2]
+    return Line(INFO, "A full charge gives about " + duration(chosen["drain"] * 100) + " of use.")
+
+
+def chargeTimeText(minutes):
+    if (round(minutes) < 60):
+        return str(max(1, round(minutes))) + " min"
+    total = round(minutes / 5) * 5
+    hours, rest = divmod(total, 60)
+    text = str(hours) + (" hour" if hours == 1 else " hours")
+    return text if rest == 0 else text + " " + str(rest) + " min"
 
 
 def chargeTimeLine(summary):
@@ -157,7 +178,7 @@ def chargeTimeLine(summary):
     for month in reversed(summary["monthly"]):
         for power, minutes in month["charge"]:
             if (power == lastCharge["power"]):
-                return Line(INFO, "Charging from empty takes about " + duration(minutes * 100) + " on the " + powerLabel(power) + ".")
+                return Line(INFO, "Charging from 20% to 80% takes about " + chargeTimeText(minutes * 60) + " on the " + powerLabel(power) + ".")
     return None
 
 
@@ -173,11 +194,17 @@ def healthLines(summary, reading, now):
     if (not lines and anyReady):
         lines.append(Line(GOOD, GOOD_TEXT))
     # a learning or capability message is the headline only when nothing else shows
+    use = useLine(summary, reading, now)
+    message = None
     if (drainFigures is None):
-        lines.append(drainMessage(summary, reading, readyRanges))
-    for line in (useLine(summary, reading), chargeTimeLine(summary)):
-        if (line is not None):
-            lines.append(line)
+        message = drainMessage(summary, reading, use is not None)
+        lines.append(message)
+    # a drain figure next to a message saying drain can't be measured would contradict it
+    if (use is not None and (message is None or message.text not in CAPABILITY_TEXTS)):
+        lines.append(use)
+    charge = chargeTimeLine(summary)
+    if (charge is not None):
+        lines.append(charge)
     return lines[:3], readyRanges
 
 

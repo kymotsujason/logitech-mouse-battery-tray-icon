@@ -1,3 +1,4 @@
+import calendar
 import sys
 import time
 import unittest
@@ -54,7 +55,17 @@ class LineTests(unittest.TestCase):
 
     def testLearningWithoutThreeBucketsShowsAClock(self):
         value = summary(drain={"buckets": readyBuckets((80,), 30.0, (30.0, 30.0, 30.0)), "largeSteps": False})
-        self.assertEqual(self.lines(value), ([(health.LEARNING, "Still learning. The first figures come after a few charges.")], health.SYMBOL_CLOCK))
+        self.assertEqual(self.lines(value), ([(health.LEARNING, "Still learning. The wear check needs charges that run the battery down to about 55%.")], health.SYMBOL_CLOCK))
+
+    def testLearningNamesTheDepthWhenOnlyOneOrTwoRangesHaveSessions(self):
+        for sessions in ((9, 0, 0, 0, 0, 0), (30, 12, 0, 0, 0, 0), (0, 0, 0, 0, 0, 3)):
+            buckets = [bucket(top, sessions=count) for top, count in zip((80, 70, 60, 50, 40, 30), sessions)]
+            value = summary(drain={"buckets": buckets, "largeSteps": False})
+            self.assertEqual(self.lines(value)[0], [(health.LEARNING, "Still learning. The wear check needs charges that run the battery down to about 55%.")], sessions)
+
+    def testLearningWithAUseFigureButNoSessionsSaysTheWearCheckStarts(self):
+        monthly = [{"month": "2026-10", "drain": 25.0, "charge": [], "drained": 0, "sessions": 1}]
+        self.assertEqual(self.lines(summary(monthly=monthly))[0][0], (health.LEARNING, "Still learning. The wear check starts after a few more charges."))
 
     def testLearningCountsDownTheChargesLeftInTheThirdBestRange(self):
         def learning(sessions):
@@ -75,7 +86,7 @@ class LineTests(unittest.TestCase):
     def testTheUseLineComesFromTheNewestMonthWithADrainFigure(self):
         monthly = [{"month": "2026-09", "drain": 25.0, "charge": [], "drained": 0, "sessions": 1}, {"month": "2026-10", "drain": None, "charge": [], "drained": 0, "sessions": 1}]
         lines, symbol = self.lines(summary(monthly=monthly))
-        self.assertEqual(lines, [(health.LEARNING, "Still learning. The first figures come after a few charges."), (health.INFO, "A full charge gives about 42 hours of use.")])
+        self.assertEqual(lines, [(health.LEARNING, "Still learning. The wear check starts after a few more charges."), (health.INFO, "A full charge gives about 42 hours of use.")])
         self.assertEqual(symbol, health.SYMBOL_CLOCK)
         short = [{"month": "2026-10", "drain": 0.25, "charge": [], "drained": 0, "sessions": 1}]
         self.assertEqual(self.lines(summary(monthly=short))[0][1], (health.INFO, "A full charge gives about 25 min of use."))
@@ -90,11 +101,14 @@ class LineTests(unittest.TestCase):
     def testTheChargeTimeLineNamesTheLastCharger(self):
         good = {"buckets": readyBuckets((80, 70, 60), 30.0, (29.0, 30.0, 31.0)), "largeSteps": False}
         monthly = [{"month": "2026-10", "drain": 25.0, "charge": [[1, 0.9], [2, 0.42]], "drained": 0, "sessions": 1}]
-        for power, text in ((2, "Charging from empty takes about 42 min on the wireless charger."), (1, "Charging from empty takes about 2 hours on the cable.")):
+        for power, text in ((2, "Charging from 20% to 80% takes about 25 min on the wireless charger."), (1, "Charging from 20% to 80% takes about 54 min on the cable.")):
             lastCharge = {"kind": 1, "startAt": NOW - 3600, "endAt": NOW, "startPercent": 20, "endPercent": 100, "power": power, "readingCount": 40, "slowCount": 0, "errorCount": 0, "inferred": 0}
             lines = self.lines(summary(monthly=monthly, lastCharge=lastCharge, drain=good))[0]
             self.assertEqual([kind for kind, line in lines], [health.GOOD, health.INFO, health.INFO])
             self.assertEqual(lines[2][1], text)
+
+    def testTheChargeTimeReadsInMinutesThenHoursAndFiveMinutes(self):
+        self.assertEqual([health.chargeTimeText(minutes) for minutes in (0.2, 25.2, 54, 59.4, 59.6, 60, 62, 96, 100, 118, 120, 121, 150)], ["1 min", "25 min", "54 min", "59 min", "1 hour", "1 hour", "1 hour", "1 hour 35 min", "1 hour 40 min", "2 hours", "2 hours", "2 hours", "2 hours 30 min"])
 
     def testTheChargeTimeLineNeedsALastChargeWithAFigure(self):
         monthly = [{"month": "2026-10", "drain": 25.0, "charge": [[1, 0.9]], "drained": 0, "sessions": 1}]
@@ -106,6 +120,28 @@ class LineTests(unittest.TestCase):
         rough = hidpp.BatteryReading(None, 0, level="good")
         monthly = [{"month": "2026-10", "drain": 25.0, "charge": [], "drained": 0, "sessions": 1}]
         self.assertEqual(self.lines(summary(wakeSupport=False, monthly=monthly), rough)[0], [(health.LEARNING, health.ROUGH_TEXT)])
+
+    def testNoUseLineAfterAMessageSayingDrainCantBeMeasured(self):
+        monthly = [{"month": "2026-10", "drain": 25.0, "charge": [], "drained": 0, "sessions": 1}]
+        large = summary(monthly=monthly, drain={"buckets": readyBuckets((), 0, ()), "largeSteps": True})
+        self.assertEqual(self.lines(large)[0], [(health.LEARNING, health.LARGE_STEPS_TEXT)])
+        unseen = summary(monthly=monthly, wakesVisible=False)
+        self.assertEqual(self.lines(unseen)[0], [(health.LEARNING, health.WAKES_UNSEEN_TEXT)])
+        noWakes = summary(monthly=monthly, wakeSupport=False)
+        self.assertEqual(self.lines(noWakes)[0], [(health.LEARNING, health.NO_WAKES_TEXT)])
+        voltage = hidpp.BatteryReading(None, 0, millivolts=3850)
+        self.assertEqual(self.lines(summary(wakeSupport=False, monthly=monthly), voltage)[0], [(health.LEARNING, health.VOLTAGE_TEXT)])
+
+    def testTheUseLineSkipsAMonthThatJustStarted(self):
+        monthly = [{"month": "2026-12", "drain": 25.0, "charge": [], "drained": 0, "sessions": 1}, {"month": "2027-01", "drain": 0.5, "charge": [], "drained": 0, "sessions": 1}]
+        value = summary(monthly=monthly)
+        lastDay = calendar.timegm((2027, 1, 7, 23, 59, 59, 0, 0, 0))
+        nextDay = calendar.timegm((2027, 1, 8, 0, 0, 0, 0, 0, 0))
+        useText = lambda moment: health.assess(value, reading(), moment).lines[-1].text
+        self.assertEqual(useText(lastDay), "A full charge gives about 42 hours of use.")
+        self.assertEqual(useText(nextDay), "A full charge gives about 50 min of use.")
+        # without an earlier month there's nothing to fall back on
+        self.assertEqual(health.assess(summary(monthly=monthly[1:]), reading(), lastDay).lines[-1].text, "A full charge gives about 50 min of use.")
 
     def testAnUnchangedBatteryIsDoingWell(self):
         value = summary(drain={"buckets": readyBuckets((80, 70, 60), 30.0, (29.0, 30.0, 31.0)), "largeSteps": False})
@@ -193,6 +229,8 @@ class LineTests(unittest.TestCase):
         value = summary(lastError=NOW, monthly=monthly, lastCharge=lastCharge, drain={"buckets": readyBuckets((80, 70, 60), 30.0, (24.0, 24.0, 24.0)), "largeSteps": False})
         lines = self.lines(value)[0]
         self.assertEqual([kind for kind, text in lines], [health.ALERT, health.DRAIN, health.INFO])
+        self.assertEqual(lines[0][1], health.CHARGING_ERROR_TEXT)
+        self.assertTrue(lines[1][1].startswith("A charge lasts about 20% less"))
         self.assertEqual(lines[2][1], "A full charge gives about 42 hours of use.")
 
 

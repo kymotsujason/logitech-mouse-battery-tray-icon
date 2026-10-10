@@ -257,6 +257,10 @@ class LevelChart(Chart):
         if (self.isCharged(slot)):
             return QColor(self.theme.green)
         value = slot[2] if self.isSpan() else slotValue(slot)
+        if (self.rough and value is not None):
+            # a rough level's bar holds the height it's drawn at, and the icon judges the level itself
+            name = next((name for name, height in LEVEL_HEIGHTS.items() if height == value), None)
+            value = hidpp.ROUGH_WARNING_PERCENTS.get(name, value)
         if (value is not None and value <= icon.RED_PERCENT):
             return QColor(self.theme.red)
         return QColor(self.theme.blue)
@@ -351,11 +355,12 @@ class LevelChart(Chart):
         if (not self.isSpan()):
             moment = time.localtime(slot[0])
             when = mice.DAY_NAMES[moment.tm_wday] + time.strftime(" %H:%M", moment)
+            charging = ", charging" if slot[4] else ""
             if (self.voltage):
-                return when + ", " + str(slot[3]) + " mV"
+                return when + ", " + str(slot[3]) + " mV" + charging
             if (slot[1] is None):
-                return when + ", " + str(slot[2])
-            return when + ", " + str(slot[1]) + "%"
+                return when + ", " + str(slot[2]) + charging
+            return when + ", " + str(slot[1]) + "%" + charging
         begin = time.localtime(start)
         if (self.rangeName == "month"):
             when = mice.MONTH_NAMES[begin.tm_mon - 1] + " " + str(begin.tm_mday) + time.strftime(", %H:%M to ", begin) + time.strftime("%H:%M", time.localtime(slot[0]))
@@ -468,7 +473,7 @@ class LineChart(Chart):
         return [QColor(self.theme.blue)]
 
     def area(self):
-        return super().area().adjusted(0, 22, 0, 0)
+        return super().area().adjusted(0, 30, 0, 0)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -518,7 +523,9 @@ class LineChart(Chart):
         painter.setPen(QPen(color, 2, cap=Qt.PenCapStyle.RoundCap, join=Qt.PenJoinStyle.RoundJoin))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawPath(path)
-        for position in positions:
+        # a long history packs the points closer than a dot is wide, so only the newest keeps its dot
+        crowded = any(end.x() - start.x() < 2 * (DOT_RADIUS + DOT_RING) for start, end in zip(positions, positions[1:]))
+        for position in positions[-1:] if crowded else positions:
             self.paintDot(painter, position, color)
 
     def paintLegend(self, painter, legend):

@@ -356,7 +356,26 @@ class LevelChartTests(ChartCase):
         image = rendered(chart)
         for index in range(84):
             bar = chart.barRect(index)
-            self.assertGreater(image.pixelColor(int(bar.center().x()), int(bar.bottom() - 1)).alpha(), 120, index)
+            self.assertGreater(image.pixelColor(int(bar.center().x()), int(bar.center().y())).alpha(), 120, index)
+
+    def testARoughLowBarIsRedLikeTheIconAndGoodIsNot(self):
+        chart = self.make(charts.LevelChart())
+        chart.resize(700, 238)
+        heights = charts.LEVEL_HEIGHTS
+        chart.setSlots([[NOW - 7200 * (3 - index), None, name, None, False] for index, name in enumerate(("low", "critical", "normal", "good"))], rough=True)
+        self.assertEqual([chart.barColor(index).name() for index in range(4)], [QColor(chart.theme.red).name()] * 2 + [QColor(chart.theme.blue).name()] * 2)
+        chart.setSlots([[NOW - 86400, 5, heights["low"], 0], [NOW, heights["good"], heights["good"], 0]], rangeName="month", rough=True)
+        self.assertEqual([chart.barColor(index).name() for index in range(2)], [QColor(chart.theme.red).name(), QColor(chart.theme.blue).name()])
+
+    def testTheDayAndWeekReadoutsSayCharging(self):
+        chart = self.make(charts.LevelChart())
+        chart.setSlots([[NOW - 7200, 85, None, None, True], [NOW, 85, None, None, False]])
+        self.assertTrue(chart.hoverText(0).endswith("85%, charging"))
+        self.assertTrue(chart.hoverText(1).endswith("85%"))
+        chart.setSlots([[NOW - 7200, None, None, 3900, True]], voltage=True)
+        self.assertTrue(chart.hoverText(0).endswith("3900 mV, charging"))
+        chart.setSlots([[NOW - 7200, None, "good", None, True]], rough=True)
+        self.assertTrue(chart.hoverText(0).endswith("good, charging"))
 
     def testABarIsAtMostTwentyFourPixelsWide(self):
         self.assertEqual(charts.MAX_BAR_WIDTH, 24)
@@ -559,6 +578,27 @@ class LineChartTests(ChartCase):
             self.assertEqual(drawn, [QColor(expected[0]).name(), QColor(expected[1]).name(), QColor(theme.secondary).name()])
             self.assertNotIn(QColor(theme.orange).name(), drawn)
 
+    def testThePlotSitsBelowTheHeadline(self):
+        chart = self.hours()
+        self.assertGreaterEqual(chart.area().top(), charts.TOP - 2 + 26 + 4)
+
+    def testLongHistoriesKeepOnlyTheNewestDot(self):
+        months = ["%04d-%02d" % (2017 + index // 12, index % 12 + 1) for index in range(120)]
+        chart = self.make(charts.LineChart("Hours per Charge", "h", charts.HOURS_EMPTY, "h"))
+        chart.resize(700, 238)
+        chart.setSeries({"hours": [(month, 40.0) for month in months]})
+        dots = []
+        with unittest.mock.patch.object(charts.Chart, "paintDot", lambda self, painter, center, color: dots.append(center.x())):
+            rendered(chart)
+        self.assertEqual(len(dots), 1)
+        self.assertAlmostEqual(dots[0], chart.area().right(), delta=0.01)
+        # twenty-five months across the same width are about 25 px apart, so every one keeps its dot
+        chart.setSeries({"hours": [(month, 40.0) for month in months[:25]]})
+        dots.clear()
+        with unittest.mock.patch.object(charts.Chart, "paintDot", lambda self, painter, center, color: dots.append(center.x())):
+            rendered(chart)
+        self.assertEqual(len(dots), 25)
+
     def testEveryMonthsPointGetsADot(self):
         chart = self.hours()
         dots = []
@@ -570,7 +610,6 @@ class LineChartTests(ChartCase):
         self.assertFalse(hasattr(charts, "HOURS_CAPTION"))
         chart = self.hours()
         self.assertFalse(hasattr(chart, "caption"))
-        self.assertEqual(chart.area().bottom(), chart.height() - charts.BOTTOM)
 
 
     def testTheBigNumberIsTheNewestMonthAcrossEverySeries(self):
