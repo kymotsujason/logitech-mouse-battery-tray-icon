@@ -5,7 +5,7 @@ import time
 from PyQt6 import sip
 from PyQt6.QtCore import QAbstractAnimation, QElapsedTimer, QPoint, QPointF, QRectF, QSize, QSizeF, Qt, QTimer, QVariantAnimation, pyqtSignal, pyqtSlot
 from PyQt6.QtDBus import QDBusMessage
-from PyQt6.QtGui import QColor, QFont, QFontMetricsF, QIcon, QPainter, QPen, QRegion
+from PyQt6.QtGui import QColor, QFont, QFontMetricsF, QIcon, QPainter, QPen, QPixmap, QRegion
 from PyQt6.QtWidgets import QApplication, QGraphicsOpacityEffect, QLabel, QScrollBar, QWidget
 
 import charts
@@ -367,6 +367,8 @@ class ChoiceMenu(QWidget):
         self.marked = 0
         self.hover = 0
         self.onPick = None
+        self.onReopen = None
+        self.anchor = QRectF()
         self.pressed = False
         self.returnTo = None
         self.returnReason = Qt.FocusReason.OtherFocusReason
@@ -384,11 +386,13 @@ class ChoiceMenu(QWidget):
         self.setAccessibleName(SLEEP_LABEL)
         self.hide()
 
-    def open(self, choices, value, anchor, onPick):
+    def open(self, choices, value, anchor, onPick, onReopen=None):
         self.choices = choices
         self.marked = next((index for index, (choice, name) in enumerate(choices) if choice == value), 0)
         self.setHover(self.marked)
         self.onPick = onPick
+        self.onReopen = onReopen
+        self.anchor = anchor
         self.pressed = False
         self.setGeometry(self.owner.rect())
         width = max(anchor.width(), CHOICE_TEXT_X + max(QFontMetricsF(font(13)).horizontalAdvance(name) for choice, name in choices) + CHOICE_PADDING * 3)
@@ -402,9 +406,11 @@ class ChoiceMenu(QWidget):
             # kept inside the window the panel put another choice under part of the button, where a second click would pick it, so it opens above the button instead
             self.panel.moveBottom(max(anchor.top() - CHOICE_GAP, CHOICE_MARGIN + height))
         # closing from the keys gives the focus back where it was, so Tab carries on from the button
+        # a reopen during a close finds the focus on the menu already, so the old place is kept
         focused = self.owner.focusWidget()
-        self.returnTo = focused if focused is not self else None
-        self.returnReason = Qt.FocusReason.TabFocusReason if getattr(focused, "keyFocus", False) else Qt.FocusReason.OtherFocusReason
+        if (focused is not self):
+            self.returnTo = focused
+            self.returnReason = Qt.FocusReason.TabFocusReason if getattr(focused, "keyFocus", False) else Qt.FocusReason.OtherFocusReason
         self.origin = anchor.center()
         self.closing = False
         self.show()
@@ -414,9 +420,11 @@ class ChoiceMenu(QWidget):
         self.animation.stop()
         if (duration > 0):
             # reopening mid close grows back from where the fade got to
-            self.animation.setStartValue(self.progress if self.isVisible() and self.progress < 1.0 else 0.0)
+            start = self.progress if self.isVisible() and self.progress < 1.0 else 0.0
+            self.animation.setStartValue(start)
             self.animation.setEndValue(1.0)
             self.animation.setDuration(duration)
+            self.progress = start
             self.animation.start()
         else:
             self.progress = 1.0
@@ -457,14 +465,17 @@ class ChoiceMenu(QWidget):
             self.animation.setStartValue(self.progress)
             self.animation.setEndValue(0.0)
             self.animation.setDuration(duration)
+            self.progress = self.animation.startValue()
             self.animation.start()
         else:
             self.hide()
 
     def hideEvent(self, event):
-        self.animation.stop()
-        self.progress = 1.0
-        self.closing = False
+        # a minimize sends children a spontaneous hide without hiding them, and the fade has to carry on through it
+        if (not event.spontaneous()):
+            self.animation.stop()
+            self.progress = 1.0
+            self.closing = False
         # a hidden widget that held focus would pass it to the next control, so it goes back to where it came from, ring and all, before Qt does that
         if (self.owner.focusWidget() is self):
             if (self.returnTo is not None):
@@ -481,9 +492,11 @@ class ChoiceMenu(QWidget):
             self.setHover(index)
 
     def mousePressEvent(self, event):
-        # a press of any button away from the panel closes the menu, while only the left one picks
         if (self.closing):
+            if (event.button() == Qt.MouseButton.LeftButton and self.anchor.contains(event.position())):
+                self.onReopen()
             return
+        # a press of any button away from the panel closes the menu, while only the left one picks
         if (not self.panel.contains(event.position())):
             self.dismiss()
             return
@@ -523,14 +536,32 @@ class ChoiceMenu(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        theme = self.owner.theme
-        frost = self.owner.frost()
+        if (self.progress >= 1.0):
+            self.paintMenu(painter)
+            return
         # the menu opens over its button, so it grows out of the button instead of its own center
         scale = 0.97 + 0.03 * self.progress
         painter.setOpacity(self.progress)
         painter.translate(self.origin)
         painter.scale(scale, scale)
         painter.translate(-self.origin)
+        painter.drawPixmap(0, 0, self.paintLayer())
+
+    def paintLayer(self):
+        # drawn whole at full opacity first, so the panel doesn't show its own shadow through itself while it fades
+        ratio = self.devicePixelRatioF()
+        layer = QPixmap(int(self.width() * ratio), int(self.height() * ratio))
+        layer.setDevicePixelRatio(ratio)
+        layer.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(layer)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        self.paintMenu(painter)
+        painter.end()
+        return layer
+
+    def paintMenu(self, painter):
+        theme = self.owner.theme
+        frost = self.owner.frost()
         glass.paintShadow(painter, self.panel, CHOICE_RADIUS, theme)
         if (frost is not None):
             glass.paintPanel(painter, self.panel, CHOICE_RADIUS, frost, theme, strong=True, offset=QPointF(self.mapTo(self.owner, QPoint(0, 0))))
@@ -593,7 +624,7 @@ class PopupButton(QWidget):
 
     def openMenu(self):
         anchor = QRectF(QPointF(self.mapTo(self.owner, QPoint(0, 0))), QSizeF(self.size()))
-        self.owner.choiceMenu.open(SLEEP_CHOICES, self.seconds, anchor, self.pick)
+        self.owner.choiceMenu.open(SLEEP_CHOICES, self.seconds, anchor, self.pick, self.openMenu)
 
     def pick(self, seconds):
         self.setSeconds(seconds)

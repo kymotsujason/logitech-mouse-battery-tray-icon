@@ -1747,6 +1747,7 @@ class WindowTests(WindowCase):
         QTest.keyClick(menu, Qt.Key.Key_Escape)
         self.assertTrue(menu.isVisibleTo(window))
         self.assertTrue(menu.closing)
+        self.assertIs(window.focusWidget(), menu)
         menu.animation.setCurrentTime(menu.animation.duration())
         self.assertFalse(menu.isVisibleTo(window))
         self.assertIs(window.focusWidget(), window.popup)
@@ -1765,6 +1766,7 @@ class WindowTests(WindowCase):
 
     def testAClosingSleepMenuTakesNoInputAndTheButtonOpensItAgain(self):
         window = self.opened(entry())
+        QTest.qWaitForWindowExposed(window)
         window.motionFactor = 1.0
         window.popup.setSeconds(0)
         QTest.mouseClick(window.popup, Qt.MouseButton.LeftButton)
@@ -1778,10 +1780,13 @@ class WindowTests(WindowCase):
         self.assertEqual((picked, menu.closing), ([], True))
         menu.animation.setCurrentTime(menu.animation.duration() // 2)
         halfway = menu.progress
-        window.popup.openMenu()
+        QTest.mouseClick(window.windowHandle(), Qt.MouseButton.LeftButton, pos=self.buttonCenter(window))
         self.assertFalse(menu.closing)
+        self.assertEqual(menu.animation.endValue(), 1.0)
+        self.assertEqual(menu.animation.state(), QAbstractAnimation.State.Running)
         self.assertGreater(menu.progress, 0.0)
         self.assertLessEqual(menu.progress, halfway)
+        self.assertEqual(picked, [])
         menu.animation.setCurrentTime(menu.animation.duration())
         self.assertTrue(menu.isVisibleTo(window))
         self.assertEqual(menu.progress, 1.0)
@@ -1795,6 +1800,79 @@ class WindowTests(WindowCase):
         self.assertEqual((menu.isVisibleTo(window), menu.progress), (True, 1.0))
         QTest.keyClick(menu, Qt.Key.Key_Escape)
         self.assertFalse(menu.isVisibleTo(window))
+
+    def testADoubleClickOnARowThroughTheWindowPicksItOnceAndTouchesNothingUnder(self):
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))
+        QTest.qWaitForWindowExposed(window)
+        window.motionFactor = 1.0
+        window.popup.setSeconds(0)
+        QTest.mouseClick(window.popup, Qt.MouseButton.LeftButton)
+        menu = window.choiceMenu
+        menu.animation.setCurrentTime(menu.animation.duration())
+        picked = []
+        window.sleepCheckChanged.connect(picked.append)
+        before = (window.segments.index, window.levelRange, window.selected)
+        QTest.mouseDClick(window.windowHandle(), Qt.MouseButton.LeftButton, pos=self.rowCenter(menu, 2))
+        self.assertEqual(picked, [historyWindow.SLEEP_CHOICES[2][0]])
+        self.assertEqual((window.segments.index, window.levelRange, window.selected), before)
+        self.assertTrue(menu.closing)
+
+    def testReopeningMidCloseKeepsWhereFocusGoesBack(self):
+        window = self.opened(entry())
+        window.motionFactor = 1.0
+        window.popup.setFocus(Qt.FocusReason.TabFocusReason)
+        window.popup.keyFocus = True
+        QTest.keyClick(window.popup, Qt.Key.Key_Space)
+        menu = window.choiceMenu
+        menu.animation.setCurrentTime(menu.animation.duration())
+        QTest.keyClick(menu, Qt.Key.Key_Escape)
+        window.popup.openMenu()
+        QTest.keyClick(menu, Qt.Key.Key_Escape)
+        menu.animation.setCurrentTime(menu.animation.duration())
+        self.assertFalse(menu.isVisibleTo(window))
+        self.assertIs(window.focusWidget(), window.popup)
+        self.assertEqual(menu.returnReason, Qt.FocusReason.TabFocusReason)
+
+    def testMinimizingMidCloseStillHidesTheSleepMenu(self):
+        window = self.opened(entry())
+        window.motionFactor = 1.0
+        QTest.mouseClick(window.popup, Qt.MouseButton.LeftButton)
+        menu = window.choiceMenu
+        menu.animation.setCurrentTime(menu.animation.duration())
+        QTest.keyClick(menu, Qt.Key.Key_Escape)
+        window.showMinimized()
+        QApplication.processEvents()
+        window.showNormal()
+        QApplication.processEvents()
+        self.assertTrue(menu.closing)
+        menu.animation.setCurrentTime(menu.animation.duration())
+        self.assertFalse(menu.isVisibleTo(window))
+
+    def testAFadingSleepMenuIsDrawnThroughOneLayer(self):
+        window = self.opened(entry())
+        window.motionFactor = 1.0
+        QTest.mouseClick(window.popup, Qt.MouseButton.LeftButton)
+        menu = window.choiceMenu
+        menu.animation.setCurrentTime(menu.animation.duration())
+        with mock.patch.object(menu, "paintLayer", wraps=menu.paintLayer) as layer:
+            menu.grab()
+            self.assertEqual(layer.call_count, 0)
+            menu.progress = 0.5
+            menu.grab()
+            self.assertEqual(layer.call_count, 1)
+
+    def testTheSleepMenuNeverPaintsAFullFrameWhenItStartsToMove(self):
+        window = self.opened(entry())
+        window.motionFactor = 1.0
+        QTest.mouseClick(window.popup, Qt.MouseButton.LeftButton)
+        menu = window.choiceMenu
+        menu.animation.setCurrentTime(menu.animation.duration())
+        QTest.keyClick(menu, Qt.Key.Key_Escape)
+        menu.animation.setCurrentTime(menu.animation.duration())
+        self.assertFalse(menu.isVisibleTo(window))
+        self.assertEqual(menu.progress, 1.0)
+        QTest.keyClick(window.popup, Qt.Key.Key_Space)
+        self.assertLess(menu.progress, 1.0)
 
     def testTheMenuIsMadeOnceAndClosesWithTheWindow(self):
         window, menu = self.openMenu()
