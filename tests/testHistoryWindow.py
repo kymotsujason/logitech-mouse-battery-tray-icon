@@ -657,7 +657,7 @@ class WindowTests(WindowCase):
 
     def testEveryAnimationUsesTheSharedEaseOut(self):
         window = self.opened(entry())
-        for animation in (window.segments.animation, window.rangeControl.animation, window.glowAnimation, window.paneCrossfade.animation, window.chartCrossfade.animation, window.sidebar.pillAnimation):
+        for animation in (window.segments.animation, window.rangeControl.animation, window.glowAnimation, window.paneCrossfade.animation, window.chartCrossfade.animation, window.sidebar.pillAnimation, window.levelChart.morph):
             self.assertEqual(animation.easingCurve().type(), QEasingCurve.Type.BezierSpline)
             self.assertEqual(round(animation.easingCurve().valueForProgress(0.25), 3), 0.775)
 
@@ -842,6 +842,19 @@ class WindowTests(WindowCase):
         self.assertEqual(window.segments.thumb, window.segments.segmentRect(2))
         self.assertEqual(window.sidebar.pill, window.sidebar.rowRect(window.sidebar.selectedIndex()))
         self.assertEqual(window.glow, QColor("#FF0000"))
+
+    def testTurningMotionOffFinishesTheBarMorph(self):
+        window = self.opened(entry())
+        window.motionFactor = 1.0
+        newer = reply("02bc524c")
+        newer["recent"] = [[NOW + 60, 20, None, None, False]]
+        saved = window.replies["02bc524c"]
+        window.replies["02bc524c"] = historyWindow.Reply(newer, saved.revision, saved.askedAt)
+        window.refresh()
+        self.assertEqual(window.levelChart.morph.state(), QAbstractAnimation.State.Running)
+        window.setPortal("reduced-motion", 1)
+        self.assertEqual(window.levelChart.morph.state(), QAbstractAnimation.State.Stopped)
+        self.assertEqual(window.levelChart.morphProgress, 1.0)
 
     def testTheThumbGrowsAsItSlides(self):
         window = self.opened(entry())
@@ -1132,6 +1145,56 @@ class WindowTests(WindowCase):
         window = self.opened(entry())
         self.assertEqual(self.watcher.levelAsks, [])
         self.assertEqual(window.levelChart.slots, reply("02bc524c")["recent"])
+
+    def testPickingAnotherMouseDoesNotMorphTheBars(self):
+        other = reply("11111111")
+        other["recent"] = [[NOW + 60, 20, None, None, False]]
+        self.watcher.answers["11111111"] = (other, None)
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S", reading=hidpp.BatteryReading(18, 0)))
+        window.motionFactor = 1.0
+        self.assertTrue(window.levelChart.isVisible())
+        window.pick("11111111")
+        self.assertEqual(window.levelChart.slots, other["recent"])
+        self.assertIsNone(window.levelChart.fromRects)
+        self.assertNotEqual(window.levelChart.morph.state(), QAbstractAnimation.State.Running)
+
+    def testBarsReturningFromAMessageDoNotMorph(self):
+        window = self.opened(entry())
+        window.motionFactor = 1.0
+        self.assertTrue(window.levelChart.isVisible())
+        saved = window.replies.pop("02bc524c")
+        window.refresh()
+        self.assertFalse(window.levelChart.isVisible())
+        newer = reply("02bc524c")
+        newer["recent"] = [[NOW + 60, 20, None, None, False]]
+        window.replies["02bc524c"] = historyWindow.Reply(newer, saved.revision, saved.askedAt)
+        window.refresh()
+        self.assertTrue(window.levelChart.isVisible())
+        self.assertEqual(window.levelChart.slots, newer["recent"])
+        self.assertIsNone(window.levelChart.fromRects)
+
+    def testANewReadingMorphsTheBars(self):
+        window = self.opened(entry())
+        window.motionFactor = 1.0
+        newer = reply("02bc524c")
+        newer["recent"] = [[NOW + 60, 20, None, None, False]]
+        saved = window.replies["02bc524c"]
+        window.replies["02bc524c"] = historyWindow.Reply(newer, saved.revision, saved.askedAt)
+        window.refresh()
+        self.assertIsNotNone(window.levelChart.fromRects)
+        self.assertEqual(window.levelChart.morph.state(), QAbstractAnimation.State.Running)
+
+    def testClosingTheWindowFinishesTheBarMorph(self):
+        window = self.opened(entry())
+        window.motionFactor = 1.0
+        newer = reply("02bc524c")
+        newer["recent"] = [[NOW + 60, 20, None, None, False]]
+        saved = window.replies["02bc524c"]
+        window.replies["02bc524c"] = historyWindow.Reply(newer, saved.revision, saved.askedAt)
+        window.refresh()
+        self.assertEqual(window.levelChart.morph.state(), QAbstractAnimation.State.Running)
+        window.close()
+        self.assertEqual(window.levelChart.morphProgress, 1.0)
 
     def testAStateChangeKeepsTheLevelChartsReadout(self):
         window = self.opened(entry())

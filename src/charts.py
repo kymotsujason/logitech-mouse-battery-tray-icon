@@ -137,6 +137,10 @@ class LevelChart(Chart):
         # every state change sets the slots again, so the bar under the pointer keeps its readout until the range changes, a message takes the bars' place, or the bar is gone
         if (rangeName != self.rangeName or message is not None or (self.hover is not None and self.hover >= len(slots))):
             self.hover = None
+        if (self.isVisible() and rangeName == self.rangeName and message is None and self.message is None and slots == self.slots and voltage == self.voltage and rough == self.rough):
+            # nothing changed, so a morph still running carries on
+            self.update()
+            return
         morphs = self.morphMs > 0 and self.isVisible() and rangeName == self.rangeName and message is None and self.message is None and len(slots) == len(self.slots) and slots != self.slots
         # taken before the slots change, so a morph in progress carries on from what's drawn
         rects = [self.shownRect(index) for index in range(len(self.slots))] if morphs else None

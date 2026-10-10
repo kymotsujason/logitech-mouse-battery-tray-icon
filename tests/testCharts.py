@@ -10,7 +10,7 @@ import unittest.mock
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 from PyQt6 import sip
-from PyQt6.QtCore import QPointF
+from PyQt6.QtCore import QAbstractAnimation, QPointF
 from PyQt6.QtGui import QFont, QFontMetrics, QImage
 from PyQt6.QtWidgets import QApplication
 
@@ -161,6 +161,37 @@ class LevelChartTests(ChartCase):
             self.assertIsNone(chart.fromRects)
             self.assertEqual(chart.morphProgress, 1.0)
             chart.setSlots(slots(percent=40))
+            self.assertIsNone(chart.fromRects)
+
+    def testARefreshThatChangesNothingLeavesARunningMorphAlone(self):
+        chart = self.make(charts.LevelChart())
+        chart.resize(700, 238)
+        chart.morphMs = 100
+        chart.setSlots(slots(percent=40))
+        chart.show()
+        chart.setSlots(slots(percent=80))
+        chart.morph.setCurrentTime(50)
+        started = list(chart.fromRects)
+        chart.setSlots(slots(percent=80))
+        self.assertEqual(chart.morph.state(), QAbstractAnimation.State.Running)
+        self.assertEqual(chart.fromRects, started)
+        self.assertEqual(chart.morph.currentTime(), 50)
+
+    def testTheBarsAreDrawnFromTheirMorphingRects(self):
+        chart = self.make(charts.LevelChart())
+        chart.resize(700, 238)
+        chart.morphMs = 100
+        chart.setSlots(slots(percent=90))
+        chart.show()
+        old = chart.barRect(3)
+        chart.setSlots(slots(percent=10))
+        # progress stays at 0, so the old tall bar is what's drawn
+        self.assertEqual(chart.morphProgress, 0.0)
+        image = rendered(chart)
+        self.assertGreater(image.pixelColor(int(old.center().x()), int(old.y() + 5)).alpha(), 0)
+        chart.morph.setCurrentTime(100)
+        image = rendered(chart)
+        self.assertEqual(image.pixelColor(int(old.center().x()), int(old.y() + 5)).alpha(), 0)
 
     def testAZeroDurationOrAHiddenChartChangesAtOnce(self):
         chart = self.make(charts.LevelChart())

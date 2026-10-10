@@ -916,6 +916,7 @@ class HistoryWindow(QWidget):
         self.loadingTimer = mice.singleShotTimer(self, LOADING_DELAY_MS, self.showLoading)
         # the mouse the level chart's content belongs to, and the (mouse, range) the loading delay already ran out for
         self.levelChartKey = None
+        self.levelChartWasShown = False
         self.loadingShown = None
         self.blurTimer = mice.singleShotTimer(self, BLUR_CHECK_MS[0], self.checkBlur)
         self.blurChecks = 0
@@ -1240,6 +1241,8 @@ class HistoryWindow(QWidget):
         self.loadingShown = None
         self.paneCrossfade.finish()
         self.chartCrossfade.finish()
+        if (self.levelChart.morph.state() == QAbstractAnimation.State.Running):
+            self.levelChart.morph.setCurrentTime(self.levelChart.morph.duration())
         self.choiceMenu.hide()
         for timer in (self.fetchTimer, self.retryTimer, self.ageTimer, self.blurTimer, self.levelRetryTimer, self.loadingTimer):
             timer.stop()
@@ -1440,6 +1443,7 @@ class HistoryWindow(QWidget):
             self.showParts(summary=True, history=False, paneMessage=False)
             self.fillForm(None)
         else:
+            self.levelChartWasShown = self.levelChart.isVisible()
             self.showParts(summary=True, history=True, paneMessage=False)
             self.fillHealth(theme)
             self.fillCharts(reply.summary, mouse.reading, mouse.key)
@@ -1491,9 +1495,10 @@ class HistoryWindow(QWidget):
 
     def fillLevels(self, summary, key, voltage, rough):
         rangeName = self.levelRange
-        # a morph never runs on top of a crossfade of the same chart
+        # bars morph only for a refresh of the bars the user was looking at, not under a crossfade, for another mouse, or after a message hid them
         crossfading = self.chartCrossfade.animation.state() == QAbstractAnimation.State.Running
-        self.levelChart.morphMs = 0 if crossfading else int(BAR_MORPH_MS * self.motionFactor)
+        steady = not crossfading and self.levelChartKey == key and self.levelChartWasShown
+        self.levelChart.morphMs = int(BAR_MORPH_MS * self.motionFactor) if steady else 0
         if (rangeName == "week"):
             # the history reply already holds the week, so the default range costs no call
             if (self.levelChartKey == key and self.levelChart.rangeName != rangeName):
