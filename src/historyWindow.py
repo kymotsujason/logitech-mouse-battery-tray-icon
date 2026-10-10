@@ -55,6 +55,8 @@ PANE_FADE_MS = 200
 # a reply from the service usually comes well inside this, so most range switches never show the word at all
 LOADING_DELAY_MS = 300
 THUMB_SLIDE_MS = 250
+MENU_OPEN_MS = 150
+MENU_CLOSE_MS = 120
 GLOW_FADE_MS = 400
 FROST_EVERY_MS = 50
 SLEEP_CHOICES = ((0, "Off"), (30, "Every 30 seconds"), (60, "Every minute"), (300, "Every 5 minutes"))
@@ -368,6 +370,13 @@ class ChoiceMenu(QWidget):
         self.returnTo = None
         self.returnReason = Qt.FocusReason.OtherFocusReason
         self.panel = QRectF()
+        self.progress = 1.0
+        self.origin = QPointF()
+        self.closing = False
+        self.animation = QVariantAnimation(self)
+        self.animation.setEasingCurve(glass.easeOut())
+        self.animation.valueChanged.connect(self.onProgress)
+        self.animation.finished.connect(self.settle)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -395,10 +404,31 @@ class ChoiceMenu(QWidget):
         focused = self.owner.focusWidget()
         self.returnTo = focused if focused is not self else None
         self.returnReason = Qt.FocusReason.TabFocusReason if getattr(focused, "keyFocus", False) else Qt.FocusReason.OtherFocusReason
+        self.origin = anchor.center()
+        self.closing = False
         self.show()
         self.raise_()
         self.setFocus()
+        duration = int(MENU_OPEN_MS * self.owner.motionFactor)
+        self.animation.stop()
+        if (duration > 0):
+            # reopening mid close grows back from where the fade got to
+            self.animation.setStartValue(self.progress if self.isVisible() and self.progress < 1.0 else 0.0)
+            self.animation.setEndValue(1.0)
+            self.animation.setDuration(duration)
+            self.animation.start()
+        else:
+            self.progress = 1.0
         self.update()
+
+    def onProgress(self, value):
+        self.progress = float(value)
+        self.update()
+
+    def settle(self):
+        if (self.closing):
+            self.closing = False
+            self.hide()
 
     def setHover(self, index):
         self.hover = index
@@ -417,9 +447,23 @@ class ChoiceMenu(QWidget):
         self.onPick(self.choices[index][0])
 
     def dismiss(self):
-        self.hide()
+        if (self.closing):
+            return
+        duration = int(MENU_CLOSE_MS * self.owner.motionFactor)
+        if (duration > 0 and self.isVisible()):
+            self.closing = True
+            self.animation.stop()
+            self.animation.setStartValue(self.progress)
+            self.animation.setEndValue(0.0)
+            self.animation.setDuration(duration)
+            self.animation.start()
+        else:
+            self.hide()
 
     def hideEvent(self, event):
+        self.animation.stop()
+        self.progress = 1.0
+        self.closing = False
         # a hidden widget that held focus would pass it to the next control, so it goes back to where it came from, ring and all, before Qt does that
         if (self.owner.focusWidget() is self):
             if (self.returnTo is not None):
@@ -429,14 +473,18 @@ class ChoiceMenu(QWidget):
         super().hideEvent(event)
 
     def mouseMoveEvent(self, event):
+        if (self.closing):
+            return
         index = self.rowAt(event.position())
         if (index is not None and index != self.hover):
             self.setHover(index)
 
     def mousePressEvent(self, event):
         # a press of any button away from the panel closes the menu, while only the left one picks
+        if (self.closing):
+            return
         if (not self.panel.contains(event.position())):
-            self.hide()
+            self.dismiss()
             return
         if (event.button() != Qt.MouseButton.LeftButton):
             return
@@ -447,7 +495,7 @@ class ChoiceMenu(QWidget):
         pass
 
     def mouseReleaseEvent(self, event):
-        if (event.button() != Qt.MouseButton.LeftButton):
+        if (self.closing or event.button() != Qt.MouseButton.LeftButton):
             return
         # a release picks only after a press inside the open menu, so the release that ends a double click on the button never does
         if (not self.pressed):
@@ -458,6 +506,8 @@ class ChoiceMenu(QWidget):
             self.choose(index)
 
     def keyPressEvent(self, event):
+        if (self.closing):
+            return
         key = event.key()
         if (key == Qt.Key.Key_Escape):
             self.dismiss()
@@ -474,6 +524,12 @@ class ChoiceMenu(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         theme = self.owner.theme
         frost = self.owner.frost()
+        # the menu opens over its button, so it grows out of the button instead of its own center
+        scale = 0.97 + 0.03 * self.progress
+        painter.setOpacity(self.progress)
+        painter.translate(self.origin)
+        painter.scale(scale, scale)
+        painter.translate(-self.origin)
         glass.paintShadow(painter, self.panel, CHOICE_RADIUS, theme)
         if (frost is not None):
             glass.paintPanel(painter, self.panel, CHOICE_RADIUS, frost, theme, strong=True, offset=QPointF(self.mapTo(self.owner, QPoint(0, 0))))
@@ -987,7 +1043,7 @@ class HistoryWindow(QWidget):
                 self.finishAnimations()
 
     def finishAnimations(self):
-        for animation in (self.glowAnimation, self.paneCrossfade.animation, self.chartCrossfade.animation, self.segments.animation, self.rangeControl.animation, self.sidebar.pillAnimation):
+        for animation in (self.glowAnimation, self.paneCrossfade.animation, self.chartCrossfade.animation, self.segments.animation, self.rangeControl.animation, self.sidebar.pillAnimation, self.choiceMenu.animation):
             if (animation.state() == QAbstractAnimation.State.Running):
                 animation.setCurrentTime(animation.duration())
 
