@@ -103,18 +103,6 @@ class MouseListTests(unittest.TestCase):
         self.mice.applyService(state(entry(percent=4, asleep=True)))
         self.assertEqual(warnings, [])
 
-    def testTheTrayKeepsWhenUPowerChangedAReadingWhateverTimeTheDeviceGave(self):
-        self.mice.applyUPower(upower.UPowerMouse(UPOWER_PATH, "02bc524c", "PRO X3", hidpp.BatteryReading(50, 0), updatedAt=time.time() - 3600))
-        heard = self.mouse().upowerHeardAt
-        self.assertLess(time.monotonic() - heard, 5)
-        self.addUPower(50)
-        self.assertEqual(self.mouse().upowerHeardAt, heard)
-        self.addUPower(49)
-        self.assertGreater(self.mouse().upowerHeardAt, heard)
-        self.mice.applyService(state(entry()))
-        self.mice.removeUPower(UPOWER_PATH)
-        self.assertIsNone(self.mouse().upowerHeardAt)
-
     def testAMouseThatLosesItsUPowerHalfTakesTheServicesSleep(self):
         self.mice.applyService(state(entry(percent=40, asleep=True, lastRead=1000.0)))
         self.addUPower(50)

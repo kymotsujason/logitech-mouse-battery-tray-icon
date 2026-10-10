@@ -167,6 +167,8 @@ class Reply:
         self.askedAt = askedAt
         recent = summary.get("recent") or []
         self.newestSlot = recent[-1][0] if recent else time.time()
+        # the percent and level the history ends on, which are None after a gap or in a history with no rows yet
+        self.newestLevel = (recent[-1][1], recent[-1][2]) if recent else (None, None)
 
 
 class HealthSymbol(QWidget):
@@ -678,14 +680,12 @@ class HistoryWindow(QWidget):
         self.lastFetch = {}
         self.upowerChangedAt = {}
         self.upowerSeen = {}
-        # the tray hears UPower before the window is built, and the service may still be holding that reading, so a UPower mouse the tray heard change within the settle time counts as changed when it was heard, whatever time the device gave its reading
-        now = time.monotonic()
+        # the reading each UPower mouse was last asked for again, so a service that never saves it costs one more ask instead of one every gap
+        self.upowerAskedAgain = {}
+        # the tray hears UPower before the window is built, so a refresh that leaves the reading alone isn't taken for a change
         for mouse in mouseList.mice:
-            if (mouse.upowerPath is None):
-                continue
-            self.upowerSeen[mouse.key] = (mouse.upowerPath, mouse.reading)
-            if (mouse.upowerHeardAt is not None and now - mouse.upowerHeardAt < UPOWER_SETTLE_SECONDS):
-                self.upowerChangedAt[mouse.key] = mouse.upowerHeardAt
+            if (mouse.upowerPath is not None):
+                self.upowerSeen[mouse.key] = (mouse.upowerPath, mouse.reading)
         self.levelRange = levelRange if levelRange in RANGE_NAMES else "week"
         # each mouse's slots per range, dropped with its history reply, since a new reply means new readings
         self.levels = {}
@@ -887,6 +887,7 @@ class HistoryWindow(QWidget):
         self.replies.clear()
         self.errors.clear()
         self.notRefreshed.clear()
+        self.upowerAskedAgain.clear()
         # an answer still on its way comes from the old service, so it's set aside
         self.pending.clear()
         # the new service writes a UPower mouse's first row after its hold, so the first fetch waits as it does after a UPower change
@@ -902,6 +903,7 @@ class HistoryWindow(QWidget):
         if (seen is not None and seen[1] == upowerMouse.reading):
             return
         self.upowerSeen[upowerMouse.key] = (upowerMouse.path, upowerMouse.reading)
+        self.upowerAskedAgain.pop(upowerMouse.key, None)
         # kept by key, so an answer to a fetch still on its way when the change came is old too
         self.upowerChangedAt[upowerMouse.key] = time.monotonic()
         if (upowerMouse.key == self.selected):
@@ -1130,6 +1132,7 @@ class HistoryWindow(QWidget):
             return
         if (summary is not None):
             self.replies[key] = Reply(summary, revision, askedAt)
+            self.askAgainIfBehind(key, self.replies[key])
             self.forgetLevels(key)
             self.errors.pop(key, None)
             self.notRefreshed.discard(key)
@@ -1141,6 +1144,17 @@ class HistoryWindow(QWidget):
             if (error == serviceState.HISTORY_UNAVAILABLE):
                 self.retryTimer.start()
         self.refresh()
+
+    def askAgainIfBehind(self, key, reply):
+        mouse = next((each for each in self.mouseList.mice if each.key == key), None)
+        # the service leaves UPower's rows out of a mouse it saves over HID++, whose revision tells when its history changed
+        if (mouse is None or mouse.upowerPath is None or not mouse.readFromUPower or mouse.reading is None or reply.summary.get("source") == history.SOURCE_HIDPP):
+            return
+        if (reply.newestLevel == (mouse.reading.percent, mouse.reading.level) or self.upowerAskedAgain.get(key) == mouse.reading):
+            return
+        # a UPower mouse's saves come with no revision, and a reply that ends on another level was asked for before the service saved the reading the tray holds, after a change or a service start the window may not have been there to see
+        self.upowerAskedAgain[key] = mouse.reading
+        self.upowerChangedAt[key] = max(self.upowerChangedAt.get(key, reply.askedAt), reply.askedAt)
 
     def fillSidebar(self, keys):
         show = len(keys) >= 2

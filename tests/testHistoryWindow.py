@@ -299,45 +299,126 @@ class WindowTests(WindowCase):
         self.assertTrue(window.isOld(mouse, historyWindow.Reply(reply("02bc524c"), mouse.historyRevision, askedAt)))
         self.assertGreater(historyWindow.UPOWER_SETTLE_SECONDS, history.WAKE_SET_SECONDS + history.HOLD_SECONDS)
 
-    def testAWindowBuiltAfterAUPowerChangeWaitsForTheServiceToSaveIt(self):
-        # the tray hears UPower before the window exists, so the window starts from the mice the tray already knows
-        self.mouseList.applyUPower(upower.UPowerMouse("/org/freedesktop/UPower/devices/mouse_02bc524c", "02bc524c", None, hidpp.BatteryReading(61, 0)))
+    def upowerReply(self, key, percent, source=history.SOURCE_UPOWER):
+        # the newest slot holds the level the service saved last, or None after the gap a start or a removal writes
+        summary = reply(key)
+        summary["source"] = source
+        summary["recent"] = [[NOW + 60, percent, None, None, False]]
+        return summary
+
+    def passTime(self, window, seconds):
+        # the window's own times move back instead of the test waiting, and a fetch that came due runs
+        for key in window.lastFetch:
+            window.lastFetch[key] -= seconds
+        for key in window.upowerChangedAt:
+            window.upowerChangedAt[key] -= seconds
+        for each in window.replies.values():
+            each.askedAt -= seconds
+        if (window.fetchTimer.isActive()):
+            window.fetchTimer.stop()
+            window.fetchTimer.timeout.emit()
+
+    def upowerWindow(self, heardAgo=0, updatedAt=None):
+        # a Bluetooth mouse only UPower reads, heard by the tray before the window is built
+        with mock.patch.object(time, "monotonic", return_value=time.monotonic() - heardAgo):
+            self.mouseList.applyUPower(upower.UPowerMouse("/org/freedesktop/UPower/devices/mouse_02bc524c", "02bc524c", None, hidpp.BatteryReading(61, 0), updatedAt=updatedAt))
+        self.state()
         late = historyWindow.HistoryWindow(self.mouseList, self.watcher, self.upower, self.folder, None, tray.mouseLine, tray.iconStateFor)
         self.addCleanup(sip.delete, late)
         self.addCleanup(late.close)
-        self.assertIn("02bc524c", late.upowerChangedAt)
-        self.state(entry())
-        late.open()
-        self.assertEqual(self.watcher.asked, [])
-        self.assertTrue(late.fetchTimer.isActive())
-        self.settle(late)
-        self.assertEqual(self.watcher.asked, ["02bc524c"])
+        return late
 
-    def testAWindowBuiltAfterAnOldUPowerTimeStillWaitsForTheServiceToSaveIt(self):
+    def shownPercent(self, window):
+        return window.replies["02bc524c"].summary["recent"][-1][1]
+
+    def testAWindowBuiltAfterAUPowerChangeEndsWithTheSavedReading(self):
+        late = self.upowerWindow()
+        self.watcher.answers["02bc524c"] = (self.upowerReply("02bc524c", 62), None)
+        late.open()
+        # the service saves the reading within the settle time
+        self.watcher.answers["02bc524c"] = (self.upowerReply("02bc524c", 61), None)
+        self.passTime(late, historyWindow.FETCH_GAP_SECONDS)
+        self.assertEqual(self.shownPercent(late), 61)
+        asked = len(self.watcher.asked)
+        self.assertLessEqual(asked, 2)
+        self.passTime(late, historyWindow.FETCH_GAP_SECONDS)
+        late.refresh()
+        self.assertEqual(len(self.watcher.asked), asked)
+
+    def testAWindowBuiltAfterAnOldUPowerTimeEndsWithTheSavedReading(self):
         # UPower's UpdateTime is the device's own and can be old on a reading the tray just heard
-        old = time.time() - 10 * historyWindow.UPOWER_SETTLE_SECONDS
-        self.mouseList.applyUPower(upower.UPowerMouse("/org/freedesktop/UPower/devices/mouse_02bc524c", "02bc524c", None, hidpp.BatteryReading(61, 0), updatedAt=old))
-        late = historyWindow.HistoryWindow(self.mouseList, self.watcher, self.upower, self.folder, None, tray.mouseLine, tray.iconStateFor)
-        self.addCleanup(sip.delete, late)
-        self.addCleanup(late.close)
-        self.assertIn("02bc524c", late.upowerChangedAt)
-        self.state(entry())
+        late = self.upowerWindow(updatedAt=time.time() - 10 * historyWindow.UPOWER_SETTLE_SECONDS)
+        self.watcher.answers["02bc524c"] = (self.upowerReply("02bc524c", 62), None)
         late.open()
-        self.assertEqual(self.watcher.asked, [])
-        self.assertTrue(late.fetchTimer.isActive())
-        self.settle(late)
+        self.watcher.answers["02bc524c"] = (self.upowerReply("02bc524c", 61), None)
+        self.passTime(late, historyWindow.FETCH_GAP_SECONDS)
+        self.assertEqual(self.shownPercent(late), 61)
+        self.assertLessEqual(len(self.watcher.asked), 2)
+
+    def testAWindowBuiltAfterAServiceRestartEndsWithTheSavedReading(self):
+        # the tray's reading stayed the same across the restart, while the new service's history ends in a gap until it saves that reading again
+        self.watcher.serviceRestarted.emit()
+        late = self.upowerWindow(heardAgo=10 * historyWindow.UPOWER_SETTLE_SECONDS)
+        self.watcher.answers["02bc524c"] = (self.upowerReply("02bc524c", None), None)
+        late.open()
+        self.watcher.answers["02bc524c"] = (self.upowerReply("02bc524c", 61), None)
+        self.passTime(late, historyWindow.FETCH_GAP_SECONDS)
+        self.assertEqual(self.shownPercent(late), 61)
+        self.assertEqual(len(self.watcher.asked), 2)
+
+    def testAServiceRestartWhileOpenEndsWithTheSavedReading(self):
+        late = self.upowerWindow(heardAgo=10 * historyWindow.UPOWER_SETTLE_SECONDS)
+        self.watcher.answers["02bc524c"] = (self.upowerReply("02bc524c", 61), None)
+        late.open()
+        self.watcher.answers["02bc524c"] = (self.upowerReply("02bc524c", None), None)
+        self.watcher.serviceRestarted.emit()
+        self.assertEqual(len(self.watcher.asked), 1)
+        # a service slow to save after its start is asked once more
+        self.passTime(late, historyWindow.FETCH_GAP_SECONDS)
+        self.assertEqual((len(self.watcher.asked), self.shownPercent(late)), (2, None))
+        self.watcher.answers["02bc524c"] = (self.upowerReply("02bc524c", 61), None)
+        self.passTime(late, historyWindow.FETCH_GAP_SECONDS)
+        self.assertEqual((len(self.watcher.asked), self.shownPercent(late)), (3, 61))
+
+    def testAReplyThatShowsTheReadingIsntAskedForAgain(self):
+        late = self.upowerWindow(heardAgo=10 * historyWindow.UPOWER_SETTLE_SECONDS)
+        self.watcher.answers["02bc524c"] = (self.upowerReply("02bc524c", 61), None)
+        late.open()
+        self.assertEqual(self.watcher.asked, ["02bc524c"])
+        self.passTime(late, historyWindow.FETCH_GAP_SECONDS)
+        late.refresh()
         self.assertEqual(self.watcher.asked, ["02bc524c"])
 
-    def testAWindowBuiltLongAfterAUPowerReadingDoesntWait(self):
-        self.mouseList.applyUPower(upower.UPowerMouse("/org/freedesktop/UPower/devices/mouse_02bc524c", "02bc524c", None, hidpp.BatteryReading(61, 0)))
-        self.mouseList.mice[0].upowerHeardAt -= 10 * historyWindow.UPOWER_SETTLE_SECONDS
-        late = historyWindow.HistoryWindow(self.mouseList, self.watcher, self.upower, self.folder, None, tray.mouseLine, tray.iconStateFor)
-        self.addCleanup(sip.delete, late)
-        self.addCleanup(late.close)
-        self.assertNotIn("02bc524c", late.upowerChangedAt)
-        self.state(entry())
+    def testAReadingTheServiceNeverSavesIsAskedForOnceMore(self):
+        # a full history or a spent write budget can keep the reading out for good, so each reading costs at most one more ask
+        late = self.upowerWindow(heardAgo=10 * historyWindow.UPOWER_SETTLE_SECONDS)
+        self.watcher.answers["02bc524c"] = (self.upowerReply("02bc524c", 62), None)
         late.open()
-        self.assertEqual(self.watcher.asked, ["02bc524c"])
+        for _ in range(3):
+            self.passTime(late, historyWindow.FETCH_GAP_SECONDS)
+            late.refresh()
+        self.assertEqual(len(self.watcher.asked), 2)
+        # a change the window saw gets its own ask after the settle time and one more
+        self.upowerChange(reading=hidpp.BatteryReading(60, 0))
+        for _ in range(3):
+            self.passTime(late, historyWindow.FETCH_GAP_SECONDS)
+            late.refresh()
+        self.assertEqual(len(self.watcher.asked), 4)
+        # and so does a service start, since the new service may save what the old one left out
+        self.watcher.serviceRestarted.emit()
+        for _ in range(3):
+            self.passTime(late, historyWindow.FETCH_GAP_SECONDS)
+            late.refresh()
+        self.assertEqual(len(self.watcher.asked), 6)
+
+    def testAHistorySavedOverHidppIsntAskedForTheUPowerReading(self):
+        # the service leaves UPower's rows out of a mouse it reads over HID++, so its history never shows them
+        late = self.upowerWindow(heardAgo=10 * historyWindow.UPOWER_SETTLE_SECONDS)
+        self.watcher.answers["02bc524c"] = (self.upowerReply("02bc524c", 62, source=history.SOURCE_HIDPP), None)
+        late.open()
+        self.passTime(late, historyWindow.FETCH_GAP_SECONDS)
+        late.refresh()
+        self.assertEqual(len(self.watcher.asked), 1)
 
     def testAUPowerRefreshThatLeavesTheReadingAloneIsntAChange(self):
         window = self.opened(entry())
