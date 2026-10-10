@@ -562,7 +562,8 @@ class Track:
         whole = step.live and not step.broken
         if (moved < 0):
             newLow = step.lowestBefore is None or step.startPercent < step.lowestBefore
-            unbroken = whole and self.seesWakes() and newLow and not step.power
+            # a discharge's first minute can count down from a full reading to the real level, so those steps aren't measured
+            unbroken = whole and self.seesWakes() and newLow and not step.power and step.startAt - session.startAt >= DISCHARGE_SETTLE_SECONDS
             kind = DISCHARGE
         else:
             # a charge's first minutes can rise faster than the battery fills while the level catches up, so those steps aren't measured

@@ -1113,6 +1113,16 @@ class RecorderTests(RecorderCase):
         discharges = [row for row in self.sessions() if row[0] == history.DISCHARGE]
         self.assertEqual(discharges[0][3], 84)
 
+    def testADischargesFirstMinuteGivesNoWholeSteps(self):
+        self.recorder.setWakeSupport(KEY, True)
+        self.event(0, 85, charging=1, power=1)
+        self.event(600, 100, charging=3, power=2)
+        for seconds, percent in ((601, 99), (612, 90), (625, 84), (700, 83), (2500, 82)):
+            self.event(seconds, percent)
+        drops = [(row[3], row[4], row[6]) for row in self.steps() if row[0] == history.DISCHARGE]
+        self.assertEqual(drops, [(100, 99, 0), (99, 90, 0), (90, 84, 0), (84, 83, 0), (83, 82, 1)])
+        self.assertEqual((self.recorder.summary(KEY)["open"]["median"], self.recorder.summary(KEY)["open"]["count"]), (30.0, 1))
+
     def testARealFullStartsItsDischargeAtFull(self):
         self.event(0, 95, charging=1, power=1)
         self.event(600, 100, charging=3, power=1)
