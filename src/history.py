@@ -1377,9 +1377,9 @@ class Recorder(QObject):
                     self.apply(track, row, writer)
                     writer.saveTrack(track, row)
             except sqlite3.Error as error:
-                # the rollback undid the database, and the track in memory never took the change, so the rows and sessions still agree while any flag in pendingFlags waits for the next transaction that succeeds
+                # the rollback undid the database, so the row goes to memory as it would with the history closed, and a newer reading is compared with it instead of with a level the mouse already left
                 self.writeFailed(entry, error)
-                entry.unsaved = row
+                self.keepInMemory(entry, row)
                 return
             entry.needsGap = False
             entry.nameChanged = False
@@ -1398,8 +1398,11 @@ class Recorder(QObject):
             self.noteWrite(entry, row)
             self.changed.emit(entry.key)
             return
+        self.keepInMemory(entry, row)
+
+    def keepInMemory(self, entry, row):
         if (entry.persist and entry.loaded):
-            # the database went away under a loaded mouse, so it's loaded again once it's back, after a gap
+            # the database went away under a loaded mouse, or didn't take its row, so it's loaded again once it's back, after a gap
             self.unload(entry)
         track = entry.track.copy()
         self.apply(track, row, NullWriter())

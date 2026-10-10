@@ -1510,7 +1510,8 @@ class RecorderTests(RecorderCase):
             return real()
         with mock.patch.object(self.recorder.store, "transaction", failingOnce):
             self.event(1800, 49)
-        self.assertEqual(self.recorder.entries[KEY].track.last.percent, 50)
+        # memory holds the row the database didn't take, and the mouse loads its saved state again before the next write
+        self.assertEqual((self.recorder.entries[KEY].track.last.percent, self.recorder.entries[KEY].loaded), (49, False))
         self.event(3600, 48)
         self.assertEqual([row[:3] for row in self.rows()], [(0, 0, 50), (3600, 4, None), (3600, 0, 48)])
         self.assertIn("database or disk is full", self.errors.getvalue())
@@ -1812,6 +1813,26 @@ class RecorderTests(RecorderCase):
             self.event(1800, 79)
         self.at(1802 + history.OPEN_RETRY_SECONDS)
         self.assertEqual([row[:3] for row in self.rows()], [(0, history.ORIGIN_EVENT, 80), (1800, history.ORIGIN_GAP, None), (1800, history.ORIGIN_EVENT, 79)])
+
+    def testANewerUnchangedReadingTakesThePlaceOfAWriteThatFailed(self):
+        self.event(0, 80)
+        with self.failOnce(sqlite3.OperationalError("database or disk is full")):
+            self.event(1800, 80, charging=1, power=1)
+        # the mouse came off the charger before the retry, back to the level and code the history already holds
+        self.event(1900, 80)
+        self.at(1902 + history.OPEN_RETRY_SECONDS)
+        self.assertEqual([row[:4] for row in self.rows()], [(0, history.ORIGIN_EVENT, 80, 0), (1900, history.ORIGIN_GAP, None, None), (1900, history.ORIGIN_EVENT, 80, 0)])
+        self.assertEqual(self.recorder.summary(KEY)["open"]["kind"], history.DISCHARGE)
+
+    def testAnAwakeReadingAfterASleepThatFailedToSaveKeepsTheMouseAwake(self):
+        self.recorder.setWakeSupport(KEY, True)
+        self.event(0, 80)
+        with self.failOnce(sqlite3.OperationalError("database or disk is full")):
+            self.marker(1800, history.ORIGIN_ASLEEP)
+        self.event(1900, 80)
+        self.at(1902 + history.OPEN_RETRY_SECONDS)
+        self.assertFalse(self.recorder.entries[KEY].track.asleep)
+        self.assertEqual([row[:3] for row in self.rows()], [(0, history.ORIGIN_EVENT, 80), (1900, history.ORIGIN_GAP, None), (1900, history.ORIGIN_EVENT, 80)])
 
     def testAFlagThatFailedToSaveIsSavedOnTheRetryWaitAfterItsMouseLeaves(self):
         self.event(0, 80)
