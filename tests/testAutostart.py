@@ -184,6 +184,27 @@ class AutostartTests(unittest.TestCase):
         autostart.setEnabled(self.configHome, False)
         self.assertEqual(os.listdir(os.path.dirname(self.path)), [autostart.FILE_NAME])
 
+    def testOverlappingWritesNeverPublishAnUnfinishedFile(self):
+        os.makedirs(os.path.dirname(self.path))
+        folder, name, shown = autostart.openFolder(self.path, False)
+        self.addCleanup(os.close, folder)
+        realFdopen = os.fdopen
+        published = []
+
+        # the second write publishes once the first has made its own temporary file and before it writes anything there
+        def writeSecondInside(fd, *args, **kwargs):
+            if (args[:1] == ("w",) and not published):
+                published.append(None)
+                autostart.writeText(folder, name, shown, None, "second\n")
+                published[0] = self.read()
+            return realFdopen(fd, *args, **kwargs)
+
+        with mock.patch.object(autostart.os, "fdopen", writeSecondInside):
+            autostart.writeText(folder, name, shown, None, "first\n")
+        self.assertEqual(published, ["second\n"])
+        self.assertEqual(self.read(), "first\n")
+        self.assertEqual(os.listdir(os.path.dirname(self.path)), [autostart.FILE_NAME])
+
     def testAFailedCreateLeavesNoOverrideOrTemporaryFile(self):
         with mock.patch.object(autostart.os, "replace", side_effect=OSError(errno.ENOSPC, "No space left on device")):
             with self.assertRaises(OSError):
