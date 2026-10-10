@@ -663,11 +663,14 @@ class LineChartTests(ChartCase):
         chart = self.make(charts.LineChart("Hours per Charge", "h", charts.HOURS_EMPTY, "h"))
         chart.setSeries({"hours": []})
         self.assertEqual(chart.series, {})
-        seen = []
-        # only the text is kept, since a mock that kept the painter would end it on a freed image once Python let it go
-        with unittest.mock.patch.object(charts.LineChart, "paintEmpty", lambda self, painter, text: seen.append(text)):
-            rendered(chart)
-        self.assertEqual(seen, [charts.HOURS_EMPTY])
+        image = rendered(chart)
+        # the message is drawn across the middle, as wide as its text, and the title's band at the top is left out of the count
+        middle = image.height() // 2
+        inked = [x for x in range(image.width()) for y in range(middle - 10, middle + 10) if image.pixelColor(x, y).alpha() > 100]
+        width = QFontMetrics(charts.font(13)).horizontalAdvance(charts.HOURS_EMPTY)
+        self.assertTrue(inked)
+        self.assertGreater(max(inked) - min(inked), width * 0.8)
+        self.assertLess(abs((max(inked) + min(inked)) / 2 - image.width() / 2), 10)
 
     def testASeriesDraws(self):
         chart = self.make(charts.LineChart("Charging Speed", "min per 10%", charts.CHARGING_EMPTY))
