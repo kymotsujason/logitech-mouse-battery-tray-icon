@@ -103,7 +103,16 @@ These haven't been tested yet:
 - The `.deb` and `.rpm` on a real Debian, Ubuntu, or Fedora desktop, including the rule applying without a replug (only clean containers have run them, plus the `.deb` on GitHub's Ubuntu runner with a fake receiver)
 - The service on a booted Debian, Fedora, or Arch system before release, since only GitHub's Ubuntu runner and clean containers run it automatically
 
-Apart from these, two limits are known. A mouse that reports its battery without a percentage gets an estimate instead. A level such as "low" or "critical" counts as the warning it matches, and a voltage goes through the same curve the Linux kernel uses, which the kernel notes won't fit every battery. The icon fills to that estimate without a number, the warning says the battery is low without a percent, and the menu line shows what the mouse reported, such as a level name. A mouse on a receiver the kernel leaves alone also keeps showing as awake with its last reading after it's turned off, until the app next reads it (when you open the menu or the window, every 5 minutes for a mouse that doesn't report on its own, or as often as "Check whether mice are asleep" says), since the receivers tested so far don't announce a mouse turning off.
+## Known limits
+
+These are known and left as they are for now:
+
+- A mouse that reports its battery without a percentage gets an estimate instead. A level such as "low" or "critical" counts as the warning it matches, and a voltage goes through the same curve the Linux kernel uses, which the kernel notes won't fit every battery. The icon fills to that estimate without a number, the warning says the battery is low without a percent, and the menu line shows what the mouse reported, such as a level name.
+- A mouse on a receiver the kernel leaves alone keeps showing as awake with its last reading after it's turned off, until the app next reads it (when you open the menu or the window, every 5 minutes for a mouse that doesn't report on its own, or as often as "Check whether mice are asleep" says), since the receivers tested so far don't announce a mouse turning off.
+- For a mouse read through UPower, the battery window can show an older list of charges for a while in two rare cases, when it's first opened within a couple of seconds of the mouse starting or stopping charging, or right after the history couldn't save for a moment. It catches up at the mouse's next change, or within 2 hours. The level and status at the top of the window stay current.
+- The read budgets in "What the udev rule allows" are kept per account, with no limit across accounts, so someone with many local accounts could keep the service busy. That slows it down but doesn't change the saved history.
+- Mouse Battery shows and saves the battery level UPower reports, the same as the desktop's own battery applet does. On a computer shared by several people, another local account that can talk to BlueZ may be able to change what UPower reports for a paired Bluetooth mouse, and that value would show in the tray and be saved in the history.
+- When the clock is set while the battery service is stopped, such as an upgrade restarting it right as the clock is corrected after boot, readings it saved with the wrong time keep that time, so the chart can show a few readings hours ahead until the clock catches up. A clock set while the service runs is handled.
 
 ## Code layout
 
