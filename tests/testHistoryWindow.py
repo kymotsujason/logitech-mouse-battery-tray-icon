@@ -1119,6 +1119,71 @@ class WindowTests(WindowCase):
         self.assertEqual(window.paneFade.opacity(), 0.0)
         self.assertTrue(window.paneFade.isEnabled())
 
+    def inkOnlyIn(self, image, other):
+        # a point the outgoing picture inks and the finished incoming content leaves clear
+        for y in range(0, image.height(), 2):
+            for x in range(0, image.width(), 2):
+                if (image.pixelColor(x, y).alpha() > 200 and other.pixelColor(x, y).alpha() == 0):
+                    return (x, y)
+        return None
+
+    def testAPickDuringACrossfadeTakesItsPictureOfWhatsOnScreen(self):
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S", reading=hidpp.BatteryReading(15, 0)))
+        window.motionFactor = 1.0
+        fade = window.paneCrossfade
+        first = window.selected
+        window.pick("11111111" if first == "02bc524c" else "02bc524c")
+        outgoing = fade.picture.toImage()
+        fade.animation.setCurrentTime(fade.animation.duration() // 5)
+        shownOpacity = historyWindow.pictureOpacity(fade.elapsed)
+        window.paneFade.setEnabled(False)
+        finished = window.content.grab().toImage()
+        window.paneFade.setEnabled(True)
+        point = self.inkOnlyIn(outgoing, finished)
+        self.assertIsNotNone(point)
+        window.pick(first)
+        picture = fade.picture.toImage()
+        self.assertNotEqual(picture, finished)
+        # the first mouse's picture was still fading out over that spot, so the new picture keeps it at the strength it had
+        self.assertAlmostEqual(picture.pixelColor(*point).alpha(), outgoing.pixelColor(*point).alpha() * shownOpacity, delta=3)
+
+    def testAChartSwitchDuringACrossfadeTakesItsPictureOfWhatsOnScreen(self):
+        window = self.opened(entry())
+        window.motionFactor = 1.0
+        fade = window.chartCrossfade
+        window.segments.choose(1)
+        outgoing = fade.picture.toImage()
+        fade.animation.setCurrentTime(fade.animation.duration() // 5)
+        shownOpacity = historyWindow.pictureOpacity(fade.elapsed)
+        window.chartFade.setEnabled(False)
+        finished = window.hoursChart.grab().toImage()
+        window.chartFade.setEnabled(True)
+        point = self.inkOnlyIn(outgoing, finished)
+        self.assertIsNotNone(point)
+        window.segments.choose(2)
+        picture = fade.picture.toImage()
+        self.assertNotEqual(picture, finished)
+        self.assertAlmostEqual(picture.pixelColor(*point).alpha(), outgoing.pixelColor(*point).alpha() * shownOpacity, delta=3)
+
+    def testARangeSwitchDuringACrossfadeTakesItsPictureOfWhatsOnScreen(self):
+        window = self.opened(entry())
+        window.motionFactor = 1.0
+        fade = window.chartCrossfade
+        window.pickRange("month")
+        self.assertEqual(fade.animation.state(), QAbstractAnimation.State.Running)
+        outgoing = fade.picture.toImage()
+        fade.animation.setCurrentTime(fade.animation.duration() // 5)
+        shownOpacity = historyWindow.pictureOpacity(fade.elapsed)
+        window.chartFade.setEnabled(False)
+        finished = window.levelChart.grab().toImage()
+        window.chartFade.setEnabled(True)
+        point = self.inkOnlyIn(outgoing, finished)
+        self.assertIsNotNone(point)
+        window.pickRange("week")
+        picture = fade.picture.toImage()
+        self.assertNotEqual(picture, finished)
+        self.assertAlmostEqual(picture.pixelColor(*point).alpha(), outgoing.pixelColor(*point).alpha() * shownOpacity, delta=3)
+
     def testAPickSettlesARunningChartCrossfade(self):
         window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))
         window.motionFactor = 1.0

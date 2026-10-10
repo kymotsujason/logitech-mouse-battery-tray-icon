@@ -697,14 +697,27 @@ class Crossfade(QWidget):
         if (self.animation.state() == QAbstractAnimation.State.Running):
             self.animation.setCurrentTime(self.animation.duration())
 
-    def start(self, source, durationMs, fade):
-        # fade is the QGraphicsOpacityEffect on the incoming content, stepped with the picture
+    def shownPicture(self, source):
+        # the source's grab draws it through its own fade, and a picture still fading out lies over it, so the two together are what's on screen
+        picture = source.grab()
+        if (self.picture is None or self.animation.state() != QAbstractAnimation.State.Running):
+            return picture
+        painter = QPainter(picture)
+        painter.setOpacity(pictureOpacity(self.elapsed))
+        painter.drawPixmap(self.geometry().topLeft() - source.geometry().topLeft(), self.picture)
+        painter.end()
+        return picture
+
+    def start(self, source, durationMs, fade, picture=None):
+        # fade is the QGraphicsOpacityEffect on the incoming content, stepped with the picture, and the picture is taken before a fade still running ends, so a second switch hands over from what's on screen
+        if (picture is None and durationMs > 0 and source.isVisible()):
+            picture = self.shownPicture(source)
         self.finish()
         self.fade = fade
         if (durationMs <= 0 or not source.isVisible()):
             fade.setEnabled(False)
             return
-        self.picture = source.grab()
+        self.picture = picture
         self.setGeometry(source.geometry())
         self.elapsed = 0.0
         fade.setOpacity(0.0)
@@ -1241,15 +1254,17 @@ class HistoryWindow(QWidget):
         self.nameSegments()
         self.rangeControl.setVisible(index == 0)
         chart = self.charts[index]
+        old = next((each for each in self.charts if each.isVisible()), None)
+        duration = int(CHART_FADE_MS * self.motionFactor)
+        # the picture is taken while the old chart is still up, and before a fade still running ends
+        picture = self.chartCrossfade.shownPicture(old) if (old is not None and old is not chart and duration > 0) else None
         # a new effect on a chart replaces the old one, so a fade still running ends before that
         self.chartCrossfade.finish()
-        old = next((each for each in self.charts if each.isVisible()), None)
         self.chartFade = QGraphicsOpacityEffect(chart)
         chart.setGraphicsEffect(self.chartFade)
         chart.show()
         if (old is not None and old is not chart):
-            # the picture is taken while the old chart is still up
-            self.chartCrossfade.start(old, int(CHART_FADE_MS * self.motionFactor), self.chartFade)
+            self.chartCrossfade.start(old, duration, self.chartFade, picture)
             self.rangeControl.raise_()
         else:
             self.chartFade.setEnabled(False)
@@ -1569,13 +1584,15 @@ class HistoryWindow(QWidget):
         # a range the user picks fades in even during the quiet after an open, while an answer that lands then swaps the bars at once
         if (not self.levelChart.isVisible() or (self.isQuiet() and not self.pickingRange)):
             return
+        duration = int(CHART_FADE_MS * self.motionFactor)
+        picture = self.chartCrossfade.shownPicture(self.levelChart) if duration > 0 else None
         # a new effect on the chart replaces the old one, so a fade still running ends before that
         self.chartCrossfade.finish()
         self.levelChart.morphMs = 0
         if (self.levelChart.graphicsEffect() is not self.chartFade):
             self.chartFade = QGraphicsOpacityEffect(self.levelChart)
             self.levelChart.setGraphicsEffect(self.chartFade)
-        self.chartCrossfade.start(self.levelChart, int(CHART_FADE_MS * self.motionFactor), self.chartFade)
+        self.chartCrossfade.start(self.levelChart, duration, self.chartFade, picture)
         self.rangeControl.raise_()
 
     def fillForm(self, result):
