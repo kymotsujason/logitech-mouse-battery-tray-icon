@@ -6,16 +6,17 @@ This file lists the changes in each release of Mouse Battery, newest first.
 
 ### Added
 
-- A battery window opens when you click the tray icon or pick "Battery Health" from its menu, with the mouse, its level, and a sidebar when you have more than one mouse.
+- A battery window opens when you click the tray icon or pick "Battery Health" from its menu, with the mouse, its level, and a sidebar when you have more than one mouse, and it fits small screens, works from the keyboard and a screen reader, comes back when you click the tray icon while it's minimized, and moves smoothly when you switch charts, ranges, or mice or open its sleep menu.
 - The window shows a level chart for the last 24 hours, 7 days, 30 days, 6 months, a year, or all time, and it remembers the range you picked.
 - The window shows battery health, including how many hours a charge lasts, how fast it charges month by month, and the number of charge cycles.
 - The health line tells you when a charge lasts 15% less, or charging takes 15% longer, than it used to.
-- The battery service now saves each mouse's charges and discharges, so the history keeps growing while the window is closed. Removing the package leaves the history in place, and the README says how to delete it.
+- The battery service now saves each mouse's charges and discharges, so the history keeps growing while the window is closed, and it survives a crash, a power loss, a clock change, a service restart, and a mouse moving between UPower and direct reading, while a damaged history file is moved aside and started fresh. Removing the package leaves the history in place, and the README says how to delete it.
+- Any local account can read the saved history through the service, with its own read limits, as the README says.
+- The history takes in only so many new mice at a time, so a flood of new devices can't fill it.
 - A "Check whether mice are asleep" setting in the window reads every mouse every 30 seconds, every minute, or every 5 minutes, so the icon turns gray soon after a mouse sleeps.
 - The window's title bar icon follows the shown mouse, white in use, green while charging, red when low, and gray while asleep.
 - On KDE, the window blurs the desktop behind it when KWin supports it.
 - The window opens again by itself after an update restarts the app.
-- Smoother motion in the battery window when switching charts, ranges, and mice, and in the sleep menu.
 
 ### Changed
 
@@ -26,15 +27,8 @@ This file lists the changes in each release of Mouse Battery, newest first.
 ### Fixed
 
 - A mouse that reports its battery as a rough level or a voltage now gets an estimated level for its icon and its warnings.
-- The history stays correct through a crash, a power loss, a corrupt file, a clock change, and a service restart, and a damaged history file is moved aside and started fresh.
-- The battery window fits small screens, can be used from the keyboard and a screen reader, and comes back when you click it while it's minimized.
-- A mouse that moves between UPower and direct reading is kept as one mouse, without duplicate or lost history.
-- Notifications are asked for again when the notification service is swapped or restarted, so low battery notices keep arriving.
-
-### Security
-
-- The service offers the saved history on the system bus under the same limits as the battery readings, and the README now says any local account can read it.
-- Each new mouse and each history read has a limit, so a flood of new devices or requests can't fill the history or keep the service busy.
+- A mouse whose serial number shows up in UPower after its first reading stays one mouse instead of two, and an older UPower reading no longer replaces a newer one from the battery service.
+- When the notification service is swapped or restarted, the app asks the new one again how to format a notice, and a click on another notice can't set off an old notice's action.
 
 ## 1.1.1, 2026-10-08
 
