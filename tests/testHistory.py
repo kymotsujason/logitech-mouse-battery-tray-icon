@@ -45,6 +45,14 @@ class Clock:
     def monotonic(self):
         return self.steady
 
+    def boottime(self):
+        # nothing in a test suspends, so the boot clock is the monotonic one
+        return self.steady
+
+    def jump(self, seconds):
+        # a correction of the wall clock alone, which the monotonic and boot clocks never see
+        self.wall += seconds
+
 
 def battery(percent, charging=0, power=0, level=None, millivolts=None):
     return hidpp.BatteryReading(percent, charging, millivolts, level, power)
@@ -72,7 +80,7 @@ class RecorderCase(unittest.TestCase):
         self.errors = io.StringIO()
         self.patch = mock.patch.object(sys, "stderr", self.errors)
         self.patch.start()
-        self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic)
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic, boottime=self.clock.boottime)
 
     def tearDown(self):
         self.recorder.stop()
@@ -702,7 +710,9 @@ class StepTests(RecorderCase):
         self.drops((0, 80), (1800, 79), (3600, 76))
         self.assertEqual(self.steps()[-1][2:5], (10.0, 79, 76))
 
-    def testAClockThatSteppedBackSavesNoStep(self):
+    def testAClockThatSteppedBackSavesNoStepWithoutABootClock(self):
+        self.recorder.stop()
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic)
         self.drops((5000, 80), (6800, 79), (100, 78))
         # stopping writes the held row, so the 79 to 78 step reaches the length check
         self.recorder.stop()
@@ -743,6 +753,43 @@ class ClockStepTests(RecorderCase):
         self.clock.now += history.OPEN_RETRY_SECONDS
         self.assertTrue(self.recorder.available())
 
+    def testAWallClockJumpForwardDoesntLengthenADrop(self):
+        self.recorder.setWakeSupport(KEY, True)
+        self.event(0, 80)
+        self.event(1800, 79)
+        self.clock.jump(60 * 60)
+        self.event(7200, 78)
+        self.event(9000, 77)
+        self.assertEqual([(s[2], s[3], s[4], s[6]) for s in self.steps()], [(30.0, 80, 79, 0), (30.0, 79, 78, 1), (30.0, 78, 77, 1)])
+
+    def testAWallClockJumpForwardKeepsAChargesFirstTwoMinutesOut(self):
+        self.recorder.setWakeSupport(KEY, True)
+        self.event(0, 68)
+        self.event(600, 68, charging=1, power=1)
+        self.event(612, 69, charging=1, power=1)
+        self.clock.jump(60 * 60)
+        for seconds, percent in ((4224, 70), (4236, 71), (4360, 72), (4400, 73)):
+            self.event(seconds, percent, charging=1, power=1)
+        rises = [(row[3], row[6]) for row in self.steps() if row[0] == history.CHARGE]
+        self.assertEqual(rises, [(68, 0), (69, 0), (70, 0), (71, 0), (72, 1)])
+
+    def testAWallClockJumpBackDoesntMoveADischargesStart(self):
+        self.event(0, 80)
+        self.event(1800, 79)
+        # the wall clock lands 30 s after the discharge started, while half an hour has really gone by
+        self.clock.jump(-1800)
+        self.event(30, 78)
+        self.assertEqual(self.sessions()[0][3], 80)
+
+    def testAWallClockJumpBackBeforeADischargesStartDoesntMoveItWithoutABootClock(self):
+        self.recorder.stop()
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic)
+        self.event(0, 80)
+        self.event(1800, 79)
+        self.clock.jump(-2 * 60 * 60)
+        self.event(-3600, 78)
+        self.assertEqual(self.sessions()[0][3], 80)
+
 
 class ReportsItselfTests(RecorderCase):
     def setUp(self):
@@ -761,6 +808,13 @@ class ReportsItselfTests(RecorderCase):
         self.event(0, 60)
         self.marker(1000, history.ORIGIN_WAKE)
         self.event(1010, 59)
+        self.assertFalse(self.recorder.reportsItself(KEY))
+
+    def testADropRightAfterAWakeDoesntWhenTheWallClockJumpsBetween(self):
+        self.event(0, 60)
+        self.marker(1000, history.ORIGIN_WAKE)
+        self.clock.jump(60 * 60)
+        self.event(4610, 59)
         self.assertFalse(self.recorder.reportsItself(KEY))
 
     def testARiseDoesnt(self):

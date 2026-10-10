@@ -115,10 +115,23 @@ class Row:
     millivolts: int | None = None
     # the monotonic moment a row came in, which the wake set and the hold count from, so a wall clock that steps back can't hold them up
     arrived: float | None = field(default=None, compare=False)
+    # the boot clock when the row came in, which counts suspend as the wall clock does but never jumps when the wall clock is set, so a length inside one run comes from it
+    elapsed: float | None = field(default=None, compare=False)
 
 
-def readingRow(reading, origin, at, arrived):
-    return Row(int(at), origin, reading.percent, reading.level, reading.charging, reading.power, reading.millivolts, arrived)
+def readingRow(reading, origin, at, arrived, elapsed):
+    return Row(int(at), origin, reading.percent, reading.level, reading.charging, reading.power, reading.millivolts, arrived, elapsed)
+
+
+def secondsBetween(startAt, startElapsed, endAt, endElapsed):
+    # a row from an earlier run, or from a recorder without a boot clock, has none, so only the wall clock can measure from it
+    if (startElapsed is None or endElapsed is None):
+        return endAt - startAt
+    return endElapsed - startElapsed
+
+
+def bootClock():
+    return time.clock_gettime(time.CLOCK_BOOTTIME)
 
 
 def differs(row, saved):
@@ -337,6 +350,7 @@ class Session:
         self.id = None
         self.kind = kind
         self.startAt = row.at
+        self.startElapsed = row.elapsed
         self.startPercent = row.percent
         self.endAt = None
         self.endPercent = None
@@ -373,6 +387,7 @@ class Step:
     def __init__(self, row, live, lowestBefore):
         self.startPercent = row.percent
         self.startAt = row.at
+        self.startElapsed = row.elapsed
         # the start row came in at the moment its percent was reached
         self.live = live
         # a wake or a sleep fell inside the step
@@ -399,6 +414,7 @@ class Track:
         self.boundary = True
         self.asleep = False
         self.lastWakeOrGap = None
+        self.lastWakeOrGapElapsed = None
         self.session = None
         self.step = None
         self.rises = 0
@@ -425,10 +441,12 @@ class Track:
         if (row.origin == ORIGIN_WAKE):
             self.asleep = False
             self.lastWakeOrGap = row.at
+            self.lastWakeOrGapElapsed = row.elapsed
         elif (row.origin == ORIGIN_ASLEEP):
             self.asleep = True
         else:
             self.lastWakeOrGap = row.at
+            self.lastWakeOrGapElapsed = row.elapsed
 
     def applyReading(self, row, writer):
         writer.insertReading(row)
@@ -534,7 +552,7 @@ class Track:
         lowestBefore = session.lowest
         session.count(row)
         # a reading that fell in a discharge's first minute shows its start was the level settling, such as a full reading counting down to the real one, so the start follows it
-        if (session.kind == DISCHARGE and row.percent is not None and session.startPercent is not None and row.percent < session.startPercent and row.at - session.startAt <= DISCHARGE_SETTLE_SECONDS):
+        if (session.kind == DISCHARGE and row.percent is not None and session.startPercent is not None and row.percent < session.startPercent and 0 <= secondsBetween(session.startAt, session.startElapsed, row.at, row.elapsed) <= DISCHARGE_SETTLE_SECONDS):
             session.startPercent = row.percent
         writer.updateSession(session)
         if (row.percent is None):
@@ -555,19 +573,20 @@ class Track:
         moved = row.percent - step.startPercent
         if ((moved < 0 and session.kind != DISCHARGE) or (moved > 0 and session.kind != CHARGE)):
             return
-        minutes = (row.at - step.startAt) / 60
+        minutes = secondsBetween(step.startAt, step.startElapsed, row.at, row.elapsed) / 60
         # a clock that stepped back or stood still gives no length to measure
         if (minutes <= 0):
             return
         whole = step.live and not step.broken
+        sinceStart = secondsBetween(session.startAt, session.startElapsed, step.startAt, step.startElapsed)
         if (moved < 0):
             newLow = step.lowestBefore is None or step.startPercent < step.lowestBefore
             # a discharge's first minute can count down from a full reading to the real level, so those steps aren't measured
-            unbroken = whole and self.seesWakes() and newLow and not step.power and step.startAt - session.startAt >= DISCHARGE_SETTLE_SECONDS
+            unbroken = whole and self.seesWakes() and newLow and not step.power and sinceStart >= DISCHARGE_SETTLE_SECONDS
             kind = DISCHARGE
         else:
             # a charge's first minutes can rise faster than the battery fills while the level catches up, so those steps aren't measured
-            unbroken = whole and step.startAt - session.startAt >= CHARGE_SETTLE_SECONDS
+            unbroken = whole and sinceStart >= CHARGE_SETTLE_SECONDS
             kind = CHARGE
         writer.insertStep(kind, row.at, minutes / abs(moved), step.startPercent, row.percent, step.power, unbroken, session.id)
 
@@ -578,7 +597,7 @@ class Track:
             return
         if (previous is None or previous.percent is None or row.percent is None or row.percent >= previous.percent):
             return
-        if (self.lastWakeOrGap is not None and row.at - self.lastWakeOrGap < REPORTS_ITSELF_AFTER_SECONDS):
+        if (self.lastWakeOrGap is not None and secondsBetween(self.lastWakeOrGap, self.lastWakeOrGapElapsed, row.at, row.elapsed) < REPORTS_ITSELF_AFTER_SECONDS):
             return
         self.reportsItselfSince = row.at
         writer.updateReportsItself(row.at)
@@ -612,12 +631,16 @@ class MouseEntry:
 class Recorder(QObject):
     changed = pyqtSignal(str)
 
-    def __init__(self, folder=None, clock=time.time, timers=True, monotonic=time.monotonic):
+    def __init__(self, folder=None, clock=time.time, timers=True, monotonic=time.monotonic, boottime=None):
         super().__init__()
         self.store = Store(folder, clock, monotonic) if folder is not None else None
         # the wall clock dates the rows, while every wait runs on the monotonic one
         self.clock = clock
         self.monotonic = monotonic
+        # the real boot clock only measures the same lengths as the real wall clock, so a wall clock passed in has to bring its own
+        if (boottime is None and clock is time.time and hasattr(time, "CLOCK_BOOTTIME")):
+            boottime = bootClock
+        self.boottime = boottime
         self.entries = {}
         # one count for the whole recorder, so a mouse forgotten and seen again never gets a revision an old reply already has
         self.revisions = 0
@@ -767,19 +790,23 @@ class Recorder(QObject):
         at = self.clock() if at is None else at
         # a report carries the moment the worker read it, which can be well before the Qt thread gets to it
         arrived = self.monotonic() if arrived is None else arrived
+        elapsed = self.bootNow()
         entry = self.entryFor(key, pathKey)
         if (not self.claim(entry, source)):
             return
         if (name and name != entry.name):
             entry.name = name
             entry.nameChanged = True
-        row = readingRow(reading, origin, at, arrived)
+        row = readingRow(reading, origin, at, arrived, elapsed)
         if (origin == ORIGIN_READ):
             self.checkMissedStep(entry, row)
         entry.latest = row
         entry.latestBroken = False
         entry.pending.append(row)
         self.schedule()
+
+    def bootNow(self):
+        return None if self.boottime is None else self.boottime()
 
     def isHidppKey(self, entry):
         # a key only UPower has named this run is still a HID++ mouse when its saved history says so
@@ -817,7 +844,7 @@ class Recorder(QObject):
         entry = self.entryFor(key, pathKey)
         if (not self.claim(entry, source)):
             return
-        marker = Row(at, origin, arrived=arrived)
+        marker = Row(at, origin, arrived=arrived, elapsed=self.bootNow())
         if (origin == ORIGIN_WAKE):
             early = [row for row in entry.pending if row.arrived < arrived - WAKE_SET_SECONDS]
             late = [row for row in entry.pending if row.arrived >= arrived - WAKE_SET_SECONDS]
@@ -831,7 +858,7 @@ class Recorder(QObject):
         self.write(entry, marker)
         # a reading this close before the wake belongs to the wake set, so it goes in after the wake row and at its time
         for row in late:
-            self.process(entry, Row(at, row.origin, row.percent, row.level, row.charging, row.power, row.millivolts, row.arrived))
+            self.process(entry, Row(at, row.origin, row.percent, row.level, row.charging, row.power, row.millivolts, row.arrived, marker.elapsed))
         entry.latestBroken = True
         self.schedule()
 
@@ -995,7 +1022,7 @@ class Recorder(QObject):
                     self.writeFlags(db, entry)
                     track = entry.track.copy()
                     if (entry.needsGap and row.origin != ORIGIN_GAP):
-                        track.applyMarker(Row(row.at, ORIGIN_GAP), writer)
+                        track.applyMarker(Row(row.at, ORIGIN_GAP, elapsed=row.elapsed), writer)
                     self.apply(track, row, writer)
             except sqlite3.Error as error:
                 # the rollback undid the database, and the track in memory never took the change, so the rows and sessions still agree while any flag in pendingFlags waits for the next transaction that succeeds
