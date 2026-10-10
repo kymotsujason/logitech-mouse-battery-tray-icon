@@ -654,8 +654,9 @@ class Sidebar(QWidget):
         if (self.pillAnimation.state() == QAbstractAnimation.State.Running and self.pillAnimation.endValue() == target):
             return
         duration = int(THUMB_SLIDE_MS * self.owner.motionFactor)
+        gone = not any(row[0] == self.selected for row in rows)
         self.pillAnimation.stop()
-        if (self.pill is None or selected == self.selected or not self.isVisible() or duration <= 0):
+        if (self.pill is None or gone or selected == self.selected or not self.isVisible() or duration <= 0):
             self.pill = target
             return
         self.pillAnimation.setStartValue(QRectF(self.pill))
@@ -663,9 +664,15 @@ class Sidebar(QWidget):
         self.pillAnimation.setDuration(duration)
         self.pillAnimation.start()
 
+    def shownPill(self):
+        if (self.pill is not None):
+            return self.pill
+        index = self.selectedIndex()
+        return self.rowRect(index) if index is not None else None
+
     def resizeEvent(self, event):
         index = self.selectedIndex()
-        if (index is not None and event.size().width() != event.oldSize().width()):
+        if (self.pill is not None and index is not None and event.size().width() != event.oldSize().width()):
             self.pillAnimation.stop()
             self.pill = self.rowRect(index)
         super().resizeEvent(event)
@@ -730,8 +737,9 @@ class Sidebar(QWidget):
         painter.setPen(QColor(theme.secondary))
         painter.drawText(QRectF(20, 12, 200, 20), int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), "Mice")
         frost = self.owner.frost()
-        if (self.pill is not None and frost is not None):
-            glass.paintPanel(painter, self.pill, self.pill.height() / 2, frost, theme, strong=True, offset=QPointF(self.mapTo(self.owner, self.rect().topLeft())))
+        pill = self.shownPill()
+        if (pill is not None and frost is not None):
+            glass.paintPanel(painter, pill, pill.height() / 2, frost, theme, strong=True, offset=QPointF(self.mapTo(self.owner, self.rect().topLeft())))
         for index, (key, name, second, fill, secondColor) in enumerate(self.rows):
             rect = self.rowRect(index)
             self.paintCapsule(painter, QRectF(rect.x() + 12, rect.y() + 10, 22, 11), fill, theme, secondColor)

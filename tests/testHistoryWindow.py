@@ -652,10 +652,12 @@ class WindowTests(WindowCase):
         window.close()
         window.open()
         self.assertEqual(window.selected, shown)
+        self.assertEqual(window.sidebar.pillAnimation.state(), QAbstractAnimation.State.Stopped)
+        self.assertEqual(window.sidebar.shownPill(), window.sidebar.rowRect(window.sidebar.selectedIndex()))
 
     def testEveryAnimationUsesTheSharedEaseOut(self):
         window = self.opened(entry())
-        for animation in (window.segments.animation, window.rangeControl.animation, window.glowAnimation, window.paneCrossfade.animation, window.chartCrossfade.animation):
+        for animation in (window.segments.animation, window.rangeControl.animation, window.glowAnimation, window.paneCrossfade.animation, window.chartCrossfade.animation, window.sidebar.pillAnimation):
             self.assertEqual(animation.easingCurve().type(), QEasingCurve.Type.BezierSpline)
             self.assertEqual(round(animation.easingCurve().valueForProgress(0.25), 3), 0.775)
 
@@ -830,7 +832,7 @@ class WindowTests(WindowCase):
         window.pick("11111111")
         window.segments.choose(2)
         window.setGlow(QColor("#FF0000"))
-        running = (window.paneCrossfade.animation, window.chartCrossfade.animation, window.segments.animation, window.glowAnimation)
+        running = (window.paneCrossfade.animation, window.chartCrossfade.animation, window.segments.animation, window.glowAnimation, window.sidebar.pillAnimation)
         for animation in running:
             self.assertEqual(animation.state(), QAbstractAnimation.State.Running)
         window.setPortal("reduced-motion", 1)
@@ -838,6 +840,7 @@ class WindowTests(WindowCase):
             self.assertEqual(animation.state(), QAbstractAnimation.State.Stopped)
         self.assertEqual((window.paneFade.opacity(), window.paneFade.isEnabled(), window.chartFade.isEnabled()), (1.0, False, False))
         self.assertEqual(window.segments.thumb, window.segments.segmentRect(2))
+        self.assertEqual(window.sidebar.pill, window.sidebar.rowRect(window.sidebar.selectedIndex()))
         self.assertEqual(window.glow, QColor("#FF0000"))
 
     def testTheThumbGrowsAsItSlides(self):
@@ -871,6 +874,29 @@ class WindowTests(WindowCase):
         segments.animation.setCurrentTime(segments.animation.duration())
         self.assertEqual(segments.underThumb(), 2)
 
+    def testTheBoldLabelIsTheOneUnderTheThumbMidSlide(self):
+        window = self.opened(entry())
+        window.motionFactor = 1.0
+        segments = window.segments
+        segments.choose(2)
+        for time in range(1, segments.animation.duration()):
+            segments.animation.setCurrentTime(time)
+            if (segments.underThumb() == 1):
+                break
+        self.assertEqual(segments.underThumb(), 1)
+        self.assertEqual(segments.index, 2)
+        asked = []
+        real = historyWindow.font
+
+        def recording(size, weight=historyWindow.QFont.Weight.Normal):
+            asked.append(weight)
+            return real(size, weight)
+
+        with mock.patch.object(historyWindow, "font", recording):
+            segments.grab()
+        bold = [index for index, weight in enumerate(asked) if weight == historyWindow.QFont.Weight.DemiBold]
+        self.assertEqual(bold, [1])
+
     def testThePillSlidesBetweenMice(self):
         window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))
         window.motionFactor = 1.0
@@ -880,6 +906,34 @@ class WindowTests(WindowCase):
         self.assertTrue(sidebar.rowRect(0).y() < sidebar.pill.y() < sidebar.rowRect(1).y(), sidebar.pill.y())
         sidebar.pillAnimation.setCurrentTime(sidebar.pillAnimation.duration())
         self.assertEqual(sidebar.pill, sidebar.rowRect(1))
+
+    def testMinimizingAndRestoringKeepsTheSelectionDrawn(self):
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))
+        window.showMinimized()
+        QApplication.processEvents()
+        window.showNormal()
+        QApplication.processEvents()
+        sidebar = window.sidebar
+        self.assertEqual(sidebar.shownPill(), sidebar.rowRect(sidebar.selectedIndex()))
+
+    def testResizingAfterAHideLeavesThePillCleared(self):
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))
+        sidebar = window.sidebar
+        sidebar.hide()
+        sidebar.resize(sidebar.width() + 10, sidebar.height())
+        self.assertIsNone(sidebar.pill)
+
+    def testARemovedSelectionDoesNotSlide(self):
+        window = self.opened(entry(), entry(key="second"), entry(key="third"))
+        window.motionFactor = 1.0
+        window.pick("third")
+        window.sidebar.pillAnimation.setCurrentTime(window.sidebar.pillAnimation.duration())
+        self.state(entry(), entry(key="second"))
+        QApplication.processEvents()
+        sidebar = window.sidebar
+        self.assertNotEqual(window.selected, "third")
+        self.assertEqual(sidebar.pillAnimation.state(), QAbstractAnimation.State.Stopped)
+        self.assertEqual(sidebar.pill, sidebar.rowRect(sidebar.selectedIndex()))
 
     def testThePillJumpsWhenMotionIsOff(self):
         window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))
