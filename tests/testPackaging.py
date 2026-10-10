@@ -425,6 +425,20 @@ class WorkflowTests(unittest.TestCase):
         self.assertLess(release.index("-aur.tar.gz"), release.index("> SHA256SUMS"))
         self.assertLess(release.index("> SHA256SUMS"), release.index("gh release create"))
 
+    def testThePublishStepPassesTheChangelogNotesFile(self):
+        release = self.releaseJob()
+        publish = release.split("gh release create", 1)[1].split("\n", 1)[0]
+        self.assertIn(' --notes-file /tmp/notes.md ', publish)
+        self.assertNotIn("--notes ", publish)
+        self.assertIn('python3 packaging/releaseNotes.py "$VERSION" > /tmp/notes.md\n', release)
+        self.assertLess(release.index("packaging/releaseNotes.py"), release.index("gh release create"))
+
+    def testTheCheckJobFailsWhenTheVersionHasNoChangelogSection(self):
+        check = self.read("release.yml").split("\n  release:\n", 1)[0]
+        self.assertIn('python3 packaging/releaseNotes.py "$version" > /dev/null', check)
+        self.assertIn("::error::CHANGELOG.md", check)
+        self.assertLess(check.index("releaseNotes.py"), check.index("released=false"))
+
     def testTheReleaseChecksTheUpgradeBeforePublishing(self):
         release = self.releaseJob()
         self.assertIn("run: tests/containers/testUpgrade.sh\n", release)
