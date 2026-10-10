@@ -5,7 +5,7 @@ import sqlite3
 import statistics
 import time
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
@@ -29,6 +29,9 @@ NEW_MICE_BURST = 10
 NEW_MICE_REFILL_SECONDS = 5 * 60
 # a run that ends without its gap rows leaves at most this much of a mouse's old level standing, while an idle machine syncs the heartbeat to the disk only this often
 HEARTBEAT_SECONDS = 5 * 60
+# the wall clock moves against the boot clock only when it's set or slewed, so a move of more than this between two looks moves the rows this boot saved along with it, while the slow drift of a normal slew stays under it
+CLOCK_STEP_SECONDS = 2
+BOOT_ID_PATH = "/proc/sys/kernel/random/boot_id"
 # the probe saw a wake's battery event come with or after its wireless status event, but only on two wakes, so a reading this close before a wake counts as part of it
 WAKE_SET_SECONDS = 2
 MILLIVOLT_STEP = 20
@@ -136,6 +139,14 @@ def bootClock():
     return time.clock_gettime(time.CLOCK_BOOTTIME)
 
 
+def readBootId():
+    try:
+        with open(BOOT_ID_PATH) as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+
+
 def differs(row, saved):
     if (saved is None):
         return True
@@ -156,10 +167,13 @@ def changesCodeOrPower(row, saved):
 
 
 class Store:
-    def __init__(self, folder, clock=time.time, monotonic=time.monotonic):
+    def __init__(self, folder, clock=time.time, monotonic=time.monotonic, frame=None):
         self.folder = folder
         self.clock = clock
         self.monotonic = monotonic
+        # the boot's id and the wall clock's offset from its boot clock, or None without a boot clock
+        self.frame = frame
+        self.bootsReady = False
         self.db = None
         self.tooNew = False
         # corruption found during a run serves no history until the next start, when the full check runs
@@ -247,6 +261,7 @@ class Store:
                 for statement in SCHEMA:
                     self.db.execute(statement)
                 self.db.execute("pragma user_version = " + str(SCHEMA_VERSION))
+        self.followBoots()
         self.recover()
         if (fullCheck):
             try:
@@ -256,6 +271,34 @@ class Store:
         self.lastAttempt = None
         self.works(FAILED_OPEN, "The history is open again")
         return True
+
+    def followBoots(self):
+        self.bootsReady = False
+        frame = None if self.frame is None else self.frame()
+        try:
+            with self.transaction():
+                # older releases ignore a table they don't know, so this one comes without a new version, which would lock them out of the file
+                self.db.execute("create table if not exists boots (mouseId integer primary key, boot text not null, offset real not null, since integer not null, after integer)")
+                for mouseId, boot, offset, since, after in self.db.execute("select mouseId, boot, offset, since, after from boots").fetchall():
+                    # another boot's clock started over, so a step since then can't be measured and its rows stay as they were dated
+                    if (frame is None or boot != frame[0]):
+                        self.db.execute("delete from boots where mouseId = ?", (mouseId,))
+                        continue
+                    if (abs(frame[1] - offset) <= CLOCK_STEP_SECONDS):
+                        continue
+                    # the wall clock was set while nothing watched it, so the rows saved earlier on this boot move as they would have during a run
+                    moved = round(frame[1] - offset)
+                    DbWriter(self.db, mouseId).shift(since, moved)
+                    if (after is not None and since + moved <= after):
+                        self.db.execute("delete from boots where mouseId = ?", (mouseId,))
+                    else:
+                        self.db.execute("update boots set offset = ?, since = ? where mouseId = ?", (frame[1], since + moved, mouseId))
+        except sqlite3.Error as error:
+            if (isCorruption(error)):
+                raise
+            self.say("Couldn't save to the history: " + describe(error), FAILED_SAVE)
+            return
+        self.bootsReady = True
 
     def recover(self):
         now = int(self.clock())
@@ -364,6 +407,18 @@ class DbWriter:
     def updateReportsItself(self, since):
         self.db.execute("update mice set reportsItselfSince = ? where id = ?", (since, self.mouseId))
 
+    def shift(self, since, moved):
+        # each row goes to the next free seq of its new second in the order it was saved, so rows that land on one second keep their order
+        for at, seq in self.db.execute("select at, seq from readings where mouseId = ? and at >= ? order by at, seq", (self.mouseId, since)).fetchall():
+            self.db.execute("update readings set at = ?, seq = (select coalesce(max(seq) + 1, 0) from readings where mouseId = ? and at = ?) where mouseId = ? and at = ? and seq = ?", (at + moved, self.mouseId, at + moved, self.mouseId, at, seq))
+        for kind in (DISCHARGE, CHARGE):
+            for at, seq in self.db.execute("select at, seq from steps where mouseId = ? and kind = ? and at >= ? order by at, seq", (self.mouseId, kind, since)).fetchall():
+                self.db.execute("update steps set at = ?, seq = (select coalesce(max(seq) + 1, 0) from steps where mouseId = ? and kind = ? and at = ?) where mouseId = ? and kind = ? and at = ? and seq = ?", (at + moved, self.mouseId, kind, at + moved, self.mouseId, kind, at, seq))
+        self.db.execute("update sessions set startAt = startAt + ? where mouseId = ? and startAt >= ?", (moved, self.mouseId, since))
+        self.db.execute("update sessions set endAt = endAt + ? where mouseId = ? and endAt >= ?", (moved, self.mouseId, since))
+        self.db.execute("update mice set firstSeen = firstSeen + ? where id = ? and firstSeen >= ?", (moved, self.mouseId, since))
+        self.db.execute("update mice set reportsItselfSince = reportsItselfSince + ? where id = ? and reportsItselfSince >= ?", (moved, self.mouseId, since))
+
 
 class NullWriter:
     # the in memory rules still run for a mouse with no history, so its reports on its own flag stays right
@@ -470,6 +525,22 @@ class Track:
         if (self.step is not None):
             twin.step = copy.copy(self.step)
         return twin
+
+    def shift(self, since, moved):
+        # only the dates this boot saved moved in the database, so only those move here
+        def follow(at):
+            return at + moved if at is not None and at >= since else at
+
+        if (self.last is not None):
+            self.last = replace(self.last, at=follow(self.last.at))
+        self.lastWakeOrGap = follow(self.lastWakeOrGap)
+        self.reportsItselfSince = follow(self.reportsItselfSince)
+        if (self.session is not None):
+            self.session.startAt = follow(self.session.startAt)
+            self.session.lastAt = follow(self.session.lastAt)
+            self.session.endAt = follow(self.session.endAt)
+        if (self.step is not None):
+            self.step.startAt = follow(self.step.startAt)
 
     def applyMarker(self, row, writer):
         writer.insertReading(row)
@@ -668,21 +739,30 @@ class MouseEntry:
         self.latestBroken = True
         # flag changes memory already has but the database doesn't, which the next transaction that succeeds saves, load's included
         self.pendingFlags = {}
+        # the first date saved on this boot and the newest one saved before it, so a step of the wall clock moves this boot's rows and nothing older, which only works while the two don't overlap
+        self.bootTracked = False
+        self.bootSince = None
+        self.bootAfter = None
 
 
 class Recorder(QObject):
     changed = pyqtSignal(str)
 
-    def __init__(self, folder=None, clock=time.time, timers=True, monotonic=time.monotonic, boottime=None):
+    def __init__(self, folder=None, clock=time.time, timers=True, monotonic=time.monotonic, boottime=None, bootId=None):
         super().__init__()
-        self.store = Store(folder, clock, monotonic) if folder is not None else None
         # the wall clock dates the rows, while every wait runs on the monotonic one
         self.clock = clock
         self.monotonic = monotonic
         # the real boot clock only measures the same lengths as the real wall clock, so a wall clock passed in has to bring its own
         if (boottime is None and clock is time.time and hasattr(time, "CLOCK_BOOTTIME")):
             boottime = bootClock
+            bootId = readBootId() if bootId is None else bootId
         self.boottime = boottime
+        # a step found after a restart is measured against the boot clock the saved offset came from, which only the boot's id can confirm
+        self.bootId = bootId if boottime is not None else None
+        # the wall clock minus the boot clock at the last look, which moves only when the wall clock is set
+        self.offset = None
+        self.store = Store(folder, clock, monotonic, self.clockFrame) if folder is not None else None
         self.entries = {}
         # one count for the whole recorder, so a mouse forgotten and seen again never gets a revision an old reply already has
         self.revisions = 0
@@ -707,6 +787,7 @@ class Recorder(QObject):
 
     def forget(self, key, source=SOURCE_HIDPP):
         # a mouse that left is dropped after its rows go out, so identities that come and go don't pile up, and one that comes back loads its saved flags again
+        self.followClock()
         entry = self.entries.get(key)
         if (entry is None or (entry.source is not None and entry.source != source)):
             return
@@ -730,6 +811,7 @@ class Recorder(QObject):
         return 0 if entry is None else entry.revision
 
     def summary(self, key):
+        self.followClock()
         if (self.store is None or not self.store.ensureOpen()):
             raise HistoryUnavailable()
         try:
@@ -746,6 +828,7 @@ class Recorder(QObject):
     def levels(self, key, rangeName):
         if (rangeName not in LEVEL_RANGES):
             raise ValueError("unknown range " + repr(rangeName))
+        self.followClock()
         if (self.store is None or not self.store.ensureOpen()):
             raise HistoryUnavailable()
         try:
@@ -797,6 +880,7 @@ class Recorder(QObject):
 
     def setWakeSupport(self, key, supported, pathKey=False):
         # None is a lookup that didn't answer, which leaves the saved flag as it is and counts wakes as unseen until one answers
+        self.followClock()
         entry = self.entryFor(key, pathKey)
         self.claim(entry, SOURCE_HIDPP)
         if (supported is None):
@@ -829,6 +913,7 @@ class Recorder(QObject):
             DbWriter(db, entry.mouseId).updateReportsItself(entry.pendingFlags["reportsItselfSince"])
 
     def addReading(self, key, reading, origin, name=None, source=SOURCE_HIDPP, pathKey=False, at=None, arrived=None):
+        self.followClock()
         at = self.clock() if at is None else at
         # a report carries the moment the worker read it, which can be well before the Qt thread gets to it
         arrived = self.monotonic() if arrived is None else arrived
@@ -849,6 +934,61 @@ class Recorder(QObject):
 
     def bootNow(self):
         return None if self.boottime is None else self.boottime()
+
+    def clockFrame(self):
+        if (self.bootId is None):
+            return None
+        return (self.bootId, self.clock() - self.boottime())
+
+    def followClock(self):
+        if (self.boottime is None):
+            return
+        offset = self.clock() - self.boottime()
+        previous = self.offset
+        # comparing each look with the one before keeps the slow slewing of the wall clock from adding up to a step
+        self.offset = offset
+        if (previous is None or abs(offset - previous) <= CLOCK_STEP_SECONDS):
+            return
+        moved = round(offset - previous)
+        for entry in list(self.entries.values()):
+            self.shiftEntry(entry, moved)
+
+    def shiftEntry(self, entry, moved):
+        # the rows waiting were dated on the wall clock before the step too
+        entry.pending = [replace(row, at=row.at + moved) for row in entry.pending]
+        if (entry.held is not None):
+            entry.held = replace(entry.held, at=entry.held.at + moved)
+        if (not entry.loaded or not entry.bootTracked or entry.bootSince is None):
+            return
+        since = entry.bootSince
+        tracked = entry.bootAfter is None or since + moved > entry.bootAfter
+        if (not self.store.isOpen()):
+            # the next open compares the offset saved for this boot with the clock then, and moves the rows there
+            entry.loaded = False
+            entry.needsGap = True
+            return
+        try:
+            with self.store.transaction() as db:
+                DbWriter(db, entry.mouseId).shift(since, moved)
+                self.saveBoot(db, entry, since + moved, tracked)
+        except sqlite3.Error as error:
+            self.writeFailed(entry, error)
+            # the rows kept their dates, so the track is loaded from them again
+            entry.loaded = False
+            return
+        entry.track.shift(since, moved)
+        if (entry.pendingFlags.get("reportsItselfSince") is not None and entry.pendingFlags["reportsItselfSince"] >= since):
+            entry.pendingFlags["reportsItselfSince"] += moved
+        entry.bootSince = since + moved
+        entry.bootTracked = tracked
+
+    def saveBoot(self, db, entry, since, tracked):
+        if (not self.store.bootsReady):
+            return
+        if (not tracked or self.bootId is None or self.offset is None):
+            db.execute("delete from boots where mouseId = ?", (entry.mouseId,))
+            return
+        db.execute("insert or replace into boots (mouseId, boot, offset, since, after) values (?, ?, ?, ?, ?)", (entry.mouseId, self.bootId, self.offset, since, entry.bootAfter))
 
     def isHidppKey(self, entry):
         # a key only UPower has named this run is still a HID++ mouse when its saved history says so
@@ -881,6 +1021,7 @@ class Recorder(QObject):
         self.saveFlags(entry)
 
     def addMarker(self, key, origin, source=SOURCE_HIDPP, pathKey=False, at=None, arrived=None):
+        self.followClock()
         at = int(self.clock() if at is None else at)
         arrived = self.monotonic() if arrived is None else arrived
         entry = self.entryFor(key, pathKey)
@@ -905,6 +1046,7 @@ class Recorder(QObject):
         self.schedule()
 
     def tick(self):
+        self.followClock()
         now = self.monotonic()
         for entry in list(self.entries.values()):
             while (entry.pending and entry.pending[0].arrived <= now - WAKE_SET_SECONDS):
@@ -937,6 +1079,7 @@ class Recorder(QObject):
         self.timer.start(max(1, int(wait * 1000) + 1))
 
     def stop(self):
+        self.followClock()
         for entry in self.entries.values():
             pending = entry.pending
             entry.pending = []
@@ -1000,9 +1143,12 @@ class Recorder(QObject):
             self.store.say("More new mice showed up than the history adds at once, so some aren't saved yet", FAILED_NEW_MICE)
             return
         if (found is None):
+            firstSeen = int(self.clock())
             with self.store.transaction():
-                cursor = db.execute("insert into mice (key, name, source, firstSeen, reportsItselfSince, wakeSupport) values (?, ?, ?, ?, ?, ?)", (entry.key, entry.name, entry.source, int(self.clock()), entry.track.reportsItselfSince, int(entry.track.wakeSupport)))
+                cursor = db.execute("insert into mice (key, name, source, firstSeen, reportsItselfSince, wakeSupport) values (?, ?, ?, ?, ?, ?)", (entry.key, entry.name, entry.source, firstSeen, entry.track.reportsItselfSince, int(entry.track.wakeSupport)))
             entry.mouseId = cursor.lastrowid
+            entry.bootSince = firstSeen
+            entry.bootAfter = None
             # a row made after some were left out means they're being saved again
             self.store.works(FAILED_NEW_MICE, "New mice are saved to the history again")
             track = Track(entry.track.wakeSupport, entry.track.reportsItselfSince)
@@ -1022,16 +1168,27 @@ class Recorder(QObject):
                 track.last = Row(*last)
             power = db.execute("select power from readings where mouseId = ? and power is not null order by at desc, seq desc limit 1", (entry.mouseId,)).fetchone()
             track.lastPower = None if power is None else power[0]
-            track.session = self.loadOpenSession(db, entry.mouseId)
+            track.session = self.loadOpenSession(db, entry.mouseId, int(self.clock()), self.bootNow())
+            self.loadBoot(db, entry)
             # what happened while nothing was watching is unknown, so the first row after loading follows a gap row
             entry.needsGap = True
+        entry.bootTracked = True
         track.boundary = True
         track.wakesUnseen = entry.track.wakesUnseen
         entry.track = track
         entry.loaded = True
         entry.pendingFlags = {}
 
-    def loadOpenSession(self, db, mouseId):
+    def loadBoot(self, db, entry):
+        found = db.execute("select boot, since, after from boots where mouseId = ?", (entry.mouseId,)).fetchone() if self.store.bootsReady else None
+        if (found is not None and found[0] == self.bootId):
+            # a run earlier on this boot saved rows from here on, which a step during this run moves along with its own
+            entry.bootSince, entry.bootAfter = found[1], found[2]
+            return
+        entry.bootSince = None
+        entry.bootAfter = db.execute("select max(at) from readings where mouseId = ?", (entry.mouseId,)).fetchone()[0]
+
+    def loadOpenSession(self, db, mouseId, now, elapsed):
         found = db.execute("select id, kind, startAt, startPercent, readingCount, slowCount, errorCount, inferred from sessions where mouseId = ? and endAt is null order by startAt desc, id desc limit 1", (mouseId,)).fetchone()
         if (found is None):
             return None
@@ -1054,6 +1211,9 @@ class Recorder(QObject):
         lastPercent = db.execute("select percent from readings where mouseId = ? and at >= ? and percent is not null order by at desc, seq desc limit 1", (mouseId, startAt)).fetchone()
         if (lastPercent is not None):
             session.lastPercent = lastPercent[0]
+        # an earlier run's start has no boot clock reading, so it goes on this run's as long ago as the wall clock says, or, when the wall clock is behind the session's own last reading, as long as its saved readings span
+        if (elapsed is not None):
+            session.startElapsed = elapsed - max(0, max(now, session.lastAt) - startAt)
         return session
 
     def write(self, entry, row):
@@ -1077,6 +1237,12 @@ class Recorder(QObject):
                     if (entry.needsGap and row.origin != ORIGIN_GAP):
                         track.applyMarker(Row(row.at, ORIGIN_GAP, elapsed=row.elapsed), writer)
                     self.apply(track, row, writer)
+                    since = entry.bootSince
+                    tracked = entry.bootTracked
+                    if (tracked):
+                        since = row.at if since is None else min(since, row.at)
+                        tracked = entry.bootAfter is None or since > entry.bootAfter
+                        self.saveBoot(db, entry, since, tracked)
             except sqlite3.Error as error:
                 # the rollback undid the database, and the track in memory never took the change, so the rows and sessions still agree while any flag in pendingFlags waits for the next transaction that succeeds
                 self.writeFailed(entry, error)
@@ -1085,6 +1251,8 @@ class Recorder(QObject):
             entry.nameChanged = False
             entry.pendingFlags = {}
             entry.track = track
+            entry.bootSince = since
+            entry.bootTracked = tracked
             self.revisions += 1
             entry.revision = self.revisions
             # only a budget back to full counts as over, so a slow flood that keeps nibbling at it can't fill the journal with pairs of lines

@@ -22,6 +22,15 @@ import history
 app = QApplication.instance() or QApplication([])
 KEY = "02bc524c"
 START = 1800000000
+BOOT = "test-boot"
+FIXTURE_SCHEMA = (
+    # the schema as fac27f9 wrote it, kept here so a later change to history.SCHEMA can't change what this opens
+    "create table mice (id integer primary key, key text not null unique, name text, source text not null, firstSeen integer not null, reportsItselfSince integer, wakeSupport integer not null default 0)",
+    "create table readings (mouseId integer not null, at integer not null, seq integer not null, percent integer, level text, charging integer, power integer, millivolts integer, origin integer not null, primary key (mouseId, at, seq)) without rowid",
+    "create table steps (mouseId integer not null, kind integer not null, at integer not null, seq integer not null, minutesPerPercent real not null, fromPercent integer not null, toPercent integer not null, power integer, unbroken integer not null, session integer not null, primary key (mouseId, kind, at, seq)) without rowid",
+    "create table sessions (id integer primary key, mouseId integer not null, kind integer not null, startAt integer not null, endAt integer, startPercent integer, endPercent integer, power integer, readingCount integer not null, slowCount integer not null, errorCount integer not null, inferred integer not null)",
+    "create index sessionsByMouse on sessions (mouseId, startAt)",
+)
 
 
 class Clock:
@@ -87,7 +96,7 @@ class RecorderCase(unittest.TestCase):
         self.errors = io.StringIO()
         self.patch = mock.patch.object(sys, "stderr", self.errors)
         self.patch.start()
-        self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic, boottime=self.clock.boottime)
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic, boottime=self.clock.boottime, bootId=BOOT)
 
     def tearDown(self):
         self.recorder.stop()
@@ -179,7 +188,7 @@ class StoreTests(RecorderCase):
         with self.db() as db:
             self.assertEqual(db.execute("pragma user_version").fetchone()[0], 1)
             tables = {name for (name,) in db.execute("select name from sqlite_master where type = 'table'")}
-        self.assertEqual(tables, {"mice", "readings", "steps", "sessions", "heartbeat"})
+        self.assertEqual(tables, {"mice", "readings", "steps", "sessions", "heartbeat", "boots"})
 
     @unittest.skipUnless(sys.version_info >= (3, 13), "sqlite3 warns about unclosed connections only from Python 3.13")
     def testTheHelpersCloseTheirConnections(self):
@@ -808,6 +817,239 @@ class ClockStepTests(RecorderCase):
         self.assertEqual(self.steps()[-1][2:5], (90.0, 79, 78))
 
 
+class ClockFrameTests(RecorderCase):
+    def restart(self, bootId=BOOT):
+        self.recorder.stop()
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic, boottime=self.clock.boottime, bootId=bootId)
+
+    def kill(self):
+        # a power loss or a SIGKILL ends the run with no stop, while every commit that returned is on the disk
+        self.recorder.store.closeQuietly()
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic, boottime=self.clock.boottime, bootId=BOOT)
+
+    def testARestartAfterTheClockStepsBackKeepsTheChargesNewerReadings(self):
+        # the charge's first reading was saved while the clock was two hours ahead
+        self.event(7200, 50, charging=1, power=1)
+        self.clock.jump(-7200)
+        self.event(600, 51, charging=1, power=2)
+        self.event(1200, 52, charging=1, power=2)
+        self.restart()
+        self.event(1800, 52, charging=0, power=None)
+        self.assertEqual(self.sessions()[0][:6], (history.CHARGE, 0, 1200, 50, 52, 2))
+
+    def testTheLastChargeAfterTheClockStepsBackIsTheNewestOne(self):
+        self.event(7200, 50, charging=1, power=1)
+        self.event(7800, 50, charging=0, power=0)
+        self.clock.jump(-7800)
+        self.event(600, 50, charging=1, power=2)
+        self.assertEqual(self.recorder.summary(KEY)["lastCharge"]["power"], 2)
+
+    def testARestartAfterTheClockStepsBackComparesWithTheNewestReading(self):
+        self.event(7200, 50)
+        self.clock.jump(-7200)
+        self.event(600, 40)
+        self.restart()
+        # five points up from the newest reading, across the restart's gap, is a charge done while nothing watched
+        self.event(1200, 45)
+        self.assertIn((history.CHARGE, 600, 1200, 40, 45), [s[:5] for s in self.sessions()])
+
+    def testTheOpenSummaryAfterTheClockStepsBackKeepsItsSteps(self):
+        self.recorder.setWakeSupport(KEY, True)
+        self.event(0, 80)
+        self.event(1800, 79)
+        self.clock.jump(-6 * 60 * 60)
+        for index in range(5):
+            self.event(3600 + 1800 * index - 6 * 60 * 60, 78 - index)
+        opened = self.recorder.summary(KEY)["open"]
+        self.assertEqual((opened["kind"], opened["startAt"], opened["count"], opened["median"]), (history.DISCHARGE, START - 6 * 60 * 60, 5, 30.0))
+
+    def chargeAcrossAReboot(self):
+        # a charge saved while the clock was three hours ahead, and the machine rebooted before the clock was set, so no boot clock spans the two
+        self.recorder.setWakeSupport(KEY, True)
+        ahead = 3 * 60 * 60
+        self.clock.jump(ahead)
+        for index in range(4):
+            self.event(ahead + 60 * index, 50 + index, charging=1, power=1)
+        self.restart(bootId="next-boot")
+        self.clock.jump(-ahead)
+        for seconds, percent in ((240, 54), (300, 55), (360, 56)):
+            self.event(seconds, percent, charging=1, power=1)
+
+    def testARestoredChargeMeasuresItsFirstMinutesOnTheBootClock(self):
+        self.chargeAcrossAReboot()
+        # the step from 55 began four minutes into the charge, which the wall clock put three hours before its start
+        self.assertEqual([(s[3], s[6]) for s in self.steps() if s[0] == history.CHARGE], [(54, 0), (55, 1), (50, 0), (51, 0), (52, 1)])
+
+    def testAReadingSavedWhileTheClockWasAheadDoesntComeBackInTheChart(self):
+        self.event(0, 80)
+        self.clock.jump(2 * 60 * 60)
+        self.event(7300, 79)
+        self.clock.jump(-2 * 60 * 60)
+        self.event(300, 78)
+        self.at(8000)
+        self.assertEqual(self.recorder.summary(KEY)["recent"][-1][1], 78)
+
+    def testAReadingSavedWhileTheClockWasAheadDoesntComeBackAfterAKill(self):
+        self.event(0, 80)
+        self.clock.jump(2 * 60 * 60)
+        self.event(7300, 79)
+        self.kill()
+        # the clock was set right before the next start
+        self.clock.jump(-2 * 60 * 60)
+        self.event(300, 78)
+        self.at(8000)
+        self.assertEqual(self.recorder.summary(KEY)["recent"][-1][1], 78)
+        self.assertEqual([row[:3] for row in self.rows()][:2], [(0, history.ORIGIN_EVENT, 80), (100, history.ORIGIN_EVENT, 79)])
+
+    def testALongSlotDoesntCarryAReadingSavedWhileTheClockWasAhead(self):
+        ahead = 13 * 60 * 60
+        self.clock.jump(ahead)
+        self.event(ahead + 10, 80)
+        self.clock.jump(-ahead)
+        self.event(300, 78)
+        self.clock.now = START + 3 * 24 * 60 * 60
+        slots = self.recorder.levels(KEY, "month")["slots"]
+        # the month's slots are twelve hours long and the 54th starts at START
+        self.assertEqual([slot[1:3] for slot in slots[54:57]], [[78, 80], [78, 78], [78, 78]])
+
+    def testASlowlySlewedClockMovesNothing(self):
+        self.event(0, 80)
+        self.clock.jump(-history.CLOCK_STEP_SECONDS)
+        self.event(1800, 79)
+        self.assertEqual([row[0] for row in self.rows()], [0, 1800])
+
+    def testAClockStepMovesNoRowAnEarlierBootSaved(self):
+        self.event(0, 80)
+        self.restart(bootId="next-boot")
+        ahead = 5 * 60 * 60
+        self.clock.jump(ahead)
+        self.event(ahead + 100, 79)
+        self.clock.jump(-ahead)
+        self.event(300, 78)
+        self.assertEqual([row[:3] for row in self.rows() if row[1] != history.ORIGIN_GAP], [(0, history.ORIGIN_EVENT, 80), (100, history.ORIGIN_EVENT, 79), (300, history.ORIGIN_EVENT, 78)])
+
+    def testAClockBehindTheHistoryMovesNoRowSavedBefore(self):
+        # west of UTC, a quick reboot from Windows starts the clock hours behind the last run's rows, and time sync then sets it forward
+        for seconds, percent in ((0, 80), (3600, 79), (7200, 78)):
+            self.event(seconds, percent)
+        saved = self.rows()
+        self.restart(bootId="next-boot")
+        behind = 5 * 60 * 60
+        self.clock.jump(-behind)
+        self.event(7300 - behind, 77)
+        self.clock.jump(behind)
+        self.event(7400, 76)
+        self.assertEqual([row for row in self.rows() if 0 <= row[0] <= 7200], saved)
+        self.assertEqual(self.rows()[-1][:3], (7400, history.ORIGIN_EVENT, 76))
+
+    def testAPendingAndAHeldReadingFollowTheClock(self):
+        self.event(0, 80)
+        self.clock.now = START + 5
+        self.recorder.addReading(KEY, battery(79), history.ORIGIN_EVENT)
+        self.at(7)
+        self.assertIsNotNone(self.recorder.entries[KEY].held)
+        self.clock.jump(-3600)
+        self.at(12 - 3600)
+        self.clock.now = START + 100 - 3600
+        self.recorder.addReading(KEY, battery(78), history.ORIGIN_EVENT)
+        self.clock.jump(-3600)
+        self.at(102 - 7200)
+        self.assertEqual([row[:3] for row in self.rows()], [(-7200, 0, 80), (5 - 7200, 0, 79), (100 - 7200, 0, 78)])
+
+    def testAClockStepAcrossARestartOnTheSameBootMovesTheLastRunsRows(self):
+        self.event(0, 80)
+        self.recorder.stop()
+        # the clock was set back while the service was stopped
+        self.clock.jump(-60 * 60)
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic, boottime=self.clock.boottime, bootId=BOOT)
+        self.event(600 - 60 * 60, 79)
+        self.assertEqual([row[:3] for row in self.rows() if row[1] != history.ORIGIN_GAP], [(-3600, 0, 80), (600 - 3600, 0, 79)])
+
+    def testNoQueryThatFollowsAStepScansATable(self):
+        self.recorder.setWakeSupport(KEY, True)
+        for seconds, percent in ((0, 80), (1800, 79), (3600, 78)):
+            self.event(seconds, percent)
+        self.event(3700, 78, charging=1, power=1)
+        # a reboot, so loading looks up the newest date saved before this boot
+        self.restart(bootId="next-boot")
+        self.assertTrue(self.recorder.available())
+        db = self.recorder.store.db
+        statements = []
+        db.set_trace_callback(statements.append)
+        self.event(3800, 79, charging=1, power=1)
+        self.event(3900, 80, charging=1, power=1)
+        self.clock.jump(-2 * 60 * 60)
+        self.event(4400 - 2 * 60 * 60, 81, charging=1, power=1)
+        db.set_trace_callback(None)
+        statements = [sql for sql in dict.fromkeys(statements) if sql.split()[0] in ("select", "insert", "update", "delete")]
+        for fragment in ("update readings set at", "update steps set at", "update sessions set endAt", "update mice set firstSeen", "into boots", "from boots", "select max(at)"):
+            self.assertTrue(any(fragment in sql for sql in statements), fragment)
+        scans = [sql for sql in statements if any(row[3].startswith("SCAN") for row in db.execute("explain query plan " + sql))]
+        self.assertEqual(scans, [])
+
+    def dualBoot(self, ahead):
+        # Windows keeps local time in the clock chip, so east of UTC Linux boots ahead until time sync sets it back a minute later
+        self.clock.jump(ahead)
+        self.recorder.setWakeSupport(KEY, True)
+        self.event(ahead + 10, 50, charging=1, power=2)
+        self.event(ahead + 40, 51, charging=1, power=2)
+        self.clock.jump(-ahead)
+        for index in range(5):
+            self.event(100 + 60 * index, 52 + index, charging=1, power=2)
+        self.restart()
+        for index in range(8):
+            self.event(600 + 60 * index, 57 + index, charging=1, power=2)
+        self.at(1200)
+        summary = self.recorder.summary(KEY)
+        found = [self.rows(), self.steps(), summary["firstSeen"], summary["open"], summary["recent"], self.recorder.levels(KEY, "day")["slots"], self.recorder.levels(KEY, "month")["slots"]]
+        self.event(1300, 64, charging=0, power=0)
+        found += [self.sessions(), self.recorder.summary(KEY)["lastCharge"]]
+        return found
+
+    def testADualBootLeavesTheSameHistoryAsAClockThatWasRight(self):
+        expected = self.dualBoot(0)
+        self.recorder.stop()
+        shutil.rmtree(self.folder)
+        self.folder = tempfile.mkdtemp()
+        self.clock = Clock()
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic, boottime=self.clock.boottime, bootId=BOOT)
+        self.assertEqual(self.dualBoot(5 * 60 * 60), expected)
+        self.assertEqual(expected[-2][0][:6], (history.CHARGE, 10, 1020, 50, 64, 2))
+
+    def testAHistoryWrittenAtTheLoopsStartOpensAndKeepsEveryRow(self):
+        self.recorder.stop()
+        path = os.path.join(self.folder, history.FILE_NAME)
+        db = sqlite3.connect(path)
+        with db:
+            for statement in FIXTURE_SCHEMA:
+                db.execute(statement)
+            db.execute("pragma user_version = 1")
+            db.execute("insert into mice (id, key, name, source, firstSeen, wakeSupport) values (1, ?, 'PRO X3 SUPERSTRIKE', 'hidpp', ?, 1)", (KEY, START))
+            for index in range(3):
+                db.execute("insert into readings (mouseId, at, seq, percent, charging, power, origin) values (1, ?, 0, ?, 0, 0, 0)", (START + 1800 * index, 80 - index))
+            db.execute("insert into sessions (mouseId, kind, startAt, startPercent, readingCount, slowCount, errorCount, inferred) values (1, 0, ?, 80, 3, 0, 0, 0)", (START,))
+            db.execute("insert into steps (mouseId, kind, at, seq, minutesPerPercent, fromPercent, toPercent, power, unbroken, session) values (1, 0, ?, 0, 30.0, 79, 78, 0, 1, 1)", (START + 3600,))
+        db.close()
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic, boottime=self.clock.boottime, bootId=BOOT)
+        saved = self.rows()
+        self.clock.jump(4 * 60 * 60)
+        for index in range(3):
+            self.event(4 * 60 * 60 + 5400 + 1800 * index, 77 - index)
+        self.clock.jump(-4 * 60 * 60)
+        self.event(5400 + 1800 * 3, 74)
+        self.assertEqual([name for name in os.listdir(self.folder) if ".broken-" in name], [])
+        self.assertEqual(self.rows()[:len(saved)], saved)
+        self.assertEqual([row[0] for row in self.rows() if row[1] == history.ORIGIN_EVENT], [0, 1800, 3600, 5400, 7200, 9000, 10800])
+        self.assertEqual(self.sessions(), [(history.DISCHARGE, 0, None, 80, None, 0, 7, 0, 0, 0)])
+        with self.db() as db:
+            self.assertEqual(db.execute("pragma user_version").fetchone()[0], 1)
+            tables = {name: sql.lower() for name, sql in db.execute("select name, sql from sqlite_master where name not like 'sqlite_%'")}
+        # every table and index fac27f9 made is left as it was, so that release still reads the file
+        self.assertEqual([tables[name] for name in ("mice", "readings", "steps", "sessions", "sessionsByMouse")], [statement.lower() for statement in FIXTURE_SCHEMA])
+        # the saved step, and the two whole drops after the gap the restart left
+        self.assertEqual(self.recorder.summary(KEY)["open"]["count"], 3)
+
+
 class ReportsItselfTests(RecorderCase):
     def setUp(self):
         super().setUp()
@@ -1396,7 +1638,7 @@ class RecoveryTests(RecorderCase):
     def kill(self):
         # a power loss or a SIGKILL ends the run with no stop, so nothing more is written, while every commit that returned is on the disk
         self.recorder.store.closeQuietly()
-        self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic, boottime=self.clock.boottime)
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic, boottime=self.clock.boottime, bootId=BOOT)
 
     def dayLevels(self):
         return [slot[1] for slot in self.recorder.levels(KEY, "day")["slots"]]
@@ -1464,7 +1706,7 @@ class RecoveryTests(RecorderCase):
         self.recorder.stop()
         with self.db() as db:
             db.execute("drop table heartbeat")
-        self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic, boottime=self.clock.boottime)
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic, boottime=self.clock.boottime, bootId=BOOT)
         self.clock.now = START + 5000
         self.assertTrue(self.recorder.available())
         self.assertEqual(self.gaps(), [])
@@ -1525,7 +1767,7 @@ class RecoveryTests(RecorderCase):
         self.at(2)
         self.at(1000)
         self.recorder.stop()
-        self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic, boottime=self.clock.boottime)
+        self.recorder = history.Recorder(self.folder, self.clock, timers=False, monotonic=self.clock.monotonic, boottime=self.clock.boottime, bootId=BOOT)
         self.clock.now = START + 9000
         self.assertTrue(self.recorder.available())
         self.assertEqual([row[:2] for row in self.rows()], [(0, history.ORIGIN_UPOWER), (1000, history.ORIGIN_GAP)])
