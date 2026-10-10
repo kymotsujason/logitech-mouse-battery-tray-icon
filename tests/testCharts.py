@@ -410,6 +410,35 @@ class LevelChartTests(ChartCase):
         chart = self.make(charts.LineChart("Hours per Charge", "h", charts.HOURS_EMPTY, "h"))
         self.assertEqual(chart.title, "Hours per Charge, All Time")
 
+class ChartDescriptionTests(ChartCase):
+    # the charts are painted, so the description is all a screen reader gets of what each one shows
+    def testALevelChartDescribesItsMessageOrItsNewestBar(self):
+        chart = self.make(charts.LevelChart())
+        self.assertEqual(chart.accessibleDescription(), charts.RANGE_EMPTY["week"])
+        chart.setSlots([[NOW, None, None, None, False]] * 84)
+        self.assertEqual(chart.accessibleDescription(), charts.LEVEL_EMPTY)
+        chart.setSlots(slots(percent=62)[:-1] + [[NOW, None, None, None, False]])
+        self.assertEqual(chart.accessibleDescription(), "Battery Level, Last 7 Days, latest " + chart.hoverText(82))
+        self.assertTrue(chart.accessibleDescription().endswith(", 62%"), chart.accessibleDescription())
+        chart.setSlots([], rangeName="month", message=historyWindow.LOADING_TEXT)
+        self.assertEqual(chart.accessibleDescription(), historyWindow.LOADING_TEXT)
+        chart.setSlots([], rangeName="month", message=historyWindow.RANGE_ERROR_TEXT)
+        self.assertEqual(chart.accessibleDescription(), historyWindow.RANGE_ERROR_TEXT)
+        chart.setSlots([[NOW - 7 * 24 * 60 * 60, 30, 90, 1], [NOW, 40, 70, 0]], rangeName="month")
+        self.assertEqual(chart.accessibleDescription(), "Battery Level, Last 30 Days, latest " + chart.hoverText(1))
+        self.assertTrue(chart.accessibleDescription().endswith(", 40% to 70%"), chart.accessibleDescription())
+        self.assertEqual(chart.accessibleName(), "Battery Level, Last 30 Days")
+
+    def testALineChartDescribesItsHeadlineOrItsEmptyText(self):
+        chart = self.make(charts.LineChart("Charging Speed", "min per 10%", charts.CHARGING_EMPTY, "min"))
+        self.assertEqual(chart.accessibleDescription(), charts.CHARGING_EMPTY)
+        thisMonth = time.strftime("%Y-%m", time.gmtime())
+        chart.setSeries({"charger": [("2026-01", 6.0), (thisMonth, 4.0)]})
+        self.assertEqual(chart.accessibleDescription(), "4 min per 10%, this month")
+        chart.setSeries({"charger": []})
+        self.assertEqual(chart.accessibleDescription(), charts.CHARGING_EMPTY)
+
+
 class EnglishNameTests(ChartCase):
     def namedStrftime(self, asked):
         real = time.strftime

@@ -104,6 +104,10 @@ class Chart(QWidget):
         self.theme = theme
         self.update()
 
+    def describe(self):
+        # the bars, the lines, and their messages are painted, so a screen reader gets what the chart shows from here
+        self.setAccessibleDescription(self.summary())
+
     def area(self):
         return QRectF(16, TOP, self.width() - 32 - self.axisWidth(), self.height() - TOP - BOTTOM)
 
@@ -155,6 +159,7 @@ class LevelChart(Chart):
         self.morph.setEndValue(1.0)
         self.morph.valueChanged.connect(self.onMorphStep)
         self.setMouseTracking(True)
+        self.describe()
 
     def onMorphStep(self, value):
         self.morphProgress = value
@@ -192,6 +197,7 @@ class LevelChart(Chart):
         self.setAccessibleName(self.title)
         # message stands in for the bars while a range loads or can't be read
         self.message = message
+        self.describe()
         self.fromRects = rects
         self.morphProgress = 0.0 if morphs else 1.0
         if (morphs):
@@ -204,6 +210,12 @@ class LevelChart(Chart):
 
     def emptyText(self):
         return self.message or RANGE_EMPTY[self.rangeName]
+
+    def summary(self):
+        shown = [index for index, slot in enumerate(self.slots) if self.values(slot)]
+        if (self.message is not None or not shown):
+            return self.emptyText()
+        return self.title + ", latest " + self.hoverText(shown[-1])
 
     def area(self):
         # the range control sits in the top right corner, so the bars start below it
@@ -438,10 +450,18 @@ class LineChart(Chart):
         self.empty = empty
         self.byCharger = byCharger
         self.series = {}
+        self.describe()
 
     def setSeries(self, series):
         self.series = {label: points for label, points in series.items() if points}
+        self.describe()
         self.update()
+
+    def summary(self):
+        if (not self.series):
+            return self.empty
+        latestMonth, latest = self.headline()
+        return latestText(latest, self.unit, latestMonth, time.time())
 
     def months(self):
         return sorted({month for points in self.series.values() for month, value in points})

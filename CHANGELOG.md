@@ -6,7 +6,7 @@ This file lists the changes in each release of Mouse Battery, newest first.
 
 ### Added
 
-- A battery window opens when you click the tray icon or pick "Battery Health" from its menu, with the mouse, its level, and a sidebar when you have more than one mouse, and it fits small screens, works from the keyboard and a screen reader, comes back when you click the tray icon while it's minimized, and moves smoothly when you switch charts, ranges, or mice or open its sleep menu.
+- A battery window opens when you click the tray icon or pick "Battery Health" from its menu, with the mouse, its level, and a sidebar when you have more than one mouse, and it fits small screens, comes back when you click the tray icon while it's minimized, and moves smoothly when you switch charts, ranges, or mice or open its sleep menu. Its controls work from the keyboard and a screen reader, and a screen reader also reads each chart's newest figure or the message shown in its place.
 - The window shows a level chart for the last 24 hours, 7 days, or 30 days, with each bar colored by state (blue otherwise, green with a dot for a charge, red at 20% or below), and it remembers the range you picked.
 - The hours per charge and charging speed charts start at zero with round tick labels, so a small change looks small.
 - The window shows battery health, including how many hours a charge lasts, how fast it charges month by month, and the number of charge cycles.
