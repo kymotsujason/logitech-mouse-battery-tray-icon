@@ -1,3 +1,4 @@
+import errno
 import os
 import tempfile
 import threading
@@ -48,6 +49,57 @@ class FindNodeTests(unittest.TestCase):
 
     def testMissingDirectoryGivesNoNodes(self):
         self.assertEqual(hidpp.findHidppNodes("/nonexistent/hidraw", "/dev"), [])
+
+    def findFailing(self, root, failures, unreadable):
+        # each failure names a node and one of its sysfs files, so the read fails there and nowhere else
+        realOpen = open
+
+        def failingOpen(path, *args, **kwargs):
+            parts = path.split(os.sep)
+            error = failures.get((parts[-3], parts[-1]))
+            if (error is not None):
+                raise error
+            return realOpen(path, *args, **kwargs)
+
+        with mock.patch.object(hidpp, "open", failingOpen, create=True):
+            return hidpp.findHidppNodes(root, "/dev", unreadable)
+
+    def testAnEntryThatCantBeReadIsHandedBackApartFromTheNodes(self):
+        with tempfile.TemporaryDirectory() as root:
+            for name in ("hidraw4", "hidraw5", "hidraw6"):
+                self.makeNode(root, name, "0003:0000046D:0000C54F", C54F_DESCRIPTOR)
+            unreadable = {}
+            failures = {("hidraw5", "report_descriptor"): OSError(errno.EMFILE, "Too many open files"), ("hidraw6", "uevent"): PermissionError(errno.EACCES, "Permission denied")}
+            self.assertEqual(self.findFailing(root, failures, unreadable), ["/dev/hidraw4"])
+        self.assertEqual({path: error.errno for path, error in unreadable.items()}, {"/dev/hidraw5": errno.EMFILE, "/dev/hidraw6": errno.EACCES})
+
+    def testAnEntryThatWentAwayIsSkipped(self):
+        # measured on kernfs, which sysfs is, by removing a cgroup: an open of a removed entry gives ENOENT, and a read of one opened before gives ENODEV
+        with tempfile.TemporaryDirectory() as root:
+            for name in ("hidraw4", "hidraw5", "hidraw6"):
+                self.makeNode(root, name, "0003:0000046D:0000C54F", C54F_DESCRIPTOR)
+            unreadable = {}
+            failures = {("hidraw5", "uevent"): FileNotFoundError(errno.ENOENT, "No such file or directory"), ("hidraw6", "report_descriptor"): OSError(errno.ENODEV, "No such device")}
+            self.assertEqual(self.findFailing(root, failures, unreadable), ["/dev/hidraw4"])
+        self.assertEqual(unreadable, {})
+
+    def testAnotherVendorsUnreadableDescriptorIsntRead(self):
+        # a hardened setup may keep another device's descriptor from this account, which must not hold up the Logitech receiver beside it
+        with tempfile.TemporaryDirectory() as root:
+            self.makeNode(root, "hidraw4", "0003:0000046D:0000C54F", C54F_DESCRIPTOR)
+            self.makeNode(root, "hidraw6", "0003:00001CA3:00000701", C54F_DESCRIPTOR)
+            self.makeNode(root, "hidraw7", "0003:0000046D:0000C52B", C54F_DESCRIPTOR, driver="logitech-djreceiver")
+            unreadable = {}
+            failures = {("hidraw6", "report_descriptor"): PermissionError(errno.EACCES, "Permission denied"), ("hidraw7", "report_descriptor"): PermissionError(errno.EACCES, "Permission denied")}
+            self.assertEqual(self.findFailing(root, failures, unreadable), ["/dev/hidraw4"])
+        self.assertEqual(unreadable, {})
+
+    def testACallerThatDoesntAskStillGetsTheNodesThatRead(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.makeNode(root, "hidraw4", "0003:0000046D:0000C54F", C54F_DESCRIPTOR)
+            self.makeNode(root, "hidraw5", "0003:0000046D:0000C54F", C54F_DESCRIPTOR)
+            failures = {("hidraw5", "report_descriptor"): OSError(errno.EMFILE, "Too many open files")}
+            self.assertEqual(self.findFailing(root, failures, None), ["/dev/hidraw4"])
 
     def testUeventWithABadByteStillMatches(self):
         with tempfile.TemporaryDirectory() as root:

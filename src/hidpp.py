@@ -1,3 +1,4 @@
+import errno
 import os
 import random
 import select
@@ -32,6 +33,8 @@ FEATURE_DEVICE_INFO = 0x0003
 # the wireless status feature sends an event each time the device connects, which is how a wake shows when nothing else says so
 FEATURE_WIRELESS_STATUS = 0x1D4B
 MOUSE_KINDS = (3, 4, 5)
+# a sysfs entry removed between the listing and the read, measured on kernfs by removing a cgroup, where an open after the removal gives ENOENT and a read of a file opened before it gives ENODEV
+VANISHED_ERRNOS = (errno.ENOENT, errno.ENODEV)
 
 ANSWER = 0
 ERROR = 1
@@ -126,17 +129,19 @@ def readUevent(text):
     return fields
 
 
-def isHidppNode(uevent, descriptor):
+def isLogitechGeneric(uevent):
     fields = readUevent(uevent)
     parts = fields.get("HID_ID", "").upper().split(":")
     if (len(parts) != 3 or parts[0] != USB_BUS or parts[1] != LOGITECH_VENDOR):
         return False
-    if (fields.get("DRIVER") != HID_GENERIC):
-        return False
-    return isHidppDescriptor(descriptor)
+    return fields.get("DRIVER") == HID_GENERIC
 
 
-def findHidppNodes(sysRoot="/sys/class/hidraw", devRoot="/dev"):
+def isHidppNode(uevent, descriptor):
+    return isLogitechGeneric(uevent) and isHidppDescriptor(descriptor)
+
+
+def findHidppNodes(sysRoot="/sys/class/hidraw", devRoot="/dev", unreadable=None):
     nodes = []
     if (not os.path.isdir(sysRoot)):
         return nodes
@@ -145,9 +150,15 @@ def findHidppNodes(sysRoot="/sys/class/hidraw", devRoot="/dev"):
         try:
             with open(os.path.join(base, "uevent"), encoding="utf-8", errors="replace") as f:
                 uevent = f.read()
+            # another vendor's node is passed over before its descriptor is read, so one a hardened setup keeps from this account can't hold up a receiver
+            if (not isLogitechGeneric(uevent)):
+                continue
             with open(os.path.join(base, "report_descriptor"), "rb") as f:
                 descriptor = f.read()
-        except OSError:
+        except OSError as error:
+            # an entry that went away is an unplugged node, while any other failure can't say whether the node is HID++, so a caller that asks gets it back to leave the node as it was
+            if (unreadable is not None and error.errno not in VANISHED_ERRNOS):
+                unreadable[os.path.join(devRoot, name)] = error
             continue
         if (isHidppNode(uevent, descriptor)):
             nodes.append(os.path.join(devRoot, name))

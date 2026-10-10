@@ -20,7 +20,7 @@ def readVersion(folder):
     try:
         with open(os.path.join(folder, "version.py")) as f:
             text = f.read()
-    except OSError:
+    except FileNotFoundError:
         return None
     match = re.search(r'^VERSION = "([^"]*)"$', text, re.M)
     return match.group(1) if match else None
@@ -67,7 +67,17 @@ class InstallWatcher(QObject):
             # the files a running check imported may have changed since, so its answer is set aside and the folder looked at again
             self.checkAgain = True
             return
-        newVersion = readVersion(APP_FOLDER)
+        try:
+            newVersion = readVersion(APP_FOLDER)
+        except OSError as error:
+            # a version.py that's there but can't be read, such as with the tray out of fds, can't say no new version landed, so it's read again after the check's waits
+            if (self.retries < len(CHECK_RETRY_MS)):
+                printLine("Couldn't read version.py (" + (error.strerror or str(error)) + "), so it's read again later")
+                self.retryTimer.start(CHECK_RETRY_MS[self.retries])
+                self.retries += 1
+            else:
+                printLine("Couldn't read version.py (" + (error.strerror or str(error)) + "), so it isn't read again until the app folder changes")
+            return
         if (newVersion is None or newVersion == VERSION):
             return
         self.startCheck(newVersion)

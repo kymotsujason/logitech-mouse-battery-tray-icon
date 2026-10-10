@@ -22,9 +22,12 @@ from PyQt6.QtWidgets import QApplication
 import hidpp
 import history
 import receivers
+from tests.fakes.descriptors import C54F_DESCRIPTOR
 from tests.fakes.fakeDevice import NAME, FakeDevice, FakeNodes, deviceError, mouseHandler, reply
 
 app = QApplication.instance() or QApplication([])
+# the real listing, kept before any test patches it, for the tests that read a sysfs tree of their own
+REAL_FIND = hidpp.findHidppNodes
 FEATURE = hidpp.BatteryFeature(1, hidpp.FEATURE_UNIFIED_BATTERY, 5, True)
 PATH = "/dev/hidraw18"
 
@@ -539,7 +542,7 @@ class ReceiverListTests(unittest.TestCase):
     def testSteadyDevChurnStillScansWithinTheCeiling(self):
         scans = []
 
-        def countingFind(*args):
+        def countingFind(*args, **kwargs):
             scans.append(1)
             return self.nodes.find()
 
@@ -1356,6 +1359,97 @@ class ReceiverListTests(unittest.TestCase):
         self.mice.settleTimer.stop()
         self.assertEqual(self.errors.getvalue(), "Couldn't list HID++ nodes: EMFILE\nOpened " + RECEIVER + "\nCouldn't list HID++ nodes: ENOENT\n")
         self.assertEqual(list(self.mice.nodes), [RECEIVER])
+
+    def makeSysfs(self, *names):
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root, True)
+        for name in names:
+            base = os.path.join(root, name, "device")
+            os.makedirs(base)
+            with open(os.path.join(base, "uevent"), "w") as f:
+                f.write("DRIVER=hid-generic\nHID_ID=0003:0000046D:0000C54F\n")
+            with open(os.path.join(base, "report_descriptor"), "wb") as f:
+                f.write(bytes(C54F_DESCRIPTOR))
+        return root
+
+    def testAnOpenReceiverWhoseSysfsEntryCantBeReadStaysOpenAndIsLookedAtAgain(self):
+        root = self.makeSysfs(os.path.basename(RECEIVER))
+        failing = []
+        realOpen = open
+
+        def sysfsOpen(path, *args, **kwargs):
+            if (failing and path.endswith("report_descriptor")):
+                raise OSError(errno.EMFILE, "Too many open files")
+            return realOpen(path, *args, **kwargs)
+
+        self.nodes.add(RECEIVER, mouseHandler())
+        with mock.patch.object(hidpp, "findHidppNodes", lambda sysRoot=None, devRoot=None, **kwargs: REAL_FIND(root, "/dev", **kwargs)), mock.patch.object(hidpp, "open", sysfsOpen, create=True):
+            self.mice.start()
+            self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"]))
+            worker = self.mice.nodes[RECEIVER].worker
+            # the service runs out of fds for a moment, so the receiver's descriptor can't be read while it's still plugged in
+            failing.append(1)
+            self.mice.scanNodes()
+            self.assertEqual((list(self.mice.nodes), self.mice.denied, self.keys(), worker.is_alive()), ([RECEIVER], set(), ["02bc524c"], True))
+            failing.clear()
+            # nothing in /dev changes, so only the scan's own retry can say it reads again
+            self.assertTrue(waitUntil(lambda: "Read the sysfs entry" in self.errors.getvalue()))
+        self.assertEqual(self.errors.getvalue(), "Opened " + RECEIVER + "\nCouldn't read the sysfs entry for " + RECEIVER + ": EMFILE, so its node is left as it was and looked at again later\nRead the sysfs entry for " + RECEIVER + " again\n")
+
+    def testANewNodeWhoseSysfsEntryCantBeReadOpensOnceItReads(self):
+        self.nodes.add(RECEIVER, mouseHandler())
+        self.nodes.failRead(RECEIVER, PermissionError(errno.EACCES, "Permission denied"))
+        self.mice.start()
+        self.assertEqual((self.mice.nodes, self.mice.denied), ({}, set()))
+        # nothing in /dev changes, so only the scan's own retry can find it
+        self.nodes.readAgain(RECEIVER)
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"]))
+
+    def testALossWhileTheSysfsEntryCantBeReadIsRetriedAsAFailure(self):
+        self.nodes.add(RECEIVER, mouseHandler())
+        self.mice.start()
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"]))
+        self.nodes.failRead(RECEIVER, OSError(errno.EMFILE, "Too many open files"))
+        self.mice.onLost(self.mice.nodes[RECEIVER], OSError(errno.EIO, "Input/output error"))
+        self.assertEqual(self.mice.denied, {RECEIVER})
+        self.assertTrue(self.mice.deniedTimer.isActive())
+        self.assertIn("Lost " + RECEIVER + ": EIO\n", self.errors.getvalue())
+        self.assertNotIn("Removed", self.errors.getvalue())
+
+    def testADeniedNodeWhoseSysfsEntryCantBeReadStaysDenied(self):
+        self.nodes.deny(RECEIVER)
+        self.mice.start()
+        self.mice.deniedTimer.stop()
+        self.nodes.failRead(RECEIVER, OSError(errno.EMFILE, "Too many open files"))
+        self.mice.retryDenied()
+        self.assertEqual(self.mice.denied, {RECEIVER})
+        self.assertTrue(self.mice.deniedTimer.isActive())
+        self.nodes.readAgain(RECEIVER)
+        self.nodes.allow(RECEIVER, mouseHandler())
+        self.mice.deniedTimer.stop()
+        self.mice.retryDenied()
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"]))
+
+    def testAnUnreadableEntryPrintsOncePerErrorAndBacksOff(self):
+        path = "/dev/hidraw40"
+        with mock.patch.object(receivers, "DENIED_RETRY_MAX_MS", 300):
+            self.nodes.failRead(path, OSError(errno.EMFILE, "Too many open files"))
+            self.mice.start()
+            intervals = [self.mice.unreadableTimer.interval()]
+            for i in range(3):
+                self.mice.unreadableTimer.stop()
+                self.mice.retryUnreadable()
+                intervals.append(self.mice.unreadableTimer.interval())
+            # a new error starts the wait over at its shortest
+            self.nodes.failRead(path, PermissionError(errno.EACCES, "Permission denied"))
+            self.mice.scanNodes()
+            intervals.append(self.mice.unreadableTimer.interval())
+            self.nodes.readAgain(path)
+            self.mice.scanNodes()
+            self.assertFalse(self.mice.unreadableTimer.isActive())
+        self.assertEqual(intervals, [100, 200, 300, 300, 100])
+        later = ", so its node is left as it was and looked at again later\n"
+        self.assertEqual(self.errors.getvalue(), "Couldn't read the sysfs entry for " + path + ": EMFILE" + later + "Couldn't read the sysfs entry for " + path + ": EACCES" + later + "The sysfs entry for " + path + " no longer fails, and it isn't listed as a HID++ node\n")
 
     def testAServiceThatHasntListedNodesYetSaysItsLooking(self):
         searching = []

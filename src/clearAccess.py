@@ -34,8 +34,13 @@ def checkHeldNode(fd, sysRoot, name):
             uevent = f.read()
         with open(os.path.join(folder, "device", "report_descriptor"), "rb") as f:
             descriptor = f.read()
-    except (OSError, ValueError):
+    except ValueError:
         return None
+    except OSError as error:
+        # a node unplugged after its open is gone, while any other failure leaves a node that may still carry the access 1.0.x gave it
+        if (error.errno in hidpp.VANISHED_ERRNOS):
+            return None
+        raise
     if (number != deviceNumber(info.st_rdev) or not hidpp.isHidppNode(uevent, descriptor)):
         return None
     return info.st_rdev
@@ -71,7 +76,13 @@ def main(sysRoot="/sys/class/hidraw", devRoot="/dev", udevRoot="/run/udev/data",
         print("Couldn't find the " + GROUP + " group, so no node was changed")
         return 1
     failed = False
-    for path in hidpp.findHidppNodes(sysRoot, devRoot):
+    unreadable = {}
+    paths = hidpp.findHidppNodes(sysRoot, devRoot, unreadable)
+    # a node whose sysfs entry can't be read may still carry the access 1.0.x gave it, so the run can't say it closed every node
+    for path, error in sorted(unreadable.items()):
+        print("Couldn't close access to " + path + ": " + str(error))
+        failed = True
+    for path in paths:
         try:
             # O_PATH holds the inode without opening the device, and a device that later takes this name gets a new inode
             fd = os.open(path, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC)

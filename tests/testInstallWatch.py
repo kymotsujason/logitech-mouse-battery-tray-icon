@@ -69,6 +69,29 @@ class InstallWatchTests(unittest.TestCase):
                 f.write("OLD_VERSION = \"0.0.1\"\nVERSION = \"1.2.3\"\n")
             self.assertEqual(installWatch.readVersion(folder), "1.2.3")
 
+    def testAVersionFileThatCantBeReadRaises(self):
+        with tempfile.TemporaryDirectory() as folder:
+            os.makedirs(os.path.join(folder, "version.py"))
+            with self.assertRaises(IsADirectoryError):
+                installWatch.readVersion(folder)
+
+    def testAVersionFileThatCantBeReadIsReadAgainLater(self):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(installWatch, "CHECK_RETRY_MS", (50,)), mock.patch.object(installWatch, "APP_FOLDER", folder), mock.patch.object(installWatch.os, "execv") as execv:
+            installedCopy(folder, "9.9.9")
+            errors = io.StringIO()
+            with mock.patch.object(installWatch, "readVersion", side_effect=OSError(24, "Too many open files")), contextlib.redirect_stderr(errors):
+                self.watcher.onChanged()
+                self.watcher.retryTimer.stop()
+                self.watcher.onChanged()
+            self.assertEqual(errors.getvalue(), "Couldn't read version.py (Too many open files), so it's read again later\nCouldn't read version.py (Too many open files), so it isn't read again until the app folder changes\n")
+            # a new install starts the retries over, and the read that works then finds the new version
+            self.watcher.retries = 0
+            with mock.patch.object(installWatch, "readVersion", side_effect=OSError(24, "Too many open files")), contextlib.redirect_stderr(io.StringIO()):
+                self.watcher.onChanged()
+            self.assertTrue(self.watcher.retryTimer.isActive())
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertTrue(waitFor(lambda: execv.called, timeout=10.0))
+
     def testAMissingTrayPyMeansTheAppWasRemoved(self):
         with tempfile.TemporaryDirectory() as folder, mock.patch.object(installWatch, "APP_FOLDER", folder):
             self.watcher.onChanged()

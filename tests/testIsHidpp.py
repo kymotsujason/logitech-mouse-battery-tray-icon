@@ -46,6 +46,14 @@ class IsHidppTests(unittest.TestCase):
     def testAMissingDescriptorFails(self):
         self.assertExit(self.runScript(self.fakeNode(None)), 1)
 
+    def testADescriptorThatCantBeReadExitsTwoAndSaysWhy(self):
+        # a descriptor that's there but can't be read leaves the node without the group, so udev's debug log gets the reason, unlike a reject
+        node = self.fakeNode(None)
+        os.makedirs(os.path.join(node, "device", "report_descriptor"))
+        result = self.runScript(node)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(b"Couldn't read the report descriptor under " + os.fsencode(node) + b": [Errno 21] Is a directory", result.stderr)
+
     def testNoArgumentFails(self):
         self.assertExit(self.runScript(), 1)
 

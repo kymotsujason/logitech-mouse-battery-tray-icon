@@ -147,6 +147,35 @@ class ClearAccessTests(unittest.TestCase):
         self.assertIn("Closed access to " + second + "\n", output)
         self.assertEqual(self.owners, [(first, 0, GROUP_ID), (second, 0, GROUP_ID)])
 
+    def failingOpen(self, module, failures):
+        # each failure names a node and one of its sysfs files, so the read fails there and nowhere else
+        realOpen = open
+
+        def fakeOpen(path, *args, **kwargs):
+            parts = path.split(os.sep)
+            error = failures.get((parts[-2] if parts[-1] == "dev" else parts[-3], parts[-1]))
+            if (error is not None):
+                raise error
+            return realOpen(path, *args, **kwargs)
+
+        return mock.patch.object(module, "open", fakeOpen, create=True)
+
+    def testANodeWhoseSysfsEntryCantBeReadIsPrintedAndFails(self):
+        first = self.addNode("hidraw4")
+        second = self.addNode("hidraw5")
+        with self.failingOpen(clearAccess.hidpp, {("hidraw4", "report_descriptor"): PermissionError(errno.EACCES, "Permission denied")}):
+            code, output = self.runClear()
+        # the node may still carry the access 1.0.x gave it, so the run can't say every node is closed
+        self.assertEqual((code, output), (1, "Couldn't close access to " + first + ": [Errno 13] Permission denied\nClosed access to " + second + "\n"))
+        self.assertEqual(self.owners, [(second, 0, GROUP_ID)])
+
+    def testANodeWhoseSysfsEntryFailsAfterItsOpenIsPrintedUnlessItWentAway(self):
+        first = self.addNode("hidraw4")
+        second = self.addNode("hidraw5")
+        with self.failingOpen(clearAccess, {("hidraw4", "dev"): OSError(errno.EMFILE, "Too many open files"), ("hidraw5", "uevent"): OSError(errno.ENODEV, "No such device")}):
+            code, output = self.runClear()
+        self.assertEqual((code, output, self.owners), (1, "Couldn't close access to " + first + ": [Errno 24] Too many open files\n", []))
+
     def testAMissingGroupLeavesEveryNodeAsItWas(self):
         paths = [self.addNode("hidraw4"), self.addNode("hidraw5")]
         with mock.patch.object(clearAccess.grp, "getgrnam", side_effect=KeyError("getgrnam(): name not found: 'logitech-mouse-battery'")):

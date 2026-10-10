@@ -111,6 +111,7 @@ class FakeNodes:
         self.denied = set()
         self.failing = set()
         self.hidden = set()
+        self.unreadable = {}
         self.generations = {}
 
     def add(self, path, handler):
@@ -146,12 +147,21 @@ class FakeNodes:
     def deny(self, path):
         self.denied.add(path)
 
+    def failRead(self, path, error):
+        self.unreadable[path] = error
+
+    def readAgain(self, path):
+        self.unreadable.pop(path, None)
+
     def allow(self, path, handler):
         self.denied.discard(path)
         return self.add(path, handler)
 
-    def find(self, sysRoot="/sys/class/hidraw", devRoot="/dev"):
-        return sorted((set(self.devices) | self.denied) - self.hidden)
+    def find(self, sysRoot="/sys/class/hidraw", devRoot="/dev", unreadable=None):
+        # an entry whose sysfs files can't be read is left out, and handed back to a caller that asks, as findHidppNodes does
+        if (unreadable is not None):
+            unreadable.update(self.unreadable)
+        return sorted((set(self.devices) | self.denied) - self.hidden - set(self.unreadable))
 
     def open(self, path, onEvent=None):
         if (path in self.denied):
