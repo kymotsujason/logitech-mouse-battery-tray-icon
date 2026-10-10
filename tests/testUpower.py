@@ -132,6 +132,24 @@ class WatcherRoutingTests(unittest.TestCase):
         self.watcher.onPropertiesChanged(message)
         self.assertEqual(self.refreshed, [])
 
+    def testAPathBeingReadForTheFirstTimeRefreshesOnAnyChange(self):
+        self.watcher.refreshing[PATH] = 1
+        self.watcher.onPropertiesChanged(FakeMessage(PATH, [upower.DEVICE_INTERFACE, {"Percentage": 9.0}, []]))
+        self.assertEqual(self.refreshed, [PATH])
+
+    def testAKeptPathWaitingOutItsBackoffIsLeftToItsRetry(self):
+        self.watcher.paths.add(PATH)
+        self.watcher.retryPaths.add(PATH)
+        self.watcher.onPropertiesChanged(FakeMessage(PATH, [upower.DEVICE_INTERFACE, {"Percentage": 9.0}, []]))
+        self.watcher.onPropertiesChanged(FakeMessage(PATH, [upower.DEVICE_INTERFACE, {"Type": 5}, []]))
+        self.assertEqual(self.refreshed, [])
+
+    def testAPathWhoseRetryIsOutStillAsksForOneMore(self):
+        self.watcher.retryPaths.add(PATH)
+        self.watcher.refreshing[PATH] = 1
+        self.watcher.onPropertiesChanged(FakeMessage(PATH, [upower.DEVICE_INTERFACE, {"Percentage": 9.0}, []]))
+        self.assertEqual(self.refreshed, [PATH])
+
 
 class WatcherOwnerTests(unittest.TestCase):
     def setUp(self):
@@ -412,6 +430,84 @@ class RetryTests(unittest.TestCase):
         settle()
         self.assertEqual((len(bus.calls), watcher.retryTimer.isActive(), watcher.refreshAgain), (1, True, set()))
         self.assertEqual(sys.stderr.getvalue(), "UPower answered org.freedesktop.DBus.Error.NoReply for " + PATH + "\n")
+
+    def scriptedPercent(self, percent, props=None):
+        # each GetAll answers with the percent at the time of the call, as UPower reads it when the call comes in
+        props = mouseProperties() if props is None else props
+
+        def answer(message):
+            if (message.member() == "EnumerateDevices"):
+                return message.createReply([[PATH]])
+            return message.createReply([dict(props, Percentage=percent[0])])
+
+        return answer
+
+    def testAChangeDuringAMousesFirstReadIsReadToo(self):
+        percent = [55.0]
+        bus, watcher = self.makeWatcher(self.scriptedPercent(percent))
+        watcher.refresh(PATH)
+        percent[0] = 9.0
+        watcher.onPropertiesChanged(FakeMessage(PATH, [upower.DEVICE_INTERFACE, {"Percentage": 9.0}, []]))
+        self.assertTrue(waitFor(lambda: not watcher.refreshing))
+        settle()
+        self.assertEqual(([mouse.reading.percent for mouse in self.changed], len(bus.calls), PATH in watcher.paths), ([9], 2, True))
+
+    def testAChangeDuringTheFirstReadOfAnotherDeviceEndsWithNothingKept(self):
+        percent = [55.0]
+        bus, watcher = self.makeWatcher(self.scriptedPercent(percent, mouseProperties(Type=2)))
+        watcher.refresh(PATH)
+        watcher.onPropertiesChanged(FakeMessage(PATH, [upower.DEVICE_INTERFACE, {"Percentage": 9.0}, []]))
+        self.assertTrue(waitFor(lambda: not watcher.refreshing))
+        settle()
+        self.assertEqual((len(bus.calls), self.changed, self.removed, watcher.paths, watcher.refreshAgain), (2, [], [], set(), set()))
+
+    def testADeviceRemovedDuringItsFirstReadStaysGoneThroughAChange(self):
+        percent = [55.0]
+        bus, watcher = self.makeWatcher(self.scriptedPercent(percent))
+        watcher.refresh(PATH)
+        watcher.onPropertiesChanged(FakeMessage(PATH, [upower.DEVICE_INTERFACE, {"Percentage": 9.0}, []]))
+        watcher.onDeviceRemoved(FakeMessage("", [PATH]))
+        settle()
+        settle()
+        self.assertEqual((len(bus.calls), self.changed, self.removed, watcher.paths, watcher.refreshing, watcher.refreshAgain), (1, [], [], set(), {}, set()))
+
+    def testChangesWhileAMouseBacksOffWaitForItsRetry(self):
+        with mock.patch.object(upower, "RETRY_MS", 5000):
+            bus, watcher = self.makeWatcher(failWith("org.freedesktop.DBus.Error.NoReply"))
+            watcher.paths.add(PATH)
+            watcher.refresh(PATH)
+            self.assertTrue(waitFor(lambda: PATH in watcher.retryPaths and not watcher.refreshing))
+            for i in range(3):
+                watcher.onPropertiesChanged(FakeMessage(PATH, [upower.DEVICE_INTERFACE, {"Percentage": 9.0}, []]))
+                settle()
+            self.assertEqual((len(bus.calls), watcher.retryTimer.isActive(), PATH in watcher.retryPaths), (1, True, True))
+
+    def testAListingLeavesAMouseThatBacksOffToItsRetry(self):
+        def answer(message):
+            if (message.member() == "EnumerateDevices"):
+                return message.createReply([[PATH]])
+            return message.createErrorReply("org.freedesktop.DBus.Error.NoReply", "failed on purpose")
+
+        with mock.patch.object(upower, "RETRY_MS", 5000):
+            bus, watcher = self.makeWatcher(answer)
+            watcher.refresh(PATH)
+            self.assertTrue(waitFor(lambda: PATH in watcher.retryPaths and not watcher.refreshing))
+            watcher.listDevices()
+            self.assertTrue(waitFor(lambda: len(bus.calls) >= 2))
+            settle()
+            settle()
+        self.assertEqual([call[0] for call in bus.calls], ["GetAll", "EnumerateDevices"])
+
+    def testARetryThatGoesThroughReadsTheChangesMadeWhileItWaited(self):
+        answers = [failWith("org.freedesktop.DBus.Error.NoReply"), lambda message: message.createReply([mouseProperties(Percentage=9.0)])]
+        with mock.patch.object(upower, "RETRY_MS", 50):
+            bus, watcher = self.makeWatcher(lambda message: answers.pop(0)(message))
+            watcher.paths.add(PATH)
+            watcher.refresh(PATH)
+            self.assertTrue(waitFor(lambda: PATH in watcher.retryPaths and not watcher.refreshing))
+            watcher.onPropertiesChanged(FakeMessage(PATH, [upower.DEVICE_INTERFACE, {"Percentage": 9.0}, []]))
+            self.assertTrue(waitFor(lambda: self.changed))
+        self.assertEqual(([mouse.reading.percent for mouse in self.changed], len(bus.calls), watcher.retryPaths), ([9], 2, set()))
 
     def testAReplyAfterAStopIsSetAside(self):
         bus, watcher = self.makeWatcher(lambda message: message.createReply([{"Type": 5, "NativePath": "hidpp_battery_0", "Serial": "1"}]))

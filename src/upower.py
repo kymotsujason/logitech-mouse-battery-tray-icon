@@ -202,7 +202,9 @@ class UPowerWatcher(QObject):
             # UPower answers again, so a failure after this is printed as news
             self.printedErrors.clear()
         for path in paths:
-            self.refresh(path)
+            # a device still failing is read by its own retry, so a listing can't cut its backoff short
+            if (path not in self.retryPaths):
+                self.refresh(path)
 
     def reportError(self, error, path=None):
         # the retries keep going quietly, so each kind of failure gets one line until UPower answers again, naming the device when it's one device's call
@@ -290,6 +292,13 @@ class UPowerWatcher(QObject):
         if (not arguments or arguments[0] != DEVICE_INTERFACE):
             return
         path = message.path()
+        # a change during a device's call makes its answer old, which holds for its first call too, before anything says it's a mouse
+        if (path in self.refreshing):
+            self.refresh(path)
+            return
+        # a device that's failing waits out its backoff, and the retry reads whatever changed meanwhile
+        if (path in self.retryPaths):
+            return
         if (path in self.paths):
             self.refresh(path)
             return
