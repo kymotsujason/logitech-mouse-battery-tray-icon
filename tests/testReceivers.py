@@ -461,6 +461,27 @@ class ReceiverListTests(unittest.TestCase):
             self.assertTrue(waitUntil(lambda: not self.mice.nodes[RECEIVER].searching))
         self.assertEqual(pingsTo(receiver, 1) - before, 1)
 
+    def testASlotStillUnknownAfterItsFollowUpSaysWhyOnce(self):
+        def failingType(request):
+            if (request[1] == 1 and request[2] == 0 and (request[3] >> 4) == 0):
+                return [deviceError(request)]
+            return pingOnly(request)
+
+        receiver = self.nodes.add(RECEIVER, failingType)
+        self.mice.start()
+        state = self.mice.nodes[RECEIVER]
+        line = "Slot 1 on " + RECEIVER + " still couldn't be identified after a second search, since the device type request answered with error 0x05, so it's searched again when it next reports\n"
+        self.assertTrue(waitUntil(lambda: line in self.errors.getvalue()))
+        self.assertTrue(waitUntil(lambda: not state.searching and not state.retryTimer.isActive()))
+        # the slot reports again and fails the same way, which the journal already says
+        before = pingsTo(receiver, 1)
+        receiver.send(OTHER_REPORT)
+        self.assertTrue(waitUntil(lambda: pingsTo(receiver, 1) >= before + 2 and not state.searching and not state.retryTimer.isActive()))
+        receiver.handler = mouseHandler()
+        receiver.send(OTHER_REPORT)
+        self.assertTrue(waitUntil(lambda: self.keys() == ["02bc524c"]))
+        self.assertEqual(self.errors.getvalue(), "Opened " + RECEIVER + "\n" + line + "Slot 1 on " + RECEIVER + " was identified\n")
+
     def testASlotTheSearchSkippedIsntRetried(self):
         self.nodes.add(RECEIVER, silent)
         self.mice.start()

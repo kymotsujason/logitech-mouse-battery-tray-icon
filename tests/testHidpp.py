@@ -256,7 +256,7 @@ class DeviceTests(unittest.TestCase):
     def testAnIdentifyGivesUpOnceItsBudgetIsSpent(self):
         self.device = FakeDevice(mouseHandler())
         spent = time.monotonic() - 1
-        self.assertEqual(hidpp.identifySlot(self.device.node(), 1, spent), (hidpp.UNKNOWN, None))
+        self.assertEqual(hidpp.identifySlot(self.device.node(), 1, spent), (hidpp.UNKNOWN, "the device type request got no answer in time"))
 
     def testASlowNameLeavesTheIdentifyItsBatteryReading(self):
         answer = mouseHandler()
@@ -477,7 +477,7 @@ class SearchTests(unittest.TestCase):
     def testABusySlotIsLeftUnknownForTheFollowUpSearch(self):
         self.device = FakeDevice(lambda request: [receiverError(request, code=hidpp.BUSY_ERROR if request[1] == 1 else 0x09)])
         result = hidpp.searchNode(self.device.node(), pingTimeout=0.05)
-        self.assertEqual((result.mice, result.unknown), ((), frozenset({1})))
+        self.assertEqual((result.mice, result.unknown, result.reasons), ((), frozenset({1}), ((1, "the receiver was busy when it was pinged"),)))
 
     def testSearchFindsTheMouse(self):
         self.device = FakeDevice(mouseHandler())
@@ -517,7 +517,26 @@ class SearchTests(unittest.TestCase):
             return mouseHandler(answers=answers)(request)
 
         self.device = FakeDevice(handle)
-        self.assertEqual(hidpp.searchNode(self.device.node(), pingTimeout=0.05).unknown, frozenset({1}))
+        result = hidpp.searchNode(self.device.node(), pingTimeout=0.05)
+        self.assertEqual((result.unknown, result.reasons), (frozenset({1}), ((1, "the device type request answered with error 0x05"),)))
+
+    def testAnUnknownSlotSaysWhichRequestFailedAndHow(self):
+        # each case fails one feature lookup, so the identify gets that far and stops there
+        cases = [
+            (hidpp.FEATURE_UNIFIED_BATTERY, lambda request: [receiverError(request)], "the receiver couldn't reach the device for the battery feature request (error 0x09)"),
+            (hidpp.FEATURE_DEVICE_INFO, lambda request: [], "the unit id request got no answer in time"),
+        ]
+        for featureId, answer, text in cases:
+            mouse = mouseHandler()
+
+            def handle(request, featureId=featureId, answer=answer):
+                if (request[2] == 0 and (request[3] >> 4) == 0 and ((request[4] << 8) | request[5]) == featureId):
+                    return answer(request)
+                return mouse(request)
+
+            device = FakeDevice(handle)
+            self.addCleanup(device.close)
+            self.assertEqual(hidpp.identifySlot(device.node(), 1), (hidpp.UNKNOWN, text))
 
     def testMissingDeviceInformationGivesNoUnitId(self):
         self.device = FakeDevice(mouseHandler(features={0x0005: 2, 0x1004: 5}))

@@ -249,6 +249,8 @@ class ReceiverList(QObject):
         self.mice = []
         self.stopped = False
         self.reportedErrors = set()
+        # the reason last printed for each node and slot still unknown after its follow up search, so a slot that fails the same way at each report prints once
+        self.unresolvedSlots = {}
         # what was last printed for each path, so a node that keeps opening and dying prints its open once instead of each cycle
         self.lastPrinted = {}
         self.listingFailed = False
@@ -416,6 +418,7 @@ class ReceiverList(QObject):
         self.keepDenied(kept)
         # a node that shows up at a path discovery dropped is a new device, so its errors get printed again
         self.reportedErrors = {entry for entry in self.reportedErrors if entry[0] in kept}
+        self.unresolvedSlots = {entry: reason for entry, reason in self.unresolvedSlots.items() if entry[0] in kept}
         for path in paths:
             if (path in self.nodes):
                 continue
@@ -621,6 +624,7 @@ class ReceiverList(QObject):
             skipped = set(result.skipped) - state.noticedSlots
             # a keyboard paired into a known mouse's slot would otherwise be read with the mouse's battery feature, as an identify that skips the slot already handles
             for slot in skipped:
+                self.noteIdentified(state.path, slot)
                 mouse = self.findByNode(state.path, slot)
                 if (mouse is not None):
                     self.removeMouse(mouse)
@@ -637,6 +641,8 @@ class ReceiverList(QObject):
             if (result.unknown and not followUp):
                 retry = True
                 state.followUp = True
+            elif (result.unknown):
+                self.reportUnresolved(state.path, result)
             if (retry):
                 state.retryTimer.start()
             else:
@@ -646,6 +652,19 @@ class ReceiverList(QObject):
             self.finishSearch(state)
             # a first search that fails partway still has to tell the tray it's done looking
             self.changed.emit()
+
+    def reportUnresolved(self, path, result):
+        reasons = dict(result.reasons)
+        for slot in sorted(result.unknown):
+            reason = reasons.get(slot, "it didn't finish answering")
+            if (self.unresolvedSlots.get((path, slot)) == reason):
+                continue
+            self.unresolvedSlots[(path, slot)] = reason
+            printLine("Slot " + str(slot) + " on " + path + " still couldn't be identified after a second search, since " + reason + ", so it's searched again when it next reports")
+
+    def noteIdentified(self, path, slot):
+        if (self.unresolvedSlots.pop((path, slot), None) is not None):
+            printLine("Slot " + str(slot) + " on " + path + " was identified")
 
     def onFailed(self, state, item, error=None):
         if (error is not None):
@@ -696,6 +715,7 @@ class ReceiverList(QObject):
 
     def registerFound(self, state, found, linkUp=False, queuedAt=0.0):
         path = state.path
+        self.noteIdentified(path, found.slot)
         key = found.unitId if found.unitId else path + "#" + str(found.slot)
         for other in list(self.mice):
             if (other.key != key and other.nodePath == path and other.slot == found.slot):
@@ -939,6 +959,7 @@ class ReceiverList(QObject):
             if (mouse is not None):
                 self.removeMouse(mouse)
             state.skipped.add(slot)
+            self.noteIdentified(state.path, slot)
         elif (result == hidpp.UNKNOWN):
             mouse = self.findByNode(state.path, slot)
             # the slot announced itself but didn't finish answering, so its known mouse is read once more after a wait instead of staying asleep until the timed read

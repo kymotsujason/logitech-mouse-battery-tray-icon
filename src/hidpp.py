@@ -117,6 +117,8 @@ class SearchResult:
     mice: tuple
     skipped: frozenset
     unknown: frozenset
+    # each unknown slot with the request that failed and how, for the log when a slot stays unknown
+    reasons: tuple = ()
 
 
 def readUevent(text):
@@ -381,22 +383,31 @@ def pingSlots(node, slots=None, timeout=None, busy=None):
     return sorted(answered)
 
 
+def failureText(node, request, kind):
+    if (kind == TIMEOUT):
+        return "the " + request + " request got no answer in time"
+    code = "" if node.lastErrorCode is None else " 0x" + format(node.lastErrorCode, "02x")
+    if (kind == UNREACHABLE):
+        return "the receiver couldn't reach the device for the " + request + " request (error" + code + ")"
+    return "the " + request + " request answered with error" + code
+
+
 def identifySlot(node, slot, deadline=None):
     if (deadline is None):
         deadline = time.monotonic() + IDENTIFY_BUDGET
     kind, deviceType = readDeviceType(node, slot, deadline)
     if (kind != ANSWER):
-        return (UNKNOWN, None)
+        return (UNKNOWN, failureText(node, "device type", kind))
     if (deviceType not in MOUSE_KINDS):
         return (SKIP, None)
     kind, feature = findBattery(node, slot, deadline)
     if (kind != ANSWER):
-        return (UNKNOWN, None)
+        return (UNKNOWN, failureText(node, "battery feature", kind))
     if (feature is None):
         return (SKIP, None)
     kind, unitId = readUnitId(node, slot, deadline)
     if (kind != ANSWER):
-        return (UNKNOWN, None)
+        return (UNKNOWN, failureText(node, "unit id", kind))
     # the battery goes first, since a device decides how slowly it answers each name chunk and the reading is what the identify is for
     outcome, reading = readBattery(node, feature, deadline)
     readAt = time.monotonic()
@@ -422,7 +433,9 @@ def searchNode(node, skipped=frozenset(), pingTimeout=None, deadline=None):
     mice = []
     newSkipped = set()
     unknown = set()
-    for slot in pingSlots(node, [slot for slot in DEVICE_SLOTS if slot not in skipped], pingTimeout, busy=unknown):
+    answered = pingSlots(node, [slot for slot in DEVICE_SLOTS if slot not in skipped], pingTimeout, busy=unknown)
+    reasons = {slot: "the receiver was busy when it was pinged" for slot in unknown}
+    for slot in answered:
         # one slot's budget can't eat the whole search, and a search that runs out leaves the rest unknown so they're looked at again
         outcome, found = identifySlot(node, slot, min(deadline, time.monotonic() + IDENTIFY_BUDGET))
         if (outcome == FOUND):
@@ -431,7 +444,8 @@ def searchNode(node, skipped=frozenset(), pingTimeout=None, deadline=None):
             newSkipped.add(slot)
         else:
             unknown.add(slot)
-    return SearchResult(tuple(mice), frozenset(newSkipped), frozenset(unknown))
+            reasons[slot] = found
+    return SearchResult(tuple(mice), frozenset(newSkipped), frozenset(unknown), tuple(sorted(reasons.items())))
 
 
 def statusCharging(status):
