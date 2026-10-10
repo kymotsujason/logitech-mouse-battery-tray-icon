@@ -1071,6 +1071,10 @@ class Recorder(QObject):
             entry.pendingFlags["reportsItselfSince"] += moved
         entry.runSince = since + moved
         entry.runTracked = tracked
+        # a reply cached before the move holds the old dates, so the move counts as a saved change
+        self.revisions += 1
+        entry.revision = self.revisions
+        self.changed.emit(entry.key)
 
     def isHidppKey(self, entry):
         # a key only UPower has named this run is still a HID++ mouse when its saved history says so

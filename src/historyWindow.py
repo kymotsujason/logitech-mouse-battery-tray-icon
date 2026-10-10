@@ -45,6 +45,8 @@ FETCH_GAP_SECONDS = 30
 # the service writes a UPower reading once its wake set wait is over, and holds a change of the percent alone until HOLD_SECONDS after its last write, so a fetch after a change waits out both and a bit for the GetAll each side makes
 UPOWER_SETTLE_SECONDS = history.WAKE_SET_SECONDS + history.HOLD_SECONDS + 3
 STALE_SLOT_SECONDS = 2 * 60 * 60
+# a reply's newest slot ends at the moment the service answered, so one this far past the clock means the clock was set back since
+CLOCK_BACK_SECONDS = 5 * 60
 RETRY_MS = 30 * 1000
 # KWin answered within 20 ms where it was measured, so the first check comes soon and a slower machine gets one more
 BLUR_CHECK_MS = (25, 100)
@@ -1082,7 +1084,7 @@ class HistoryWindow(QWidget):
         # a UPower mouse has no revision, so a reply asked for before the service saved the change the tray's own watcher saw is old instead
         changedAt = self.upowerChangedAt.get(mouse.key)
         upowerOld = changedAt is not None and reply.askedAt < changedAt + UPOWER_SETTLE_SECONDS
-        return mouse.historyRevision != reply.revision or upowerOld or reply.newestSlot + STALE_SLOT_SECONDS <= time.time()
+        return mouse.historyRevision != reply.revision or upowerOld or reply.newestSlot + STALE_SLOT_SECONDS <= time.time() or reply.newestSlot > time.time() + CLOCK_BACK_SECONDS
 
     def scheduleAge(self, reply):
         # the 7 day chart and the 7 day checks keep moving, so a reply goes old two hours after its newest slot

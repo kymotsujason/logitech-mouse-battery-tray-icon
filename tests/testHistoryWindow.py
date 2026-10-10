@@ -635,6 +635,17 @@ class WindowTests(WindowCase):
         window.refresh()
         self.assertEqual(len(self.watcher.asked), 2)
 
+    def testAReplyFromBeforeTheClockWasSetBackIsAskedForAgain(self):
+        ahead = reply("02bc524c")
+        # the service answered, then the clock was set five hours back
+        ahead["recent"] = [[time.time() + 5 * 60 * 60, 62, None, None, False]]
+        self.watcher.answers["02bc524c"] = (ahead, None)
+        window = self.opened(entry())
+        self.assertEqual(self.watcher.asked, ["02bc524c"])
+        self.assertTrue(window.isOld(window.selectedMouse(), window.replies["02bc524c"]))
+        self.assertFalse(window.ageTimer.isActive())
+        self.assertTrue(window.fetchTimer.isActive())
+
     def testThePortalsDarkChoiceWinsOverALightPalette(self):
         saved = QPalette(app.palette())
         light = QPalette(saved)

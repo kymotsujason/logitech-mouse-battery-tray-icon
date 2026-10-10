@@ -1062,6 +1062,17 @@ class ClockFrameTests(RecorderCase):
         # the month's slots are twelve hours long and the 54th starts at START
         self.assertEqual([slot[1:3] for slot in slots[54:57]], [[78, 80], [78, 78], [78, 78]])
 
+    def testAClockStepThatMovesSavedRowsMovesTheRevisionAndSaysWhichMouse(self):
+        self.event(0, 80)
+        before = self.recorder.revision(KEY)
+        changed = []
+        self.recorder.changed.connect(changed.append)
+        self.clock.jump(-5 * 60 * 60)
+        self.recorder.tick()
+        self.assertEqual([row[0] for row in self.rows()], [-5 * 60 * 60])
+        self.assertGreater(self.recorder.revision(KEY), before)
+        self.assertEqual(changed, [KEY])
+
     def testASlowlySlewedClockMovesNothing(self):
         self.event(0, 80)
         self.clock.jump(-history.CLOCK_STEP_SECONDS)
