@@ -46,6 +46,19 @@ class ExceptionHookTests(unittest.TestCase):
             worker.join()
         self.assertEqual(errors.getvalue().splitlines()[0], "Exception in thread hidpp /dev/hidraw4:")
 
+    def testBothHooksOnABrokenStderrDontRaise(self):
+        closed = io.StringIO()
+        closed.close()
+        try:
+            raise RuntimeError("slot failed")
+        except RuntimeError:
+            info = sys.exc_info()
+        threadArgs = threading.ExceptHookArgs((info[0], info[1], info[2], threading.current_thread()))
+        for stream in (BrokenStream(), closed):
+            with self.subTest(stream=stream), mock.patch.object(sys, "stderr", stream):
+                exceptionHooks.printException(*info)
+                exceptionHooks.printThreadException(threadArgs)
+
     def testPrintLineWritesOneLineToStderr(self):
         errors = io.StringIO()
         with mock.patch.object(sys, "stderr", errors):

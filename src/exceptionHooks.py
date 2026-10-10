@@ -12,14 +12,21 @@ def printLine(text):
 
 
 def printException(kind, value, tb):
-    traceback.print_exception(kind, value, tb)
+    # a hook that raises turns a slot's exception into a crash under PyQt6, so a lost stderr loses the traceback instead
+    try:
+        traceback.print_exception(kind, value, tb)
+    except (OSError, ValueError):
+        pass
 
 
 def printThreadException(args):
     # Python's own hook names the thread, which says which worker died when the traceback alone doesn't
     name = args.thread.name if args.thread is not None else str(threading.get_ident())
-    print("Exception in thread " + name + ":", file=sys.stderr)
-    traceback.print_exception(args.exc_type, args.exc_value, args.exc_traceback)
+    try:
+        print("Exception in thread " + name + ":", file=sys.stderr)
+        traceback.print_exception(args.exc_type, args.exc_value, args.exc_traceback)
+    except (OSError, ValueError):
+        pass
 
 
 def installExceptionHooks():

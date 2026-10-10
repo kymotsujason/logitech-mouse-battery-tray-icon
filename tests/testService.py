@@ -403,6 +403,14 @@ class ServiceTests(unittest.TestCase):
             self.assertIsNone(service.serve(self.connectTo("taken"), receivers.ReceiverList()))
         self.assertIn("Couldn't take " + serviceState.SERVICE_NAME, errors.getvalue())
 
+    def testServingFailsTheSameWhenStderrHasGoneAway(self):
+        class BrokenStream(io.StringIO):
+            def write(self, text):
+                raise BrokenPipeError(errno.EPIPE, "Broken pipe")
+
+        with mock.patch.object(sys, "stderr", BrokenStream()):
+            self.assertIsNone(service.serve(self.connectTo("takenAgain"), receivers.ReceiverList()))
+
     def testMainExitsOneWhenTheNameIsTaken(self):
         with mock.patch.object(service, "installExceptionHooks"), mock.patch.object(service.signal, "signal"), mock.patch.object(sys, "stderr", io.StringIO()):
             self.assertEqual(service.main(self.connectTo("second")), 1)

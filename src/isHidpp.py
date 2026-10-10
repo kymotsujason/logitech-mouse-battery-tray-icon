@@ -18,7 +18,11 @@ def main(argv):
         # a node unplugged during the rule is no match, while any other failure leaves the node without the group, so udev's debug log gets the reason
         if (error.errno in (errno.ENOENT, errno.ENODEV)):
             return 1
-        print("Couldn't read the report descriptor under " + argv[1] + ": " + str(error), file=sys.stderr)
+        # udev's end of stderr can be gone, and the exit code is what udev reads
+        try:
+            print("Couldn't read the report descriptor under " + argv[1] + ": " + str(error), file=sys.stderr)
+        except (OSError, ValueError):
+            pass
         return 2
     return 0 if hidDescriptor.isHidppDescriptor(descriptor) else 1
 

@@ -226,10 +226,10 @@ def serve(bus, receiverList):
     holder = ServiceObject()
     adaptor = BatteryService(holder, receiverList, bus)
     if (not bus.registerObject(serviceState.OBJECT_PATH, holder)):
-        print("Couldn't register " + serviceState.OBJECT_PATH + ": " + bus.lastError().message(), file=sys.stderr)
+        printLine("Couldn't register " + serviceState.OBJECT_PATH + ": " + bus.lastError().message())
         return None
     if (not bus.registerService(serviceState.SERVICE_NAME)):
-        print("Couldn't take " + serviceState.SERVICE_NAME + ": " + bus.lastError().message(), file=sys.stderr)
+        printLine("Couldn't take " + serviceState.SERVICE_NAME + ": " + bus.lastError().message())
         return None
     return (holder, adaptor)
 

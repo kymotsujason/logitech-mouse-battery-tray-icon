@@ -1,8 +1,11 @@
+import errno
+import io
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPT = os.path.join(REPO, "src", "isHidpp.py")
@@ -56,6 +59,23 @@ class IsHidppTests(unittest.TestCase):
 
     def testNoArgumentFails(self):
         self.assertExit(self.runScript(), 1)
+
+
+class IsHidppStderrTests(unittest.TestCase):
+    def testAnUnreadableDescriptorStillExitsTwoWhenStderrHasGoneAway(self):
+        class BrokenStream(io.StringIO):
+            def write(self, text):
+                raise BrokenPipeError(errno.EPIPE, "Broken pipe")
+
+        with tempfile.TemporaryDirectory() as folder:
+            os.makedirs(os.path.join(folder, "device", "report_descriptor"))
+            sys.path.insert(0, os.path.join(REPO, "src"))
+            try:
+                import isHidpp
+            finally:
+                sys.path.pop(0)
+            with mock.patch.object(sys, "stderr", BrokenStream()):
+                self.assertEqual(isHidpp.main(["isHidpp.py", folder]), 2)
 
 
 if (__name__ == "__main__"):
