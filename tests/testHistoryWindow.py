@@ -1021,7 +1021,7 @@ class WindowTests(WindowCase):
         self.assertEqual(fade.animation.state(), QAbstractAnimation.State.Running)
         self.assertEqual(window.chartFade.opacity(), 0.0)
 
-    def testReturningToAChartMidCrossfadeKeepsTheEffectsValid(self):
+    def testAFastBackAndForthBetweenChartsEndsWithTheEffectOffAndNoPicture(self):
         window = self.opened(entry())
         window.motionFactor = 1.0
         window.segments.choose(1)
@@ -1030,6 +1030,89 @@ class WindowTests(WindowCase):
         window.chartCrossfade.animation.setCurrentTime(window.chartCrossfade.animation.duration())
         self.assertFalse(window.chartFade.isEnabled())
         self.assertFalse(window.chartCrossfade.isVisible())
+
+    def testNoAncestorOfThePaneCrossfadeCarriesThePaneFade(self):
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))
+        window.motionFactor = 1.0
+        window.pick("11111111")
+        self.assertIs(window.content.graphicsEffect(), window.paneFade)
+        widget = window.paneCrossfade.parentWidget()
+        while (widget is not None):
+            effect = widget.graphicsEffect()
+            self.assertFalse(effect is not None and effect is window.paneFade)
+            widget = widget.parentWidget()
+
+    def testTheRangeControlStaysAboveTheChartCrossfade(self):
+        window = self.opened(entry())
+        window.motionFactor = 1.0
+        window.segments.choose(1)
+        order = window.content.children()
+        self.assertGreater(order.index(window.rangeControl), order.index(window.chartCrossfade))
+        window.segments.choose(0, animate=False)
+        window.pickRange("month")
+        order = window.content.children()
+        self.assertGreater(order.index(window.rangeControl), order.index(window.chartCrossfade))
+
+    def testAnErrorDuringTheDelayStopsTheTimer(self):
+        window = self.opened(entry())
+        self.watcher.holdLevels = True
+        window.pickRange("month")
+        self.assertTrue(window.loadingTimer.isActive())
+        key, rangeName, answer = self.watcher.waitingLevels.pop()
+        answer(None, "failed on purpose")
+        self.assertEqual(window.levelChart.emptyText(), historyWindow.RANGE_ERROR_TEXT)
+        self.assertFalse(window.loadingTimer.isActive())
+
+    def testTheDelayAppliesAgainAfterTheLevelsAreForgotten(self):
+        window = self.opened(entry())
+        self.watcher.holdLevels = True
+        window.pickRange("month")
+        window.showLoading()
+        key, rangeName, answer = self.watcher.waitingLevels.pop()
+        answer(levelsReply(key, rangeName), None)
+        window.forgetLevels()
+        window.pickRange("week")
+        window.pickRange("month")
+        self.assertEqual((window.levelChart.rangeName, window.levelChart.message), ("week", None))
+
+    def testSwitchingBackToTheWeekCrossfades(self):
+        window = self.opened(entry())
+        window.pickRange("month")
+        window.motionFactor = 1.0
+        window.chartCrossfade.finish()
+        window.pickRange("week")
+        self.assertEqual(window.levelChart.rangeName, "week")
+        self.assertTrue(window.chartCrossfade.isVisible())
+        self.assertIsNotNone(window.chartCrossfade.picture)
+
+    def testClosingFinishesTheCrossfades(self):
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))
+        window.motionFactor = 1.0
+        window.pick("11111111")
+        window.segments.choose(1)
+        window.close()
+        for fade in (window.paneCrossfade, window.chartCrossfade):
+            self.assertEqual(fade.animation.state(), QAbstractAnimation.State.Stopped)
+            self.assertIsNone(fade.picture)
+        self.assertFalse(window.paneFade.isEnabled())
+        self.assertFalse(window.chartFade.isEnabled())
+
+    def testTheCrossfadeScalesWithTheMotionFactor(self):
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))
+        window.motionFactor = 0.5
+        window.pick("11111111")
+        self.assertEqual(window.paneCrossfade.animation.duration(), historyWindow.PANE_FADE_MS // 2)
+
+    def testTheCrossfadesAreHiddenOnOpen(self):
+        for rangeName in ("week", "month"):
+            window = historyWindow.HistoryWindow(self.mouseList, self.watcher, self.upower, self.folder, None, tray.mouseLine, tray.iconStateFor, levelRange=rangeName)
+            try:
+                self.state(entry())
+                window.open()
+                self.assertEqual((window.paneCrossfade.isVisible(), window.chartCrossfade.isVisible()), (False, False))
+            finally:
+                window.close()
+                sip.delete(window)
 
     def testTheOldPictureIsGoneBySixtyPercent(self):
         self.assertEqual(historyWindow.pictureOpacity(0.0), 1.0)
@@ -1126,6 +1209,7 @@ class WindowTests(WindowCase):
 
     def testANewMouseShowsLoadingAtOnce(self):
         window = self.opened(entry(), entry(key="11111111", name="MX Master 3S", reading=hidpp.BatteryReading(18, 0)))
+        self.watcher.holdLevels = True
         window.pickRange("month")
         shown = window.selected
         other = "11111111" if shown == "02bc524c" else "02bc524c"

@@ -908,14 +908,15 @@ class HistoryWindow(QWidget):
         self.sidebar.picked.connect(self.pick)
         self.pane = QWidget(self)
         self.pane.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.paneFade = QGraphicsOpacityEffect(self.pane)
-        self.paneFade.setOpacity(1.0)
-        # an opacity effect draws its widget from a cached image, and with the chart's own fade inside it a changed chart never showed, so each fade is only on while it runs
-        self.paneFade.setEnabled(False)
-        self.pane.setGraphicsEffect(self.paneFade)
         # the pane clips and everything in it lives on the content, which slides under the pane when the screen has less room than the layout needs
         self.content = QWidget(self.pane)
         self.content.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        # on the content instead of the pane, since an effect draws its children too and the old picture is a child of the pane
+        self.paneFade = QGraphicsOpacityEffect(self.content)
+        self.paneFade.setOpacity(1.0)
+        # an opacity effect draws its widget from a cached image, and with the chart's own fade inside it a changed chart never showed, so each fade is only on while it runs
+        self.paneFade.setEnabled(False)
+        self.content.setGraphicsEffect(self.paneFade)
         self.paneCrossfade = Crossfade(self, self.pane)
         self.vScroll = QScrollBar(Qt.Orientation.Vertical, self)
         self.hScroll = QScrollBar(Qt.Orientation.Horizontal, self)
@@ -1184,6 +1185,7 @@ class HistoryWindow(QWidget):
         if (old is not None and old is not chart):
             # the picture is taken while the old chart is still up
             self.chartCrossfade.start(old, int(CHART_FADE_MS * self.motionFactor), self.chartFade)
+            self.rangeControl.raise_()
         else:
             self.chartFade.setEnabled(False)
         for other in self.charts:
@@ -1204,6 +1206,8 @@ class HistoryWindow(QWidget):
         self.errors.clear()
         self.levelErrors.clear()
         self.loadingShown = None
+        self.paneCrossfade.finish()
+        self.chartCrossfade.finish()
         self.choiceMenu.hide()
         for timer in (self.fetchTimer, self.retryTimer, self.ageTimer, self.blurTimer, self.levelRetryTimer, self.loadingTimer):
             timer.stop()
@@ -1457,6 +1461,9 @@ class HistoryWindow(QWidget):
         rangeName = self.levelRange
         if (rangeName == "week"):
             # the history reply already holds the week, so the default range costs no call
+            if (self.levelChartKey == key and self.levelChart.rangeName != rangeName):
+                self.crossfadeLevelChart()
+            self.loadingTimer.stop()
             self.levelChart.setSlots(summary.get("recent") or [], voltage, rangeName, rough=rough)
             self.levelChartKey = key
             return
@@ -1466,12 +1473,15 @@ class HistoryWindow(QWidget):
             if (self.loadingTimer.isActive() or (self.levelChartKey == key and self.levelChart.rangeName != rangeName)):
                 self.crossfadeLevelChart()
             self.loadingTimer.stop()
+            self.loadingShown = None
             self.levelChart.setSlots(slots, voltage, rangeName, rough=rough)
             self.levelChartKey = key
         elif (error in RESTART_LEVEL_ERRORS):
+            self.loadingTimer.stop()
             self.levelChart.setSlots([], voltage, rangeName, message=RANGE_RESTART_TEXT)
             self.levelChartKey = key
         elif (error is not None and error != serviceState.READ_ALL_LIMITED):
+            self.loadingTimer.stop()
             self.levelChart.setSlots([], voltage, rangeName, message=RANGE_ERROR_TEXT)
             self.levelChartKey = key
         elif (error is None and self.levelChartKey == key and self.levelChart.rangeName != rangeName and self.loadingShown != (key, rangeName)):
@@ -1494,6 +1504,7 @@ class HistoryWindow(QWidget):
             self.chartFade = QGraphicsOpacityEffect(self.levelChart)
             self.levelChart.setGraphicsEffect(self.chartFade)
         self.chartCrossfade.start(self.levelChart, int(CHART_FADE_MS * self.motionFactor), self.chartFade)
+        self.rangeControl.raise_()
 
     def fillForm(self, result):
         values = ("-", "-", "-") if result is None else (str(result.cycles), result.lastCharged or "-", result.chargingSpeed or "-")
