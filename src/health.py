@@ -4,6 +4,7 @@ import time
 from dataclasses import dataclass, field
 
 import hidpp
+import history
 import mice
 
 DRAIN_LINE = 0.85
@@ -21,6 +22,7 @@ DRAIN = "drain"
 CHARGE_LINE_KIND = "charge"
 GOOD = "good"
 LEARNING = "learning"
+INFO = "info"
 SYMBOL_CHECK = "check"
 SYMBOL_WARNING = "warning"
 SYMBOL_CLOCK = "clock"
@@ -33,6 +35,8 @@ VOLTAGE_TEXT = "This mouse reports only its voltage, so drain and charge speed c
 NO_WAKES_TEXT = "This mouse doesn't say when it wakes, so drain can't be measured. Charging speed still can."
 LARGE_STEPS_TEXT = "This mouse reports its level in large steps, so drain can't be measured."
 WAKES_UNSEEN_TEXT = "This mouse's wakes aren't visible yet, so drain isn't being measured."
+FIRST_FIGURES_TEXT = "Still learning. The first figures come after a few charges."
+READY_SESSIONS = history.BASELINE_SESSIONS + history.WINDOW_SESSIONS + history.WINDOWS - 1
 
 
 @dataclass(frozen=True)
@@ -129,7 +133,32 @@ def drainMessage(summary, reading, readyRanges):
         return Line(LEARNING, LARGE_STEPS_TEXT)
     if (not wakesVisible):
         return Line(LEARNING, WAKES_UNSEEN_TEXT)
-    return Line(LEARNING, "Still learning, " + str(readyRanges) + " of " + str(READY_BUCKETS) + " battery ranges measured.")
+    counts = sorted((entry.get("sessions", 0) for entry in summary["drain"]["buckets"]), reverse=True)
+    best = counts[READY_BUCKETS - 1] if len(counts) >= READY_BUCKETS else 0
+    if (best < 1):
+        return Line(LEARNING, FIRST_FIGURES_TEXT)
+    left = max(1, READY_SESSIONS - best)
+    return Line(LEARNING, "Still learning. The wear check needs about " + str(left) + " more " + ("charge" if left == 1 else "charges") + ".")
+
+
+def useLine(summary, reading):
+    if (reading is not None and reading.percent is None and (reading.level is not None or reading.millivolts is not None)):
+        return None
+    for month in reversed(summary["monthly"]):
+        if (month["drain"] is not None):
+            return Line(INFO, "A full charge gives about " + duration(month["drain"] * 100) + " of use.")
+    return None
+
+
+def chargeTimeLine(summary):
+    lastCharge = summary.get("lastCharge")
+    if (lastCharge is None):
+        return None
+    for month in reversed(summary["monthly"]):
+        for power, minutes in month["charge"]:
+            if (power == lastCharge["power"]):
+                return Line(INFO, "Charging from empty takes about " + duration(minutes * 100) + " on the " + powerLabel(power) + ".")
+    return None
 
 
 def healthLines(summary, reading, now):
@@ -146,6 +175,9 @@ def healthLines(summary, reading, now):
     # a learning or capability message is the headline only when nothing else shows
     if (drainFigures is None):
         lines.append(drainMessage(summary, reading, readyRanges))
+    for line in (useLine(summary, reading), chargeTimeLine(summary)):
+        if (line is not None):
+            lines.append(line)
     return lines[:3], readyRanges
 
 
@@ -154,7 +186,7 @@ def symbolFor(line):
         return None
     if (line.kind == GOOD):
         return SYMBOL_CHECK
-    if (line.kind == LEARNING):
+    if (line.kind in (LEARNING, INFO)):
         return SYMBOL_CLOCK
     return SYMBOL_WARNING
 

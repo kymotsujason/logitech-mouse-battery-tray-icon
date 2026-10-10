@@ -140,16 +140,16 @@ class ReplayTests(unittest.TestCase):
             gc.collect()
         self.assertEqual([str(each.message) for each in caught if issubclass(each.category, ResourceWarning)], [])
 
-    def testAMonthInItsStillLearningWithItsCount(self):
+    def testAMonthInIsStillLearningButShowsUseAndChargeTime(self):
         summary = Replay(self.folder).run(30)
         result = health.assess(summary, hidpp.BatteryReading(100, 0), START + 30 * DAY)
-        self.assertEqual([line.kind for line in result.lines], [health.LEARNING])
-        self.assertTrue(result.lines[0].text.startswith("Still learning, 0 of 3"))
+        self.assertEqual([line.kind for line in result.lines], [health.LEARNING, health.INFO, health.INFO])
+        self.assertTrue(result.lines[0].text.startswith("Still learning. "))
 
     def testTheSameUnevenCurveAllTheWayThroughIsDoingWell(self):
         summary = Replay(self.folder).run(120)
         self.assertGreaterEqual(health.readyCount(summary["drain"]["buckets"]), 3)
-        self.assertEqual(self.lines(summary), [health.GOOD])
+        self.assertEqual(self.lines(summary), [health.GOOD, health.INFO, health.INFO])
 
     def testTheSameCurveWithSessionNoiseIsStillDoingWell(self):
         noise = random.Random(20261009)
@@ -157,7 +157,7 @@ class ReplayTests(unittest.TestCase):
 
         def rate(day, session):
             return factors.setdefault(session, noise.uniform(0.8, 1.2))
-        self.assertEqual(self.lines(Replay(self.folder, rate).run(120)), [health.GOOD])
+        self.assertEqual(self.lines(Replay(self.folder, rate).run(120)), [health.GOOD, health.INFO, health.INFO])
 
     def testATwentyPercentFasterDrainInTheLastMonthIsAWarning(self):
         summary = Replay(self.folder, lambda day, session: 0.8 if day >= 90 else 1.0).run(120)

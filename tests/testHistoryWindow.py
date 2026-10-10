@@ -148,7 +148,7 @@ class WindowTests(WindowCase):
     def testAnOpenWindowShowsTheMouseAndItsVerdictLine(self):
         window = self.opened(entry())
         self.assertEqual((window.nameLabel.text(), window.levelLabel.text(), window.statusLabel.text()), ("PRO X3 SUPERSTRIKE", "62%", "In use"))
-        self.assertEqual(window.lineLabels[0].text(), "Still learning, 0 of 3 battery ranges measured.")
+        self.assertEqual(window.lineLabels[0].text(), "Still learning. The first figures come after a few charges.")
 
     def testItShowsLoadingUntilTheReplyComes(self):
         self.watcher.hold = True

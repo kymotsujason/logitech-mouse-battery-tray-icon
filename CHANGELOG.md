@@ -9,7 +9,7 @@ This file lists the changes in each release of Mouse Battery, newest first.
 - A battery window opens when you click the tray icon or pick "Battery Health" from its menu, with the mouse, its level, and a sidebar when you have more than one mouse, and it fits small screens, works from the keyboard and a screen reader, comes back when you click the tray icon while it's minimized, and moves smoothly when you switch charts, ranges, or mice or open its sleep menu.
 - The window shows a level chart for the last 24 hours, 7 days, 30 days, 6 months, a year, or all time, and it remembers the range you picked.
 - The window shows battery health, including how many hours a charge lasts, how fast it charges month by month, and the number of charge cycles.
-- The health line tells you when a charge lasts 15% less, or charging takes 15% longer, than it used to.
+- The health box shows how many hours of use a full charge gives and how long charging takes, counts down the charges left until the wear check, and warns when a charge lasts 15% less, or charging takes 15% longer, than it used to.
 - The battery service now saves each mouse's charges and discharges, so the history keeps growing while the window is closed, and it survives a crash, a power loss, a clock change, a service restart, and a mouse moving between UPower and direct reading, while a damaged history file is moved aside and started fresh. Removing the package leaves the history in place, and the README says how to delete it.
 - Any local account can read the saved history through the service, with its own read limits, as the README says.
 - The history takes in only so many new mice at a time, so a flood of new devices can't fill it.
