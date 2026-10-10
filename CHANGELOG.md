@@ -17,6 +17,7 @@ This file lists the changes in each release of Mouse Battery, newest first.
 - The window's title bar icon follows the shown mouse, white in use, green while charging, red when low, and gray while asleep.
 - On KDE, the window blurs the desktop behind it when KWin supports it.
 - The window opens again by itself after an update restarts the app.
+- The window's glow is blue while a mouse is in use and green while it charges, so the two are easy to tell apart.
 
 ### Changed
 

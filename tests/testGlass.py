@@ -63,7 +63,17 @@ class ThemeTests(unittest.TestCase):
         self.assertEqual(glass.stateColor(theme, Mouse(15, charging=1), True).name(), QColor(theme.green).name())
         self.assertEqual(glass.stateColor(theme, Mouse(15), True).name(), QColor(theme.red).name())
         self.assertEqual(glass.stateColor(theme, Mouse(60), True).name(), QColor(theme.orange).name())
-        self.assertEqual(glass.stateColor(theme, Mouse(60), False).name(), QColor(theme.green).name())
+        self.assertEqual(glass.stateColor(theme, Mouse(60), False).name(), QColor(theme.blue).name())
+
+    def testAMouseInUseGlowsBlueAndAChargingOneGreen(self):
+        class Mouse:
+            def __init__(self, charging):
+                self.reading = hidpp.BatteryReading(60, charging)
+                self.asleep = False
+        for theme, blue in ((glass.DARK, "#0A84FF"), (glass.LIGHT, "#007AFF")):
+            self.assertEqual(theme.blue, blue)
+            self.assertEqual(glass.stateColor(theme, Mouse(0), False).name(), QColor(blue).name())
+            self.assertEqual(glass.stateColor(theme, Mouse(1), False).name(), QColor(theme.green).name())
 
     def testMotionFollowsKdesAnimationSpeed(self):
         folder = tempfile.mkdtemp()

@@ -42,10 +42,11 @@ class Theme:
     # small status text needs 4.5 to 1 against the panels, which the light theme's bright green and red don't reach
     greenText: str
     redText: str
+    blue: str
 
 
-DARK = Theme(True, "#0E1012", 0.07, 0.13, (0.32, 0.04, 0.06), 1.0, "#FFFFFF", "#A1A1A6", (255, 255, 255, 0.07), (255, 255, 255, 0.30), "#30D158", "#FF453A", "#FF9F0A", "#F5F5F7", "#30D158", "#FF453A")
-LIGHT = Theme(False, "#E9EBEE", 0.55, 0.85, (0.95, 0.35, 0.56), 0.25, "#1D1D1F", "#6E6E73", (0, 0, 0, 0.07), (0, 0, 0, 0.22), "#34C759", "#FF3B30", "#FF9500", "#1D1D1F", "#197A35", "#D70015")
+DARK = Theme(True, "#0E1012", 0.07, 0.13, (0.32, 0.04, 0.06), 1.0, "#FFFFFF", "#A1A1A6", (255, 255, 255, 0.07), (255, 255, 255, 0.30), "#30D158", "#FF453A", "#FF9F0A", "#F5F5F7", "#30D158", "#FF453A", "#0A84FF")
+LIGHT = Theme(False, "#E9EBEE", 0.55, 0.85, (0.95, 0.35, 0.56), 0.25, "#1D1D1F", "#6E6E73", (0, 0, 0, 0.07), (0, 0, 0, 0.22), "#34C759", "#FF3B30", "#FF9500", "#1D1D1F", "#197A35", "#D70015", "#007AFF")
 
 
 def rgba(values):
@@ -80,7 +81,7 @@ def stateColor(theme, mouse, warning):
         return QColor(theme.red)
     if (warning):
         return QColor(theme.orange)
-    return QColor(theme.green)
+    return QColor(theme.blue)
 
 
 def animationFactor(configHome, reducedMotion):
