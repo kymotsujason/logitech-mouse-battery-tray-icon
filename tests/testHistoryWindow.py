@@ -10,7 +10,7 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 from PyQt6 import sip
 from PyQt6.QtCore import QAbstractAnimation, QEasingCurve, QEvent, QObject, QPoint, QPointF, QRectF, QSize, QSizeF, Qt, pyqtSignal
 from PyQt6.QtDBus import QDBusPendingCall, QDBusVariant
-from PyQt6.QtGui import QColor, QFocusEvent, QIcon, QImageReader, QPalette, QWheelEvent
+from PyQt6.QtGui import QColor, QFocusEvent, QIcon, QImage, QImageReader, QPalette, QRegion, QWheelEvent
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QMenu, QWidget
 
@@ -1083,15 +1083,32 @@ class WindowTests(WindowCase):
         self.assertEqual(sidebar.pillAnimation.state(), QAbstractAnimation.State.Running)
         self.assertEqual(sidebar.pillAnimation.currentTime(), 100)
 
+    def assertShowsTheOutgoing(self, fade, outgoing, effect, incoming):
+        # the picture is the outgoing content itself, and an early frame still shows it over a spot the incoming content leaves clear
+        self.assertEqual(fade.picture.toImage(), outgoing)
+        effect.setEnabled(False)
+        clear = incoming.grab().toImage()
+        effect.setEnabled(True)
+        point = self.inkOnlyIn(outgoing, clear)
+        self.assertIsNotNone(point)
+        fade.animation.setCurrentTime(fade.animation.duration() // 20)
+        # drawn onto a clear image without the window background a grab would fill in first
+        frame = QImage(fade.size(), QImage.Format.Format_ARGB32_Premultiplied)
+        frame.fill(0)
+        fade.render(frame, QPoint(), QRegion(), QWidget.RenderFlag.DrawChildren)
+        self.assertGreater(frame.pixelColor(*point).alpha(), 100)
+        self.assertAlmostEqual(frame.pixelColor(*point).alpha(), outgoing.pixelColor(*point).alpha() * historyWindow.pictureOpacity(fade.elapsed), delta=3)
+
     def testAPickCrossfadesFromAPictureOfTheOldPane(self):
-        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S", reading=hidpp.BatteryReading(15, 0)))
         window.motionFactor = 1.0
         fade = window.paneCrossfade
         self.assertFalse(fade.isVisible())
-        window.pick("11111111")
+        outgoing = window.content.grab().toImage()
+        window.pick("11111111" if window.selected == "02bc524c" else "02bc524c")
         self.assertTrue(fade.isVisible())
-        self.assertIsNotNone(fade.picture)
         self.assertTrue(window.paneFade.isEnabled())
+        self.assertShowsTheOutgoing(fade, outgoing, window.paneFade, window.content)
         self.assertEqual(fade.animation.duration(), historyWindow.PANE_FADE_MS)
         fade.animation.setCurrentTime(fade.animation.duration())
         self.assertFalse(fade.isVisible())
@@ -1210,11 +1227,12 @@ class WindowTests(WindowCase):
         window.motionFactor = 1.0
         fade = window.chartCrossfade
         self.assertFalse(fade.isVisible())
+        outgoing = window.levelChart.grab().toImage()
         window.segments.choose(1)
         self.assertTrue(fade.isVisible())
-        self.assertIsNotNone(fade.picture)
         self.assertTrue(window.chartFade.isEnabled())
         self.assertFalse(window.levelChart.isVisible())
+        self.assertShowsTheOutgoing(fade, outgoing, window.chartFade, window.hoursChart)
         fade.animation.setCurrentTime(fade.animation.duration())
         self.assertFalse(fade.isVisible())
         self.assertFalse(window.chartFade.isEnabled())
@@ -1309,10 +1327,19 @@ class WindowTests(WindowCase):
         window.pickRange("month")
         window.motionFactor = 1.0
         window.chartCrossfade.finish()
+        outgoing = window.levelChart.grab().toImage()
         window.pickRange("week")
         self.assertEqual(window.levelChart.rangeName, "week")
         self.assertTrue(window.chartCrossfade.isVisible())
-        self.assertIsNotNone(window.chartCrossfade.picture)
+        self.assertShowsTheOutgoing(window.chartCrossfade, outgoing, window.chartFade, window.levelChart)
+
+    def testTheFirstRangeSwitchCrossfadesFromTheWholeBars(self):
+        window = self.opened(entry())
+        window.motionFactor = 1.0
+        outgoing = window.levelChart.grab().toImage()
+        window.pickRange("month")
+        self.assertEqual(window.levelChart.rangeName, "month")
+        self.assertShowsTheOutgoing(window.chartCrossfade, outgoing, window.chartFade, window.levelChart)
 
     def testClosingFinishesTheCrossfades(self):
         window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))

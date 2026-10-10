@@ -663,13 +663,29 @@ class LineChartTests(ChartCase):
         chart = self.make(charts.LineChart("Hours per Charge", "h", charts.HOURS_EMPTY, "h"))
         chart.setSeries({"hours": []})
         self.assertEqual(chart.series, {})
-        rendered(chart)
+        seen = []
+        # only the text is kept, since a mock that kept the painter would end it on a freed image once Python let it go
+        with unittest.mock.patch.object(charts.LineChart, "paintEmpty", lambda self, painter, text: seen.append(text)):
+            rendered(chart)
+        self.assertEqual(seen, [charts.HOURS_EMPTY])
 
     def testASeriesDraws(self):
         chart = self.make(charts.LineChart("Charging Speed", "min per 10%", charts.CHARGING_EMPTY))
-        chart.setSeries({"wireless charger": [("2026-09", 4.2), ("2026-10", 4.0)], "charger 1": [("2026-10", 6.0)]})
+        chart.setSeries({"wireless charger": [("2026-09", 3.2), ("2026-10", 2.8)], "charger 1": [("2026-10", 6.0)]})
         self.assertEqual(chart.months(), ["2026-09", "2026-10"])
-        rendered(chart)
+        image = rendered(chart)
+        area = chart.area()
+        top = chart.ticks()[-1]
+        # halfway between the two months the curve passes through the mean of the two values, well clear of both dots
+        x = round(area.x() + area.width() / 2)
+        y = area.bottom() - (3.2 + 2.8) / 2 / top * area.height()
+        grid = [area.y() + area.height() * index / (len(chart.ticks()) - 1) for index in range(len(chart.ticks()))]
+        self.assertGreater(min(abs(y - line) for line in grid), 4)
+        blue = QColor(chart.theme.blue)
+        near = [image.pixelColor(x, round(y) + step) for step in range(-2, 3)]
+        self.assertTrue(any(color.alpha() > 200 and abs(color.red() - blue.red()) + abs(color.green() - blue.green()) + abs(color.blue() - blue.blue()) < 40 for color in near), [color.name() for color in near])
+        # and nothing is drawn well above or below the line there
+        self.assertEqual([image.pixelColor(x, round(y) + step).alpha() for step in (-12, 12)], [0, 0])
 
 
     def testMonthLabelsThinOutSoTheyDontOverlap(self):
