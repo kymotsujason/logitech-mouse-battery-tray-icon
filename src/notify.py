@@ -1,7 +1,7 @@
 import html
 
 from PyQt6.QtCore import QMetaType, QObject, QTimer, QVariant, pyqtSlot
-from PyQt6.QtDBus import QDBusConnection, QDBusMessage
+from PyQt6.QtDBus import QDBusConnection, QDBusMessage, QDBusServiceWatcher
 
 import dbusCalls
 
@@ -51,9 +51,23 @@ class Notifier(QObject):
         self.bodyMarkup = None
         self.askingCapabilities = False
         self.waitingSends = []
+        # a reply to a call made before an owner change belongs to a server that's gone
+        self.generation = 0
         # only the notification server's own signals count, so another program on the bus can't press a button
         self.bus.connect(SERVICE, PATH, SERVICE, "ActionInvoked", self.onActionInvoked)
         self.bus.connect(SERVICE, PATH, SERVICE, "NotificationClosed", self.onNotificationClosed)
+        self.ownerWatcher = QDBusServiceWatcher(SERVICE, self.bus, QDBusServiceWatcher.WatchModeFlag.WatchForOwnerChange, self)
+        self.ownerWatcher.serviceOwnerChanged.connect(self.onOwnerChanged)
+
+    def onOwnerChanged(self, name, oldOwner, newOwner):
+        # what a server supports and the ids it handed out belong to that server, and a new one never closes or answers for the old one's notices
+        self.generation += 1
+        self.bodyMarkup = None
+        self.askingCapabilities = False
+        self.handlers.clear()
+        # a body that was waiting on the old server's answer asks the new one
+        if (self.waitingSends):
+            self.askCapabilities()
 
     def bodyText(self, body):
         escaped = html.escape(body, quote=False)
@@ -79,9 +93,12 @@ class Notifier(QObject):
             return
         self.askingCapabilities = True
         message = QDBusMessage.createMethodCall(SERVICE, PATH, SERVICE, "GetCapabilities")
-        dbusCalls.callLater(self.bus, message, self.onCapabilities, self, CALL_TIMEOUT_MS)
+        generation = self.generation
+        dbusCalls.callLater(self.bus, message, lambda reply: self.onCapabilities(generation, reply), self, CALL_TIMEOUT_MS)
 
-    def onCapabilities(self, reply):
+    def onCapabilities(self, generation, reply):
+        if (generation != self.generation):
+            return
         self.askingCapabilities = False
         # a server that can't answer yet is asked again with the next notice, and the bodies waiting now go out escaped
         if (dbusCalls.failure(reply) is None and reply.arguments()):
@@ -96,16 +113,18 @@ class Notifier(QObject):
 
     def sendNotice(self, summary, body, actions, onAction, onSent):
         message = notifyMessage(summary, body, actions)
-        dbusCalls.callLater(self.bus, message, lambda reply: self.onNotified(reply, onAction, onSent), self, CALL_TIMEOUT_MS)
+        generation = self.generation
+        dbusCalls.callLater(self.bus, message, lambda reply: self.onNotified(generation, reply, onAction, onSent), self, CALL_TIMEOUT_MS)
 
-    def onNotified(self, reply, onAction, onSent):
+    def onNotified(self, generation, reply, onAction, onSent):
         if (dbusCalls.failure(reply) is not None or not reply.arguments()):
             if (onSent is not None):
                 onSent(None, reply.errorName())
             return
         notificationId = reply.arguments()[0]
         # the server took the notice whatever type its id came in, so it still counts as sent
-        if (onAction is not None and isNotificationId(notificationId)):
+        # an id from a server that's gone could match a notice of the new one, whose ids start over
+        if (onAction is not None and isNotificationId(notificationId) and generation == self.generation):
             self.handlers[notificationId] = onAction
         if (onSent is not None):
             onSent(notificationId, None)

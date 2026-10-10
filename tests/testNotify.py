@@ -1,3 +1,4 @@
+import itertools
 import json
 import os
 import subprocess
@@ -7,7 +8,7 @@ from unittest import mock
 
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
-from PyQt6.QtDBus import QDBusConnection, QDBusMessage
+from PyQt6.QtDBus import QDBusConnection, QDBusMessage, QDBusServiceWatcher
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
 
@@ -16,6 +17,7 @@ import notify
 from tests.fakes import privateBus
 from tests.fakes.recordingBus import RecordingBus
 
+BUS_COUNTER = itertools.count()
 app = QApplication.instance() or QApplication([])
 SRC = os.path.dirname(os.path.abspath(notify.__file__))
 # the bug only shows when Notify is the first D-Bus marshaling in its process, so each send runs in a fresh one and goes out before a Notifier subscribes to anything, since that hid the bug on Qt 6.4
@@ -70,6 +72,13 @@ def waitFor(condition, timeout=2.0):
 
 
 class NotifierTests(unittest.TestCase):
+    def makeNotifier(self):
+        # the owner watcher needs a real connection, and a missing bus still lets it be built
+        name = "notifyOfflineBus" + str(next(BUS_COUNTER))
+        bus = QDBusConnection.connectToBus("unix:path=/nonexistent/bus", name)
+        self.addCleanup(QDBusConnection.disconnectFromBus, name)
+        return notify.Notifier(bus)
+
     def testMissingServiceSkipsTheNotificationAndSaysWhy(self):
         bus = QDBusConnection.connectToBus("unix:path=/nonexistent/bus", "notifyTestBus")
         self.addCleanup(QDBusConnection.disconnectFromBus, "notifyTestBus")
@@ -94,7 +103,8 @@ class NotifierTests(unittest.TestCase):
 
     def testSignalsAreTakenOnlyFromTheServer(self):
         bus = RecordingBus()
-        notify.Notifier(bus)
+        with mock.patch.object(notify, "QDBusServiceWatcher"):
+            notify.Notifier(bus)
         self.assertEqual(bus.subscriptions, [
             (notify.SERVICE, notify.PATH, notify.SERVICE, "ActionInvoked"),
             (notify.SERVICE, notify.PATH, notify.SERVICE, "NotificationClosed"),
@@ -104,10 +114,10 @@ class NotifierTests(unittest.TestCase):
         self.assertEqual([notify.stringListVariant(values).typeName() for values in ([], ["a", "First"])], ["QStringList", "QStringList"])
 
     def testABodyIsEscapedWhenTheServerCantSayWhatItSupports(self):
-        self.assertEqual(notify.Notifier(RecordingBus()).bodyText("<b>A&B</b>"), "&lt;b&gt;A&amp;B&lt;/b&gt;")
+        self.assertEqual(self.makeNotifier().bodyText("<b>A&B</b>"), "&lt;b&gt;A&amp;B&lt;/b&gt;")
 
     def testAReusedIdKeepsItsNewHandler(self):
-        notifier = notify.Notifier(RecordingBus())
+        notifier = self.makeNotifier()
         first = mock.Mock()
         second = mock.Mock()
         notifier.handlers[7] = first
@@ -119,6 +129,46 @@ class NotifierTests(unittest.TestCase):
         QTest.qWait(200)
         self.assertIs(notifier.handlers.get(7), second)
 
+    def testWatchesTheNotificationServerForANewOwner(self):
+        notifier = self.makeNotifier()
+        self.assertEqual(notifier.ownerWatcher.watchedServices(), [notify.SERVICE])
+        self.assertEqual(notifier.ownerWatcher.watchMode(), QDBusServiceWatcher.WatchModeFlag.WatchForOwnerChange)
+        notifier.bodyMarkup = True
+        notifier.ownerWatcher.serviceOwnerChanged.emit(notify.SERVICE, ":1.5", ":1.9")
+        self.assertIsNone(notifier.bodyMarkup)
+
+    def testANewOwnerForgetsWhatTheOldServerSupportedAndTheNoticesItGave(self):
+        for newOwner in (":1.9", ""):
+            with self.subTest(newOwner=newOwner):
+                notifier = self.makeNotifier()
+                notifier.bodyMarkup = True
+                notifier.handlers[3] = mock.Mock()
+                notifier.onOwnerChanged(notify.SERVICE, ":1.5", newOwner)
+                self.assertEqual((notifier.bodyMarkup, notifier.handlers), (None, {}))
+
+    def testACapabilitiesAnswerFromTheOldServerIsDropped(self):
+        notifier = self.makeNotifier()
+        generation = notifier.generation
+        notifier.onOwnerChanged(notify.SERVICE, ":1.5", ":1.9")
+        notifier.onCapabilities(generation, self.reply("GetCapabilities", ["body-markup"]))
+        self.assertIsNone(notifier.bodyMarkup)
+
+    def testABodyWaitingOnTheOldServerAsksTheNewOne(self):
+        notifier = self.makeNotifier()
+        asked = []
+        notifier.askCapabilities = lambda: asked.append(True)
+        notifier.waitingSends.append(("S", "A&B", (), None, None))
+        notifier.onOwnerChanged(notify.SERVICE, ":1.5", ":1.9")
+        self.assertEqual(asked, [True])
+
+    def testANoticeIdFromTheOldServerGetsNoHandler(self):
+        notifier = self.makeNotifier()
+        generation = notifier.generation
+        notifier.onOwnerChanged(notify.SERVICE, ":1.5", ":1.9")
+        sent = []
+        notifier.onNotified(generation, self.reply("Notify", 4), mock.Mock(), lambda *result: sent.append(result))
+        self.assertEqual((notifier.handlers, sent), ({}, [(4, None)]))
+
     def reply(self, member, *arguments):
         return QDBusMessage.createMethodCall(notify.SERVICE, notify.PATH, notify.SERVICE, member).createReply(list(arguments))
 
@@ -128,24 +178,24 @@ class NotifierTests(unittest.TestCase):
         return message
 
     def testCapabilitiesOfAnotherTypeLeaveMarkupUnknown(self):
-        notifier = notify.Notifier(RecordingBus())
+        notifier = self.makeNotifier()
         for capabilities in (5, {"body-markup": 1}):
             with self.subTest(capabilities=capabilities):
-                notifier.onCapabilities(self.reply("GetCapabilities", capabilities))
+                notifier.onCapabilities(notifier.generation, self.reply("GetCapabilities", capabilities))
                 self.assertIsNone(notifier.bodyMarkup)
-        notifier.onCapabilities(self.reply("GetCapabilities", ["actions", "body-markup"]))
+        notifier.onCapabilities(notifier.generation, self.reply("GetCapabilities", ["actions", "body-markup"]))
         self.assertTrue(notifier.bodyMarkup)
 
     def testANoticeIdOfAnotherTypeStillCountsAsSentWithoutAHandler(self):
-        notifier = notify.Notifier(RecordingBus())
+        notifier = self.makeNotifier()
         sent = []
         for notificationId in ([7], "7", True):
             with self.subTest(notificationId=notificationId):
-                notifier.onNotified(self.reply("Notify", notificationId), mock.Mock(), lambda *result: sent.append(result))
+                notifier.onNotified(notifier.generation, self.reply("Notify", notificationId), mock.Mock(), lambda *result: sent.append(result))
         self.assertEqual((notifier.handlers, sent), ({}, [([7], None), ("7", None), (True, None)]))
 
     def testSignalsWithAnIdOfAnotherTypeAreIgnored(self):
-        notifier = notify.Notifier(RecordingBus())
+        notifier = self.makeNotifier()
         handler = mock.Mock()
         notifier.handlers[1] = handler
         for notificationId in ([1], True, "1"):
@@ -231,6 +281,22 @@ class MarkupServerTests(FakeServerTest):
         self.assertIsNone(error)
         self.assertGreater(notificationId, 0)
         self.assertTrue(self.bus.waitForLine(self.log, "notify S|Already running.|"))
+
+
+class SwappedServerTests(FakeServerTest):
+    def testASwappedServersCapabilitiesApplyToTheNextBody(self):
+        notifier = notify.Notifier(self.qtConnection("notifySwapBus"))
+        self.assertIsNone(sendAndWait(notifier, "S", "A&B")[1])
+        self.assertTrue(self.bus.waitForLine(self.log, "notify S|A&amp;B|"))
+        process, logFile = self.bus.fakes.pop()
+        process.terminate()
+        process.wait()
+        logFile.close()
+        newLog = self.bus.startFake("fakeNotifications.py", "-", "actions,body")
+        self.assertTrue(self.bus.waitForLine(newLog, "owns the notifications name"))
+        self.assertTrue(waitFor(lambda: notifier.bodyMarkup is None))
+        self.assertIsNone(sendAndWait(notifier, "S", "A&B")[1])
+        self.assertTrue(self.bus.waitForLine(newLog, "notify S|A&B|"))
 
 
 class PlainServerTests(FakeServerTest):
