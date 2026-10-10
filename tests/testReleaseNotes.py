@@ -138,6 +138,23 @@ class ReleaseNotesTests(unittest.TestCase):
         for args in (("--check", "1.2.0"), ("1.2.0",)):
             self.assertEqual(self.notes(*args, self.path).returncode, 0, args)
 
+    def testASectionWithOnlyCommentedEntriesFails(self):
+        populated = "### Added\n\n- The newest thing.\n"
+        for comment in ("<!--\n- TODO write notes\n-->\n", "<!-- - TODO write notes -->\n", "<!--\n- TODO write notes\n"):
+            self.write(SAMPLE.replace(populated, "### Added\n\n" + comment))
+            for args in (("--check", "1.2.0"), ("1.2.0",)):
+                with self.subTest(comment=comment, args=args):
+                    result = self.notes(*args, self.path)
+                    self.assertEqual((result.returncode, result.stdout), (1, ""))
+                    self.assertIn("1.2.0", result.stderr)
+
+    def testTheNotesLeaveCommentsOut(self):
+        self.write(SAMPLE.replace("- The newest thing.\n", "<!--\n- TODO write notes\n-->\n- The newest thing. <!-- a note to self -->\n<!-- one more -->\n"))
+        self.assertEqual(self.notes("--check", "1.2.0", self.path).returncode, 0)
+        result = self.notes("1.2.0", self.path)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "### Added\n\n- The newest thing." + FOOTER)
+
     def testACrlfFileGivesTheSameNotes(self):
         self.write(SAMPLE, newline="\r\n")
         with open(self.path, "rb") as f:
