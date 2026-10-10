@@ -2,7 +2,9 @@ import contextlib
 import io
 import os
 import shutil
+import stat
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -100,6 +102,12 @@ class PlantedSettingsTests(unittest.TestCase):
         os.symlink(self.elsewhere, self.folder)
         self.owners[self.folder] = ACCOUNT + 1
 
+    def plantOtherFile(self):
+        os.makedirs(self.folder)
+        with open(settings.settingsPath(self.configHome), "w") as f:
+            f.write("[General]\nlevelRange=month\n")
+        self.owners[settings.settingsPath(self.configHome)] = ACCOUNT + 1
+
     def plantOtherFolder(self):
         os.makedirs(self.folder)
         with open(settings.settingsPath(self.configHome), "w") as f:
@@ -146,7 +154,7 @@ class PlantedSettingsTests(unittest.TestCase):
         self.assertFalse(saved)
 
     def testALoadReadsNothingThroughAPlantedLinkOrFolder(self):
-        for plant in (self.plantFileLink, self.plantFolderLink, self.plantOtherFolder):
+        for plant in (self.plantFileLink, self.plantFolderLink, self.plantOtherFolder, self.plantOtherFile):
             with self.subTest(plant=plant.__name__):
                 self.owners.clear()
                 if (os.path.islink(self.folder)):
@@ -230,7 +238,7 @@ HAND_FORMS = [
 
 
 class QSettingsFormTests(unittest.TestCase):
-    # QSettings wrote these files before 1.2.0 stopped using it, so they're read as QSettings reads them
+    # QSettings reads every file on a private copy, so each form loads as QSettings itself reads it
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -313,14 +321,12 @@ class QSettingsFormTests(unittest.TestCase):
         home = self.handWrite("[General]\nlevelRange=\"month\"\nsleepCheckSeconds=\"60\"\n")
         self.assertEqual((settings.loadLevelRange(home), settings.loadSleepCheck(home)), ("month", 60))
 
-    def testAVariantValueReadsAsNothingAndIsKept(self):
-        text = "[General]\nlevelRange=@Variant(\\0\\0\\0\\n\\0\\0\\0\\n\\0m\\0o\\0n\\0t\\0h)\n"
-        home = self.handWrite(text)
-        # QSettings unpacks this to month, and this app gives such a value up as unreadable instead
+    def testAVariantValueReadsAsQSettingsReadsIt(self):
+        home = self.handWrite("[General]\nlevelRange=@Variant(\\0\\0\\0\\n\\0\\0\\0\\n\\0m\\0o\\0n\\0t\\0h)\n")
         self.assertEqual(self.qtRead(home)[settings.LEVEL_RANGE_KEY], "month")
-        self.assertEqual(settings.loadLevelRange(home), settings.LEVEL_RANGE_DEFAULT)
+        self.assertEqual(settings.loadLevelRange(home), "month")
         self.assertTrue(settings.saveSleepCheck(home, 60))
-        self.assertEqual(self.fileText(home), text + "sleepCheckSeconds=60\n")
+        self.assertEqual(self.qtRead(home), {settings.LEVEL_RANGE_KEY: "month", settings.SLEEP_CHECK_KEY: "60"})
 
     def testASaveKeepsALineSeparatorInAnotherGroup(self):
         home = self.qtWrite({"Other/note": "first\u2028second", settings.SLEEP_CHECK_KEY: 30})
@@ -334,18 +340,98 @@ class QSettingsFormTests(unittest.TestCase):
         self.assertTrue(settings.saveLevelRange(home, "day"))
         self.assertTrue(settings.saveSleepCheck(home, 60))
         self.assertEqual(self.qtRead(home), {"note": "a\nlevelRange=x", settings.LEVEL_RANGE_KEY: "day", settings.SLEEP_CHECK_KEY: "60"})
-        self.assertIn(";kept", self.fileText(home))
 
-    def testASaveKeepsACrlfFile(self):
+    def testASaveKeepsTheValuesOfACrlfFile(self):
         home = self.handWrite("[General]\r\nlevelRange=month\r\n[Other]\r\nx=1\r\n")
         self.assertTrue(settings.saveSleepCheck(home, 30))
         self.assertEqual(self.qtRead(home), {settings.LEVEL_RANGE_KEY: "month", settings.SLEEP_CHECK_KEY: "30", "Other/x": "1"})
-        self.assertTrue(self.fileText(home).startswith("[General]\r\nlevelRange=month\r\n"))
 
     def testASaveAddsTheGeneralGroupWhenOnlyOthersExist(self):
         home = self.qtWrite({"Other/x": 1})
         self.assertTrue(settings.saveLevelRange(home, "day"))
         self.assertEqual(self.qtRead(home), {"Other/x": "1", settings.LEVEL_RANGE_KEY: "day"})
+
+    def testLongCharacterCodesDontStallALoadOrASave(self):
+        for escape in ("\\x" + "1" * 200000, "\\" + "1" * 200000):
+            with self.subTest(escape=escape[:4]):
+                home = self.handWrite("[General]\nnote=" + escape + "\nsleepCheckSeconds=60\nlevelRange=month\n")
+                started = time.monotonic()
+                loaded = (settings.loadSleepCheck(home), settings.loadLevelRange(home))
+                saved = settings.saveLevelRange(home, "day")
+                self.assertLess(time.monotonic() - started, 1.0)
+                self.assertEqual((loaded, saved, settings.loadLevelRange(home)), ((60, "month"), True, "day"))
+
+    def testASettingAddedAfterAnUnfinishedValueStaysItsOwn(self):
+        for ending in ("tail\\", "\"tail"):
+            for key, value, save, load in ((settings.SLEEP_CHECK_KEY, "60", lambda home: settings.saveSleepCheck(home, 60), settings.loadSleepCheck), (settings.LEVEL_RANGE_KEY, "day", lambda home: settings.saveLevelRange(home, "day"), settings.loadLevelRange)):
+                with self.subTest(ending=ending, key=key):
+                    home = self.handWrite("[General]\nnote=" + ending)
+                    before = self.qtRead(home)
+                    self.assertTrue(save(home))
+                    self.assertEqual(str(load(home)), value)
+                    self.assertEqual(self.qtRead(home), dict(before, **{key: value}))
+
+    def testASaveOfAFileQSettingsFindsMalformedKeepsItsValues(self):
+        home = self.handWrite("[General\nlevelRange=month\n")
+        self.assertTrue(settings.saveSleepCheck(home, 60))
+        self.assertEqual((settings.loadLevelRange(home), settings.loadSleepCheck(home)), ("month", 60))
+
+
+class PrivateCopyTests(unittest.TestCase):
+    # QSettings follows a link at the path it's given, so it only ever gets a copy in a folder of this account's own
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.home = os.path.join(self.temp.name, "config")
+        self.opened = []
+        self.realQSettings = settings.QSettings
+        opened = self.opened
+
+        class Recording(self.realQSettings):
+            def __init__(self, path, *args):
+                folder = os.path.dirname(path)
+                opened.append((path, folder, stat.S_IMODE(os.lstat(folder).st_mode), os.lstat(folder).st_uid))
+                super().__init__(path, *args)
+
+        patch = mock.patch.object(settings, "QSettings", Recording)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def assertOnlyPrivateCopies(self):
+        self.assertTrue(self.opened)
+        for path, folder, mode, owner in self.opened:
+            self.assertFalse(path.startswith(self.home), path)
+            self.assertEqual((mode, owner), (0o700, os.getuid()), folder)
+            self.assertFalse(os.path.lexists(folder), folder)
+
+    def testLoadsAndSavesHandQSettingsOnlyAPrivateCopy(self):
+        self.assertTrue(settings.saveSleepCheck(self.home, 60))
+        self.assertTrue(settings.saveLevelRange(self.home, "day"))
+        self.assertEqual((settings.loadSleepCheck(self.home), settings.loadLevelRange(self.home)), (60, "day"))
+        self.assertOnlyPrivateCopies()
+
+    def testAFailedSaveRemovesItsPrivateCopy(self):
+        self.assertTrue(settings.saveSleepCheck(self.home, 60))
+        with mock.patch.object(settings.autostart, "writeText", side_effect=OSError("No space left on device")):
+            self.assertFalse(settings.saveLevelRange(self.home, "day"))
+        self.assertEqual(settings.loadLevelRange(self.home), "week")
+        self.assertOnlyPrivateCopies()
+
+    def testASaveWhoseValueDoesntReadBackChangesNothing(self):
+        self.assertTrue(settings.saveSleepCheck(self.home, 60))
+        path = settings.settingsPath(self.home)
+        with open(path) as f:
+            before = f.read()
+
+        class Forgetful(self.realQSettings):
+            def setValue(self, key, value):
+                pass
+
+        with mock.patch.object(settings, "QSettings", Forgetful):
+            self.assertFalse(settings.saveLevelRange(self.home, "day"))
+        with open(path) as f:
+            self.assertEqual(f.read(), before)
+        self.assertEqual(os.listdir(os.path.dirname(path)), ["settings.ini"])
 
 
 class OverlappingSaveTests(unittest.TestCase):
