@@ -1164,7 +1164,7 @@ class Recorder(QObject):
             self.saveFlags(entry)
             return
         try:
-            newest = self.store.db.execute("select at, origin from readings where mouseId = ? order by at desc, seq desc limit 1", (entry.mouseId,)).fetchone()
+            newest = newestRow(self.store.db, entry.mouseId)
         except sqlite3.Error as error:
             self.writeFailed(entry, error)
             return

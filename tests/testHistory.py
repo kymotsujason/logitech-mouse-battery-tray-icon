@@ -1003,6 +1003,17 @@ class ClockFrameTests(RecorderCase):
         self.assertIn(beat, gaps)
         self.assertNotIn(5000, gaps)
 
+    def testARetriedRowAfterARebootWithTheClockBehindKeepsItsDate(self):
+        self.clock.jump(7200)
+        self.event(7200, 80)
+        self.restart()
+        self.clock.jump(-7200)
+        self.assertTrue(self.recorder.available())
+        with self.failOnce(sqlite3.OperationalError("database or disk is full")):
+            self.event(600, 79)
+        self.at(602 + history.OPEN_RETRY_SECONDS)
+        self.assertIn((600, history.ORIGIN_EVENT, 79), [row[:3] for row in self.rows()])
+
     def testASavedStateAnOlderReleaseLeftBehindIsntUsed(self):
         self.event(0, 50, charging=1, power=1)
         self.recorder.stop()
