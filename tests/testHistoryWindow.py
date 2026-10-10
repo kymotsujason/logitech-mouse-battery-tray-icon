@@ -8,7 +8,7 @@ from unittest import mock
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 from PyQt6 import sip
-from PyQt6.QtCore import QAbstractAnimation, QEvent, QObject, QPoint, QPointF, QRectF, QSize, QSizeF, Qt, pyqtSignal
+from PyQt6.QtCore import QAbstractAnimation, QEasingCurve, QEvent, QObject, QPoint, QPointF, QRectF, QSize, QSizeF, Qt, pyqtSignal
 from PyQt6.QtDBus import QDBusPendingCall, QDBusVariant
 from PyQt6.QtGui import QColor, QFocusEvent, QIcon, QImageReader, QPalette, QWheelEvent
 from PyQt6.QtTest import QTest
@@ -652,6 +652,12 @@ class WindowTests(WindowCase):
         window.close()
         window.open()
         self.assertEqual(window.selected, shown)
+
+    def testEveryAnimationUsesTheSharedEaseOut(self):
+        window = self.opened(entry())
+        for animation in (window.segments.animation, window.rangeControl.animation, window.glowAnimation, window.paneAnimation, window.chartAnimation):
+            self.assertEqual(animation.easingCurve().type(), QEasingCurve.Type.BezierSpline)
+            self.assertEqual(round(animation.easingCurve().valueForProgress(0.25), 3), 0.775)
 
     def testTheFadesAreOnlyOnWhileTheyRun(self):
         # an opacity effect draws its widget from a cached image, so the chart's fade inside an idle pane fade never showed until the window lost focus

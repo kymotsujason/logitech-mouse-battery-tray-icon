@@ -3,7 +3,7 @@ import os
 import time
 
 from PyQt6 import sip
-from PyQt6.QtCore import QAbstractAnimation, QElapsedTimer, QPoint, QPointF, QRectF, QSize, QSizeF, Qt, QTimer, QVariantAnimation, QEasingCurve, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QAbstractAnimation, QElapsedTimer, QPoint, QPointF, QRectF, QSize, QSizeF, Qt, QTimer, QVariantAnimation, pyqtSignal, pyqtSlot
 from PyQt6.QtDBus import QDBusMessage
 from PyQt6.QtGui import QColor, QFont, QFontMetricsF, QIcon, QPainter, QPen, QRegion
 from PyQt6.QtWidgets import QApplication, QGraphicsOpacityEffect, QLabel, QScrollBar, QWidget
@@ -50,9 +50,9 @@ CLOCK_BACK_SECONDS = 5 * 60
 RETRY_MS = 30 * 1000
 # KWin answered within 20 ms where it was measured, so the first check comes soon and a slower machine gets one more
 BLUR_CHECK_MS = (25, 100)
-CHART_FADE_MS = 180
-PANE_FADE_MS = 180
-THUMB_SLIDE_MS = 220
+CHART_FADE_MS = 200
+PANE_FADE_MS = 200
+THUMB_SLIDE_MS = 250
 GLOW_FADE_MS = 400
 FROST_EVERY_MS = 50
 SLEEP_CHOICES = ((0, "Off"), (30, "Every 30 seconds"), (60, "Every minute"), (300, "Every 5 minutes"))
@@ -264,7 +264,7 @@ class SegmentedControl(QWidget):
         self.index = index
         self.thumbX = self.segmentX(index)
         self.animation = QVariantAnimation(self)
-        self.animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.animation.setEasingCurve(glass.easeOut())
         self.animation.valueChanged.connect(self.onSlide)
         self.setFixedSize(int(sum(widths) + 2 * self.inset), height)
         # Tab reaches it, while a click leaves no focus ring behind
@@ -708,7 +708,7 @@ class HistoryWindow(QWidget):
         self.blurChecks = 0
         self.ageTimer = mice.singleShotTimer(self, 1000, self.fetchSelected)
         self.glowAnimation = QVariantAnimation(self)
-        self.glowAnimation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.glowAnimation.setEasingCurve(glass.easeOut())
         self.glowAnimation.valueChanged.connect(self.onGlowStep)
         self.glowAnimation.finished.connect(lambda: self.remakeFrost(force=True))
         mouseList.changed.connect(self.refresh)
@@ -733,7 +733,7 @@ class HistoryWindow(QWidget):
         self.paneFade.setEnabled(False)
         self.pane.setGraphicsEffect(self.paneFade)
         self.paneAnimation = QVariantAnimation(self)
-        self.paneAnimation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.paneAnimation.setEasingCurve(glass.easeOut())
         self.paneAnimation.valueChanged.connect(lambda value: self.paneFade.setOpacity(value))
         self.paneAnimation.finished.connect(lambda: self.paneFade.setEnabled(False))
         # the pane clips and everything in it lives on the content, which slides under the pane when the screen has less room than the layout needs
@@ -769,7 +769,7 @@ class HistoryWindow(QWidget):
         self.nameRangeControl()
         self.chartFade = QGraphicsOpacityEffect(self.levelChart)
         self.chartAnimation = QVariantAnimation(self)
-        self.chartAnimation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.chartAnimation.setEasingCurve(glass.easeOut())
         self.chartAnimation.valueChanged.connect(lambda value: self.chartFade.setOpacity(value))
         self.chartAnimation.finished.connect(lambda: self.chartFade.setEnabled(False))
         self.formLabels = [label(self.content, 13) for index in range(4)]

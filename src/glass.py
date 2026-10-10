@@ -2,7 +2,7 @@ import math
 import os
 from dataclasses import dataclass
 
-from PyQt6.QtCore import QPointF, QRectF, Qt
+from PyQt6.QtCore import QEasingCurve, QPointF, QRectF, Qt
 from PyQt6.QtGui import QBrush, QColor, QImage, QLinearGradient, QPainter, QPainterPath, QPalette, QPen, QRadialGradient
 
 import hidpp
@@ -92,6 +92,13 @@ def animationFactor(configHome, reducedMotion):
     except ValueError:
         return 1.0
     return min(MAX_ANIMATION_FACTOR, max(0.0, factor)) if math.isfinite(factor) else 1.0
+
+
+def easeOut():
+    # cubic-bezier(0.23, 1, 0.32, 1), a strong ease out that moves at once and settles slowly
+    curve = QEasingCurve(QEasingCurve.Type.BezierSpline)
+    curve.addCubicBezierSegment(QPointF(0.23, 1.0), QPointF(0.32, 1.0), QPointF(1.0, 1.0))
+    return curve
 
 
 def paintBackdrop(width, height, pane, color, theme, ratio=1.0):

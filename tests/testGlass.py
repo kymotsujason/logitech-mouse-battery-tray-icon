@@ -79,6 +79,9 @@ class ThemeTests(unittest.TestCase):
         finally:
             shutil.rmtree(folder)
 
+    def testTheEaseOutIsTheStrongCurve(self):
+        self.assertEqual([round(glass.easeOut().valueForProgress(t), 3) for t in (0.1, 0.25, 0.5, 0.75, 1.0)], [0.398, 0.775, 0.966, 0.997, 1.0])
+
     def testAHugeAnimationSpeedIsCapped(self):
         # a hand edited factor this large would make a duration past a C int, which setDuration can't take
         folder = tempfile.mkdtemp()
