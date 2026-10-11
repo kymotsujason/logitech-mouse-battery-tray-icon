@@ -92,6 +92,7 @@ The battery history stays in `/var/lib/logitech-mouse-battery`, so delete it wit
 
 - A mouse that reports a rough level or a voltage instead of a percentage gets an estimated level, shown without a number.
 - A mouse on a receiver the kernel leaves alone keeps showing as awake after it's turned off, until the app next reads it.
+- A mouse read through UPower counts as reporting its sleeps once its link has dropped and come back, which turning it off also does. If its link stays up while it sleeps, its drain figures can include idle time.
 - For a mouse read through UPower, the battery window can show an older list of charges for up to 2 hours in rare cases.
 - When the clock is set while the battery service is stopped, readings it saved with the wrong time keep that time.
 
