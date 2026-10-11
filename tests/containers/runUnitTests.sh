@@ -23,7 +23,8 @@ runIn() {
 aptInstall="export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -qq --no-install-recommends python3 python3-pyqt6 dbus-daemon python3-gi gir1.2-glib-2.0 jq"
 runIn debian:12 "$aptInstall"
 runIn ubuntu:24.04 "$aptInstall"
-runIn archlinux:latest "pacman -Syu --noconfirm --needed python python-pyqt6 dbus python-gobject jq"
+# Debian and Ubuntu's Qt brings a font along, while Arch's brings none, and with no font every glyph draws as a box narrower than its measured width
+runIn archlinux:latest "pacman -Syu --noconfirm --needed python python-pyqt6 dbus python-gobject jq ttf-dejavu"
 
 if [ "$failures" -gt 0 ]; then
     exit 1
