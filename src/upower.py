@@ -65,7 +65,7 @@ def plainValues(props):
 
 def inputIsMouse(name):
     try:
-        with open(os.path.join(UDEV_DATA, "+input:" + name)) as f:
+        with open(os.path.join(UDEV_DATA, "+input:" + name), encoding="utf-8", errors="replace") as f:
             return any(line.rstrip("\n") == UDEV_MOUSE_LINE for line in f)
     except OSError:
         return False

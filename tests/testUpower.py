@@ -226,6 +226,13 @@ class CableTests(unittest.TestCase):
         mouse = self.keyboardBattery("hidpp_battery_4")
         self.assertEqual(mouse, upower.UPowerMouse(PATH, "12ab34cd", "G703 LIGHTSPEED Wireless Gaming Mouse w/ HERO", hidpp.BatteryReading(55, 0)))
 
+    def testAUdevFileWithAByteItCantDecodeStillKeepsTheCable(self):
+        self.addCable()
+        with open(os.path.join(self.udev, "+input:input51"), "wb") as f:
+            f.write(b"I:4454399\nE:NAME=G703 \xff\nE:ID_INPUT_MOUSE=1\n")
+        mouse = self.keyboardBattery("hidpp_battery_4")
+        self.assertEqual(mouse, upower.UPowerMouse(PATH, "12ab34cd", "G703 LIGHTSPEED Wireless Gaming Mouse w/ HERO", hidpp.BatteryReading(55, 0)))
+
     def testAReceiverKeyboardNextToAPairedMouseIsLeftOut(self):
         self.addReceiver()
         self.assertIsNone(self.keyboardBattery("hidpp_battery_5"))
