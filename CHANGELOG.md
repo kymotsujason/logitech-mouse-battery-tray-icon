@@ -6,7 +6,7 @@ This file lists the changes in each release of Mouse Battery, newest first.
 
 ### Added
 
-- Two scripts in `diagnostics/` save a report of what the computer sees of a mouse, on its receiver and cable and while it sleeps, to attach to an issue.
+- A script in `diagnostics/` walks you through using the mouse wirelessly, letting it sleep, and plugging in its cable, and saves a report of what the computer sees to attach to an issue.
 
 ### Fixed
 

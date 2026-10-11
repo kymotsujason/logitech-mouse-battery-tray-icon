@@ -59,7 +59,7 @@ The app is the flat set of modules in `src/`, which the packages install side by
 - `check.py` is the terminal check.
 - `version.py` holds the version.
 
-`diagnostics/` holds scripts for testers to run, which aren't packaged. `diagnoseMouse.sh` saves what the kernel, udev, UPower, and the app see of a mouse on its receiver and on its cable, and `watchSleep.sh` logs the kernel battery, its uevents, and UPower while the mouse sleeps and wakes.
+`diagnostics/mouseReport.sh` is for testers to run, and it isn't packaged. It walks them through using the mouse wirelessly, an optional sleep check, and plugging in the cable, noticing each change on its own, and saves what the kernel, udev, UPower, and the app see at each step to one file in their home folder. During the sleep check it logs the kernel battery, its uevents, and UPower. `PS_ROOT`, `USB_ROOT`, and `UDEV_DATA` point it at fake folders for testing.
 
 `packaging/` holds the launcher, the desktop entries, the udev rule, the service's systemd, D-Bus, and sysusers files, the install scripts, the package configs, and the build scripts. `tests/` holds the unit tests, with the fake devices and D-Bus services in `tests/fakes/`, the checks that run the real tray on private buses in `tests/live/`, the container checks in `tests/containers/`, and the checks that run the packaged service on a booted runner in `tests/booted/`.
 
