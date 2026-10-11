@@ -461,9 +461,9 @@ class WatcherOwnerTests(unittest.TestCase):
 
     def testANewOwnerForgetsTheTurnedAwayCables(self):
         self.watcher.bus = ScriptedBus(lambda message: message.createReply([[]]))
-        self.watcher.cablePaths.add("/org/freedesktop/UPower/devices/keyboard_hidpp_battery_5")
+        self.watcher.recheckPaths.add("/org/freedesktop/UPower/devices/keyboard_hidpp_battery_5")
         self.watcher.onOwnerChanged(upower.SERVICE, ":1.5", "")
-        self.assertEqual(self.watcher.cablePaths, set())
+        self.assertEqual(self.watcher.recheckPaths, set())
 
     def testAListingStartedBeforeAnOwnerChangeIsSetAside(self):
         self.watcher.bus = ScriptedBus(lambda message: message.createReply([[OTHER_PATH]]))

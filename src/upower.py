@@ -220,7 +220,7 @@ class UPowerWatcher(QObject):
         self.bus = bus if bus is not None else QDBusConnection.systemBus()
         self.paths = set()
         # batteries typed keyboard that the cable check turned away, read again on each change like a kept mouse
-        self.cablePaths = set()
+        self.recheckPaths = set()
         self.retryPaths = set()
         # the properties each device last sent in a type this version can't read, so each set is printed once
         self.wrongTypes = {}
@@ -269,7 +269,7 @@ class UPowerWatcher(QObject):
         for path in sorted(self.paths):
             self.mouseRemoved.emit(path)
         self.paths.clear()
-        self.cablePaths.clear()
+        self.recheckPaths.clear()
         if (not newOwner):
             return
         self.listDevices()
@@ -348,7 +348,7 @@ class UPowerWatcher(QObject):
                 # a device that's gone has nothing left to recover from
                 self.printedErrors.pop(path, None)
                 self.wrongTypes.pop(path, None)
-                self.cablePaths.discard(path)
+                self.recheckPaths.discard(path)
                 self.dropPath(path)
             elif (error not in ABSENT_ERRORS):
                 # a call that failed for another reason says nothing about the mouse, so it keeps its last reading until the retry
@@ -369,12 +369,12 @@ class UPowerWatcher(QObject):
         mouse = mouseFromProperties(path, props, undecided=path in self.paths)
         if (mouse is None):
             if (cableCandidate(props)):
-                self.cablePaths.add(path)
+                self.recheckPaths.add(path)
             else:
-                self.cablePaths.discard(path)
+                self.recheckPaths.discard(path)
             self.dropPath(path)
             return
-        self.cablePaths.discard(path)
+        self.recheckPaths.discard(path)
         self.paths.add(path)
         self.mouseChanged.emit(mouse)
 
@@ -407,7 +407,7 @@ class UPowerWatcher(QObject):
         self.wrongTypes.pop(path, None)
         self.refreshing.pop(path, None)
         self.refreshAgain.discard(path)
-        self.cablePaths.discard(path)
+        self.recheckPaths.discard(path)
         self.dropPath(path)
 
     @pyqtSlot(QDBusMessage)
@@ -423,7 +423,7 @@ class UPowerWatcher(QObject):
         # a device that's failing waits out its backoff, and the retry reads whatever changed meanwhile
         if (path in self.retryPaths):
             return
-        if (path in self.paths or path in self.cablePaths):
+        if (path in self.paths or path in self.recheckPaths):
             self.refresh(path)
             return
         # UPower can set Type after DeviceAdded, once the mouse's input device shows up
