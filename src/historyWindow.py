@@ -54,6 +54,8 @@ BLUR_CHECK_MS = (25, 100)
 # 150 ms at the owner's AnimationDurationFactor of 0.5, where 100 ms on the strong ease out read as a cut
 CHART_FADE_MS = 300
 PANE_FADE_MS = 300
+TEXT_FADE_MS = 300
+TEXT_SLIDE = 6
 # a reply from the service usually comes well inside this, so most range switches never show the word at all
 LOADING_DELAY_MS = 300
 THUMB_SLIDE_MS = 250
@@ -613,6 +615,14 @@ class PopupButton(QWidget):
         self.setFixedSize(76, 24)
         self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self.keyFocus = False
+        # the value a pick replaced, drawn leaving while the new one comes in
+        self.oldText = None
+        self.textAnimation = QVariantAnimation(self)
+        self.textAnimation.setEasingCurve(glass.fadeCurve())
+        self.textAnimation.setStartValue(0.0)
+        self.textAnimation.setEndValue(1.0)
+        self.textAnimation.valueChanged.connect(self.update)
+        self.textAnimation.finished.connect(self.endTextFade)
 
     def setSeconds(self, seconds):
         self.seconds = seconds
@@ -647,8 +657,18 @@ class PopupButton(QWidget):
         self.owner.choiceMenu.open(SLEEP_CHOICES, self.seconds, anchor, self.pick, self.openMenu)
 
     def pick(self, seconds):
+        duration = int(TEXT_FADE_MS * self.owner.motionFactor)
+        if (seconds != self.seconds and duration > 0 and self.isVisible()):
+            self.textAnimation.stop()
+            self.oldText = self.text()
+            self.textAnimation.setDuration(duration)
+            self.textAnimation.start()
         self.setSeconds(seconds)
         self.picked.emit(seconds)
+
+    def endTextFade(self):
+        self.oldText = None
+        self.update()
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -660,7 +680,19 @@ class PopupButton(QWidget):
             glass.paintPanel(painter, rect, rect.height() / 2, frost, theme, strong=True, offset=QPointF(self.mapTo(self.owner, self.rect().topLeft())))
         painter.setFont(font(12))
         painter.setPen(QColor(theme.text))
-        painter.drawText(QRectF(12, 0, self.width() - 34, self.height()), int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), self.text())
+        textRect = QRectF(12, 0, self.width() - 34, self.height())
+        align = int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        if (self.oldText is None):
+            painter.drawText(textRect, align, self.text())
+        else:
+            progress = self.textAnimation.currentValue()
+            painter.save()
+            painter.setClipRect(textRect)
+            painter.setOpacity(1.0 - progress)
+            painter.drawText(textRect.translated(0, -TEXT_SLIDE * progress), align, self.oldText)
+            painter.setOpacity(progress)
+            painter.drawText(textRect.translated(0, TEXT_SLIDE * (1.0 - progress)), align, self.text())
+            painter.restore()
         painter.setPen(QPen(QColor(theme.secondary), 1.4, cap=Qt.PenCapStyle.RoundCap))
         x = self.width() - 14
         middle = self.height() / 2
@@ -1121,7 +1153,7 @@ class HistoryWindow(QWidget):
                 self.finishAnimations()
 
     def finishAnimations(self):
-        for animation in (self.glowAnimation, self.paneCrossfade.animation, self.chartCrossfade.animation, self.levelChart.morph, self.segments.animation, self.rangeControl.animation, self.sidebar.pillAnimation, self.choiceMenu.animation):
+        for animation in (self.glowAnimation, self.paneCrossfade.animation, self.chartCrossfade.animation, self.levelChart.morph, self.segments.animation, self.rangeControl.animation, self.sidebar.pillAnimation, self.choiceMenu.animation, self.popup.textAnimation):
             if (animation.state() == QAbstractAnimation.State.Running):
                 animation.setCurrentTime(animation.duration())
 

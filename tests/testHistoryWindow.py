@@ -777,7 +777,7 @@ class WindowTests(WindowCase):
         for animation in (window.segments.animation, window.rangeControl.animation, window.glowAnimation, window.sidebar.pillAnimation, window.levelChart.morph, window.choiceMenu.animation):
             self.assertEqual(animation.easingCurve().type(), QEasingCurve.Type.BezierSpline)
             self.assertEqual(round(animation.easingCurve().valueForProgress(0.25), 3), 0.775)
-        for animation in (window.paneCrossfade.animation, window.chartCrossfade.animation):
+        for animation in (window.paneCrossfade.animation, window.chartCrossfade.animation, window.popup.textAnimation):
             self.assertEqual(animation.easingCurve().type(), QEasingCurve.Type.InOutQuad)
 
     def testTheFadesAreOnlyOnWhileTheyRun(self):
@@ -2164,6 +2164,58 @@ class WindowTests(WindowCase):
         self.assertEqual(window.popup.seconds, 30)
         self.assertTrue(menu.isVisibleTo(window))
         self.assertTrue(menu.closing)
+
+    def sleepTextDrawn(self, popup):
+        drawn = []
+
+        class RecordingPainter(historyWindow.QPainter):
+            def drawText(self, *args):
+                drawn.append((args[-1], round(self.opacity(), 2), args[0].y() if isinstance(args[0], QRectF) else None))
+                super().drawText(*args)
+
+        with mock.patch.object(historyWindow, "QPainter", RecordingPainter):
+            popup.grab()
+        return drawn
+
+    def testPickingASleepCheckFadesTheOldValueIntoTheNew(self):
+        window = self.opened(entry())
+        window.motionFactor = 0.5
+        popup = window.popup
+        popup.setSeconds(0)
+        popup.pick(30)
+        self.assertEqual(popup.seconds, 30)
+        self.assertEqual(popup.textAnimation.state(), QAbstractAnimation.State.Running)
+        self.assertEqual(popup.textAnimation.duration(), historyWindow.TEXT_FADE_MS // 2)
+        popup.textAnimation.setCurrentTime(popup.textAnimation.duration() // 2)
+        drawn = {text: (opacity, y) for text, opacity, y in self.sleepTextDrawn(popup)}
+        self.assertEqual(set(drawn), {"Off", "30 s"})
+        self.assertAlmostEqual(drawn["Off"][0], 0.5, delta=0.02)
+        self.assertAlmostEqual(drawn["30 s"][0], 0.5, delta=0.02)
+        # the old value leaves upward while the new one comes in from below
+        self.assertLess(drawn["Off"][1], drawn["30 s"][1])
+        popup.textAnimation.setCurrentTime(popup.textAnimation.duration())
+        self.assertEqual([text for text, opacity, y in self.sleepTextDrawn(popup)], ["30 s"])
+
+    def testASleepCheckSetWithoutAPickOrWithMotionOffDoesntFade(self):
+        window = self.opened(entry())
+        window.motionFactor = 1.0
+        popup = window.popup
+        popup.setSeconds(60)
+        self.assertNotEqual(popup.textAnimation.state(), QAbstractAnimation.State.Running)
+        popup.pick(60)
+        self.assertNotEqual(popup.textAnimation.state(), QAbstractAnimation.State.Running)
+        window.motionFactor = 0.0
+        popup.pick(300)
+        self.assertNotEqual(popup.textAnimation.state(), QAbstractAnimation.State.Running)
+        self.assertEqual([text for text, opacity, y in self.sleepTextDrawn(popup)], ["5 min"])
+
+    def testClosingTheWindowFinishesTheSleepTextFade(self):
+        window = self.opened(entry())
+        window.motionFactor = 1.0
+        window.popup.setSeconds(0)
+        window.popup.pick(30)
+        window.close()
+        self.assertEqual([text for text, opacity, y in self.sleepTextDrawn(window.popup)], ["30 s"])
 
     def testAClosingSleepMenuTakesNoInputAndTheButtonOpensItAgain(self):
         window = self.opened(entry())
