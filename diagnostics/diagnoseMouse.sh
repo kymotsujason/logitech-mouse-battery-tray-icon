@@ -133,7 +133,7 @@ verdict() {
         type=$(upowerType "$path")
         case "$type" in
             mouse*) echo "  $native: UPower calls it a mouse, so Mouse Battery shows it" ;;
-            *) echo "  $native: UPower calls it $type, so Mouse Battery skips it" ;;
+            *) echo "  $native: UPower calls it $type, which Mouse Battery 1.2.0 and older skip" ;;
         esac
     done
     if [ "$found" = 0 ]; then
