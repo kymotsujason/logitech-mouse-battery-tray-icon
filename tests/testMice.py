@@ -363,6 +363,39 @@ class MouseListTests(unittest.TestCase):
             self.mice.applyUPower(upower.UPowerMouse(UPOWER_PATH, "12ab34cd", "MX Master 3", hidpp.BatteryReading(55, 0), updatedAt=9000.0))
         self.assertEqual(self.mouse().lastRead, 2000.0)
 
+    def sleepingG703(self, percent=68, updatedAt=1030.0):
+        return upower.UPowerMouse(UPOWER_PATH, "12ab34cd", "G703 LS", hidpp.BatteryReading(percent, hidpp.CHARGING_UNKNOWN), updatedAt=updatedAt, asleep=True)
+
+    def testAUPowerMouseThatFallsAsleepKeepsItsLastReading(self):
+        with mock.patch.object(mice.time, "time", return_value=2000.0):
+            self.mice.applyUPower(upower.UPowerMouse(UPOWER_PATH, "12ab34cd", "G703 LS", hidpp.BatteryReading(68, 0), updatedAt=1000.0))
+            wokeAt = self.mouse().wokeAt
+            self.mice.applyUPower(self.sleepingG703())
+            # UPower repeats the device every 30 s while it sleeps
+            self.mice.applyUPower(self.sleepingG703(updatedAt=1060.0))
+        mouse = self.mouse()
+        self.assertEqual((mouse.asleep, mouse.reading, mouse.lastRead, mouse.wokeAt), (True, hidpp.BatteryReading(68, 0), 1000.0, wokeAt))
+
+    def testAWakeAfterAUPowerSleepClearsIt(self):
+        with mock.patch.object(mice.time, "time", return_value=2000.0):
+            self.mice.applyUPower(self.sleepingG703())
+        with mock.patch.object(mice.time, "time", return_value=2500.0):
+            self.mice.applyUPower(upower.UPowerMouse(UPOWER_PATH, "12ab34cd", "G703 LS", hidpp.BatteryReading(64, 0), updatedAt=2400.0))
+        mouse = self.mouse()
+        self.assertEqual((mouse.asleep, mouse.reading, mouse.lastRead, mouse.wokeAt), (False, hidpp.BatteryReading(64, 0), 2400.0, 2500.0))
+
+    def testATrayStartedWhileTheMouseSleepsShowsUPowersLevel(self):
+        with mock.patch.object(mice.time, "time", return_value=2000.0):
+            self.mice.applyUPower(self.sleepingG703())
+        mouse = self.mouse()
+        self.assertEqual((mouse.asleep, mouse.reading, mouse.lastRead), (True, hidpp.BatteryReading(68, hidpp.CHARGING_UNKNOWN), 1030.0))
+
+    def testAUPowerSleepLeavesAMouseWithAHidppHalfToTheService(self):
+        self.mice.applyService(state(entry(key="12ab34cd", percent=40, lastRead=1900.0)))
+        self.mice.applyUPower(self.sleepingG703(updatedAt=1000.0))
+        mouse = self.mouse()
+        self.assertEqual((mouse.asleep, mouse.reading), (False, hidpp.BatteryReading(40, 0)))
+
     def testAnOlderUPowerReadingDoesntReplaceANewerServiceReading(self):
         self.mice.applyService(state(entry(key="12ab34cd", percent=40, lastRead=1900.0)))
         self.mice.applyUPower(upower.UPowerMouse(UPOWER_PATH, "12ab34cd", "MX Master 3", hidpp.BatteryReading(80, 0), updatedAt=1000.0))

@@ -253,6 +253,15 @@ class MouseList(QObject):
         readAt = upowerMouse.updatedAt
         if (readAt is not None and readAt > time.time()):
             readAt = None
+        if (upowerMouse.asleep and mouse.nodePath is None):
+            # UPower still holds the reading from before the sleep, so a tray that starts during one shows it with its time
+            if (mouse.reading is None):
+                mouse.reading = upowerMouse.reading
+                mouse.lastRead = readAt if readAt is not None else time.time()
+            mouse.readFromUPower = True
+            self.applyReading(mouse, None)
+            self.changed.emit()
+            return
         if (readAt is not None and not mouse.readFromUPower and isLater(mouse.lastRead, readAt)):
             # the service read this mouse after UPower last did, so its reading stays, while UPower still shows the mouse is there
             mouse.stale = False
@@ -261,7 +270,7 @@ class MouseList(QObject):
             self.changed.emit()
             return
         mouse.readFromUPower = True
-        # UPower sends no sleep signal, so a changed reading is the only sign the mouse is in use
+        # a mouse whose link stays up while it sleeps sends no sleep signal, so a changed reading is also a sign it's in use
         self.applyReading(mouse, upowerMouse.reading, woke=(mouse.reading != upowerMouse.reading), readAt=readAt)
         self.changed.emit()
 
