@@ -145,9 +145,10 @@ wiredMice() {
 }
 
 plainText() {
-    # a device chooses its own name strings, so the lines shown on screen lose their control characters and keep their
-    # newlines, while the report file keeps the raw values
-    tr -d '\000-\011\013-\037\177'
+    # a device chooses its own name strings, so the lines shown on screen keep only printable ASCII and newlines,
+    # and anything else, such as a control or multibyte character, shows as a question mark, while the report file keeps
+    # the raw values
+    LC_ALL=C tr -c '\012\040-\176' '?'
 }
 
 wiredNames() {
