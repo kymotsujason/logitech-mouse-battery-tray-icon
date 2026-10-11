@@ -639,13 +639,17 @@ class HistoryServiceTests(unittest.TestCase):
             taken.assert_not_called()
 
 
+SLEEP_PATH = "/org/freedesktop/UPower/devices/battery_hidpp_battery_9"
+
+
 class FakeUPowerMouse:
-    def __init__(self, path, key, percent, pathKey=False):
+    def __init__(self, path, key, percent, pathKey=False, asleep=False):
         self.path = path
         self.key = key
         self.name = "MX Master 3S"
         self.reading = hidpp.BatteryReading(percent, 0)
         self.pathKey = pathKey
+        self.asleep = asleep
 
 
 class UPowerHistoryTests(unittest.TestCase):
@@ -681,6 +685,91 @@ class UPowerHistoryTests(unittest.TestCase):
             glue.start()
             glue.stop()
         self.assertEqual([call[0] for call in watcher.method_calls], ["watchOwner", "start", "stop"])
+
+    def reading(self, key, percent, pathKey=False):
+        return mock.call.addReading(key, hidpp.BatteryReading(percent, 0), history.ORIGIN_UPOWER, name="MX Master 3S", source=history.SOURCE_UPOWER, pathKey=pathKey)
+
+    def marker(self, key, origin, pathKey=False):
+        return mock.call.addMarker(key, origin, source=history.SOURCE_UPOWER, pathKey=pathKey)
+
+    def testASleepIsAMarkerAndTheWakeTurnsOnWakeSupport(self):
+        recorder = mock.Mock()
+        glue = service.UPowerHistory(recorder, QDBusConnection("unconnected"))
+        glue.watcher.mouseChanged.emit(FakeUPowerMouse(SLEEP_PATH, "9a1b2c3d", 68))
+        glue.watcher.mouseChanged.emit(FakeUPowerMouse(SLEEP_PATH, "9a1b2c3d", 68, asleep=True))
+        # UPower repeats the device every 30 s while it sleeps
+        glue.watcher.mouseChanged.emit(FakeUPowerMouse(SLEEP_PATH, "9a1b2c3d", 68, asleep=True))
+        glue.watcher.mouseChanged.emit(FakeUPowerMouse(SLEEP_PATH, "9a1b2c3d", 64))
+        self.assertEqual(recorder.mock_calls, [
+            self.reading("9a1b2c3d", 68),
+            self.marker("9a1b2c3d", history.ORIGIN_ASLEEP),
+            self.marker("9a1b2c3d", history.ORIGIN_WAKE),
+            mock.call.setWakeSupport("9a1b2c3d", True, pathKey=False, source=history.SOURCE_UPOWER),
+            self.reading("9a1b2c3d", 64),
+        ])
+
+    def testAPathFirstSeenAsleepGetsAMarker(self):
+        recorder = mock.Mock()
+        glue = service.UPowerHistory(recorder, QDBusConnection("unconnected"))
+        glue.watcher.mouseChanged.emit(FakeUPowerMouse(SLEEP_PATH, "9a1b2c3d", 68, asleep=True))
+        glue.watcher.mouseChanged.emit(FakeUPowerMouse(SLEEP_PATH, "9a1b2c3d", 64))
+        self.assertEqual(recorder.mock_calls, [
+            self.marker("9a1b2c3d", history.ORIGIN_ASLEEP),
+            self.marker("9a1b2c3d", history.ORIGIN_WAKE),
+            mock.call.setWakeSupport("9a1b2c3d", True, pathKey=False, source=history.SOURCE_UPOWER),
+            self.reading("9a1b2c3d", 64),
+        ])
+
+    def testAPathFirstSeenAwakeGetsNoWakeMarker(self):
+        recorder = mock.Mock()
+        glue = service.UPowerHistory(recorder, QDBusConnection("unconnected"))
+        glue.watcher.mouseChanged.emit(FakeUPowerMouse(SLEEP_PATH, "9a1b2c3d", 68))
+        glue.watcher.mouseChanged.emit(FakeUPowerMouse(SLEEP_PATH, "9a1b2c3d", 67))
+        self.assertEqual(recorder.mock_calls, [self.reading("9a1b2c3d", 68), self.reading("9a1b2c3d", 67)])
+
+    def testAKeyChangeForgetsThePathsSleep(self):
+        recorder = mock.Mock()
+        glue = service.UPowerHistory(recorder, QDBusConnection("unconnected"))
+        glue.watcher.mouseChanged.emit(FakeUPowerMouse(SLEEP_PATH, SLEEP_PATH, 68, pathKey=True, asleep=True))
+        glue.watcher.mouseChanged.emit(FakeUPowerMouse(SLEEP_PATH, "9a1b2c3d", 64))
+        self.assertEqual(recorder.mock_calls, [
+            self.marker(SLEEP_PATH, history.ORIGIN_ASLEEP, pathKey=True),
+            self.marker(SLEEP_PATH, history.ORIGIN_GAP, pathKey=True),
+            mock.call.forget(SLEEP_PATH, source=history.SOURCE_UPOWER),
+            self.reading("9a1b2c3d", 64),
+        ])
+
+    def testARemovalWhileAsleepStartsOverAtTheNextSighting(self):
+        recorder = mock.Mock()
+        glue = service.UPowerHistory(recorder, QDBusConnection("unconnected"))
+        glue.watcher.mouseChanged.emit(FakeUPowerMouse(SLEEP_PATH, "9a1b2c3d", 68, asleep=True))
+        # UPower restarting drops every path and lists them again
+        glue.watcher.mouseRemoved.emit(SLEEP_PATH)
+        glue.watcher.mouseChanged.emit(FakeUPowerMouse(SLEEP_PATH, "9a1b2c3d", 68, asleep=True))
+        glue.watcher.mouseChanged.emit(FakeUPowerMouse(SLEEP_PATH, "9a1b2c3d", 64))
+        self.assertEqual(recorder.mock_calls, [
+            self.marker("9a1b2c3d", history.ORIGIN_ASLEEP),
+            self.marker("9a1b2c3d", history.ORIGIN_GAP),
+            mock.call.forget("9a1b2c3d", source=history.SOURCE_UPOWER),
+            self.marker("9a1b2c3d", history.ORIGIN_ASLEEP),
+            self.marker("9a1b2c3d", history.ORIGIN_WAKE),
+            mock.call.setWakeSupport("9a1b2c3d", True, pathKey=False, source=history.SOURCE_UPOWER),
+            self.reading("9a1b2c3d", 64),
+        ])
+
+    def testANewPathAfterASleepIsntAWake(self):
+        recorder = mock.Mock()
+        glue = service.UPowerHistory(recorder, QDBusConnection("unconnected"))
+        glue.watcher.mouseChanged.emit(FakeUPowerMouse(SLEEP_PATH, "9a1b2c3d", 68, asleep=True))
+        # the receiver was replugged, so the kernel gave the battery a new number
+        glue.watcher.mouseRemoved.emit(SLEEP_PATH)
+        glue.watcher.mouseChanged.emit(FakeUPowerMouse("/org/freedesktop/UPower/devices/battery_hidpp_battery_10", "9a1b2c3d", 64))
+        self.assertEqual(recorder.mock_calls, [
+            self.marker("9a1b2c3d", history.ORIGIN_ASLEEP),
+            self.marker("9a1b2c3d", history.ORIGIN_GAP),
+            mock.call.forget("9a1b2c3d", source=history.SOURCE_UPOWER),
+            self.reading("9a1b2c3d", 64),
+        ])
 
 
 class StateFolderTests(unittest.TestCase):

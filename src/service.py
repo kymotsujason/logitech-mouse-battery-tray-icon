@@ -205,7 +205,18 @@ class UPowerHistory(QObject):
         if (old is not None and old[0] != mouse.key):
             self.recorder.addMarker(old[0], history.ORIGIN_GAP, source=history.SOURCE_UPOWER, pathKey=old[1])
             self.recorder.forget(old[0], source=history.SOURCE_UPOWER)
-        self.paths[mouse.path] = (mouse.key, mouse.pathKey)
+            old = None
+        wasAsleep = old is not None and old[2]
+        self.paths[mouse.path] = (mouse.key, mouse.pathKey, mouse.asleep)
+        if (mouse.asleep):
+            # UPower repeats a sleeping device every 30 s, and only the first of those is a sleep
+            if (not wasAsleep):
+                self.recorder.addMarker(mouse.key, history.ORIGIN_ASLEEP, source=history.SOURCE_UPOWER, pathKey=mouse.pathKey)
+            return
+        if (wasAsleep):
+            # one sleep seen ending shows this mouse's link drops when it sleeps, so its drops can be measured from here on
+            self.recorder.addMarker(mouse.key, history.ORIGIN_WAKE, source=history.SOURCE_UPOWER, pathKey=mouse.pathKey)
+            self.recorder.setWakeSupport(mouse.key, True, pathKey=mouse.pathKey, source=history.SOURCE_UPOWER)
         self.recorder.addReading(mouse.key, mouse.reading, history.ORIGIN_UPOWER, name=mouse.name, source=history.SOURCE_UPOWER, pathKey=mouse.pathKey)
 
     def onRemoved(self, path):
