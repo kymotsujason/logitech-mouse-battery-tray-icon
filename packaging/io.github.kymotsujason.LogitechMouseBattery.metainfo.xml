@@ -10,7 +10,8 @@
   </developer>
   <description>
     <p>Mouse Battery puts the battery level of every connected Logitech mouse in the system tray, and warns once at 10% and once at 5% per charge.</p>
-    <p>It reads mice the kernel drives through UPower, and reads Logitech receivers and cables the kernel leaves alone, such as the PRO X3 SUPERSTRIKE's, over HID++ through a small system service. Its udev rule gives only that service access to those receivers and cables, and the service offers nothing but battery readings. It isn't affiliated with Logitech.</p>
+    <p>Clicking the tray icon opens a battery window with a level chart over the last day, week, or month, how many hours a charge lasts and how fast it charges month by month, and a health line that says when a charge lasts 15% less or charging takes 15% longer than it used to.</p>
+    <p>It reads mice the kernel drives through UPower, and reads Logitech receivers and cables the kernel leaves alone, such as the PRO X3 SUPERSTRIKE's, over HID++ through a small system service. Its udev rule gives only that service access to those receivers and cables, and the service offers nothing but battery readings and each mouse's saved history. It isn't affiliated with Logitech.</p>
   </description>
   <launchable type="desktop-id">logitech-mouse-battery.desktop</launchable>
   <url type="homepage">https://github.com/kymotsujason/logitech-mouse-battery-tray-icon</url>
@@ -19,6 +20,10 @@
     <screenshot type="default">
       <image>https://raw.githubusercontent.com/kymotsujason/logitech-mouse-battery-tray-icon/main/docs/screenshot.png</image>
       <caption>The tray icon and its menu</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/kymotsujason/logitech-mouse-battery-tray-icon/main/docs/window-level.png</image>
+      <caption>The battery window</caption>
     </screenshot>
   </screenshots>
   <provides>

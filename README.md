@@ -40,7 +40,7 @@ The package also installs a udev rule that hands your receiver or cable to Mouse
 
 Installing doesn't start Mouse Battery, so open "Mouse Battery" from your app menu once and its icon shows up in the tray. From the next login on it starts by itself, for every account on the computer, whether or not that account ever opened it, until that account turns off "Open at Login" in its menu.
 
-The icon is a mouse that fills up with the battery level and shows the percentage. The fill turns green while the mouse charges, red at 20% or below, and gray while the mouse sleeps. The menu lists every mouse it found, for example:
+The icon is a mouse that fills up with the battery level and shows the percentage, which it leaves out when the tray draws the icon smaller than 22 pixels. The fill turns green while the mouse is on its charger, charging or full, red at 20% or below, and gray while the mouse sleeps. The menu lists every mouse it found, for example:
 
 - `PRO X3 SUPERSTRIKE, 69%`
 - `PRO X3 SUPERSTRIKE, charging, 82%`
@@ -50,9 +50,13 @@ Opening the menu takes a fresh reading from each mouse it reads over HID++, whil
 
 ## Battery health
 
-Click the tray icon, or pick "Battery Health" from its menu, to open the battery window. It shows the mouse, its level, a health line, a level chart over the last 24 hours, 7 days, or 30 days with each bar colored by state (blue otherwise, green with a dot for a charge, red at 20% or below), how many hours a charge lasts and how fast it charges month by month, and the number of charge cycles. The chart keeps the range you picked the next time it opens. With two or more mice a sidebar lists them all. The window's title bar icon follows the shown mouse in the tray icon's colors, white in use, green while charging, red at 20% or below, and gray while asleep.
+Click the tray icon, or pick "Battery Health" from its menu, to open the battery window. It shows the mouse with its level and status, a health box of up to three lines, a level chart over the last 24 hours, 7 days, or 30 days with each bar colored by state (blue otherwise, green with a dot for a charge, red at 20% or below), how many hours a charge lasts and how fast it charges month by month, the number of charge cycles, when the mouse was last charged and on which charger, and its charging speed. Once it has measured enough of the current discharge or charge, the status also says about how many hours are left, or about how long until the mouse is full. The chart keeps the range you picked the next time it opens. With two or more mice a sidebar lists them all. The window's title bar icon follows the shown mouse, white in use, green on its charger, red at 20% or below, gray while asleep, and an empty outline before its first reading.
 
-The battery service saves each mouse's charges and discharges in `/var/lib/logitech-mouse-battery/history.sqlite3`, about 20 MB after 10 years of heavy use. It saves a row when a reading changes, and also when a mouse wakes, falls asleep, or drops out of sight, and it asks a mouse for no more readings than before, except that a mouse whose wireless status lookup didn't answer gets the lookup asked again with its next read, battery event, or reconnect until it answers, and after three failed tries a read or battery event asks at most once a minute, with that wait doubling up to an hour. The health line compares how fast the battery drains and charges now with how it did when tracking began, stretch by stretch of the battery, and says when a charge lasts 15% less or charging takes 15% longer than it used to. That needs about 42 discharges first, so until then the health box shows how many hours of use a full charge gives and how many more charges the wear check needs. A mouse that doesn't give a serial number gets no history, and one that reports only a rough level or a voltage gets no drain or charge figures.
+![The battery window with the level chart](docs/window-level.png)
+
+![The battery window with the hours per charge chart](docs/window-hours.png)
+
+The battery service saves each mouse's charges and discharges in `/var/lib/logitech-mouse-battery/history.sqlite3`, about 20 MB after 10 years of heavy use. It saves a row when a reading changes, and also when a mouse wakes, falls asleep, or drops out of sight, and it asks a mouse for no more readings than before, except that a mouse whose wireless status lookup didn't answer gets the lookup asked again with its next read, battery event, or reconnect until it answers, and after three failed tries a read or battery event asks at most once a minute, with that wait doubling up to an hour. The health line compares how fast the battery drains and charges now with how it did when tracking began, stretch by stretch of the battery, and says when a charge lasts 15% less or charging takes 15% longer than it used to. That needs about 42 discharges first, and about 42 charges on the same charger for the charging check. Until then the health box says it's still learning, and once three stretches of the battery each have a measured discharge, it says how many more charges the wear check needs. Once a month has five measured drops, the box also says how many hours of use a full charge gives, and the hours per charge chart shows that month. A drop in a discharge's first 30 minutes doesn't count, since a mouse's reading tends to fall fast for a few minutes after it comes off the charger. After a charge, the box says how long charging from 20% to 80% takes on that charger. A charging error the mouse reported in the last week, or a last charge that ran slow for most of its readings, comes first. A mouse that doesn't give a serial number gets no history. One that reports only a rough level or a voltage gets no drain or charge figures, and one that doesn't say when it wakes, or that reports its level in steps of 5% or more, gets no drain figures, although its charging can still be measured.
 
 Any account on the computer can read the history through the service, as it can read the battery levels, and the history shows when each mouse was in use.
 
@@ -64,7 +68,7 @@ GNOME's top bar has no system tray of its own, so Mouse Battery needs the AppInd
 
 ## Check from a terminal
 
-`logitech-mouse-battery check` prints each mouse it can read with its battery, and says what to do when it can't read one. When it can't reach the battery service it names the error, and when the service turns its read down it says the readings may be old.
+`logitech-mouse-battery check` prints each mouse it can read with its battery, and says what to do when it can't read one. When it can't reach the battery service it names the error, and when the service turns its read down it says the readings may be old. `logitech-mouse-battery --version` prints the installed version.
 
 ## Which mice work
 
@@ -138,7 +142,7 @@ The app is the flat set of modules in `src/`, which the packages install side by
 - `upower.py` reads the mice the kernel drives through UPower, for the tray and the window and for the service's history.
 - `lowBattery.py` decides when a mouse gets a low battery warning.
 - `notify.py` sends desktop notifications.
-- `dbusCalls.py` makes the tray's D-Bus calls to the desktop and to UPower with a timeout, answering through a callback so a slow peer never holds it still. It also makes the blocking calls, each with a timeout, for the terminal check (to the battery service and UPower) and for the notice a second tray sends before it quits, and it unwraps the values in a reply. `serviceClient.py` makes the tray's own calls to the battery service, with its own callbacks and timeout.
+- `dbusCalls.py` makes the tray's D-Bus calls to the desktop and to UPower with a timeout, answering through a callback so a slow peer never holds it still. It also makes the blocking calls, each with a timeout, for the terminal check (to the battery service and UPower) and for the notice a second tray sends before it quits, and it unwraps the values in a reply. `serviceClient.py` makes the tray's own state and read calls to the battery service with its own callbacks and timeout, while its history and chart level calls go through `dbusCalls.py`.
 - `panelColor.py` works out the color the icon is drawn in from the desktop's theme, and reads the desktop portal's color scheme and reduced motion settings, which the window follows too.
 - `icon.py` draws the tray icon and the mouse picture in the battery window, and picks the window's title bar icon.
 - `autostart.py` turns Open at Login on and off.
