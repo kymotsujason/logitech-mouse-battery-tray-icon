@@ -13,6 +13,7 @@ pids=()
 
 cleanup() {
     for pid in "${pids[@]}"; do
+        pkill -P "$pid" 2>/dev/null
         kill "$pid" 2>/dev/null
     done
     rm -rf "$work"
@@ -142,6 +143,7 @@ waitOrEnter 30 "  %d min %d s left"
 mark "done"
 
 for pid in "${pids[@]}"; do
+    pkill -P "$pid" 2>/dev/null
     kill "$pid" 2>/dev/null
 done
 pids=()
