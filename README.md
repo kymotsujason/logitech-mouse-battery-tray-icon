@@ -76,6 +76,8 @@ GNOME's top bar has no system tray of its own, so Mouse Battery needs the AppInd
 
 `logitech-mouse-battery check` prints each mouse it can read with its battery, and says what to do when it can't read one. `logitech-mouse-battery --version` prints the installed version.
 
+If a mouse doesn't show up or reads wrong, the scripts in [diagnostics/](diagnostics/) save a report to attach to an issue. `diagnoseMouse.sh` records what the computer sees of the mouse on its receiver and on its cable, and `watchSleep.sh` records what happens to its battery while it sleeps and wakes. Both only read, and neither needs root.
+
 ## Privacy and permissions
 
 Mouse Battery's service is the only program this package lets open your receiver or cable, and it runs as its own system user in a sandbox. It offers only battery readings and each mouse's saved history, which any account on the computer can read. [docs/security.md](docs/security.md) has the details.
