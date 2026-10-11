@@ -59,6 +59,13 @@ def isLater(stamp, other):
     return other is None or stamp > other
 
 
+def readsLater(stamp, mouse):
+    # a level of unknown time ranks below any dated one
+    if (not mouse.readTimeKnown):
+        return stamp is not None
+    return isLater(stamp, mouse.lastRead)
+
+
 class Mouse:
     def __init__(self, key, pathKey=False):
         self.key = key
@@ -69,6 +76,9 @@ class Mouse:
         self.upowerPath = None
         self.reading = None
         self.asleep = False
+        # each source's own word on sleep, since a sleep often comes with no new reading and so can't follow the level's precedence
+        self.serviceAsleep = False
+        self.upowerAsleep = False
         # the reading is the last one the service gave before it went away, so it's shown with its time and no claim the mouse sleeps
         self.stale = False
         self.lastRead = None
@@ -162,8 +172,8 @@ class MouseList(QObject):
             self.appliedEntries.clear()
             for mouse in self.mice:
                 if (mouse.nodePath is not None and mouse.upowerPath is None):
-                    mouse.asleep = True
                     mouse.stale = True
+                self.settleSleep(mouse)
             self.updateTimer()
             self.changed.emit()
             return
@@ -193,19 +203,28 @@ class MouseList(QObject):
         if (entry.name):
             mouse.name = entry.name
         mouse.nodePath = entry.source
+        mouse.serviceAsleep = entry.asleep
         # a reading UPower gave stays until the service has a later one, so an older entry never brings back a stale level or makes the warner warn again
-        if ((mouse.upowerPath is not None or mouse.readFromUPower) and not isLater(entry.lastRead, mouse.lastRead)):
-            if (mouse.upowerPath is None):
-                # with UPower gone, only the service can say the mouse went to sleep
-                mouse.asleep = entry.asleep
+        if ((mouse.upowerPath is not None or mouse.readFromUPower) and not readsLater(entry.lastRead, mouse)):
+            self.settleSleep(mouse, wokeAt=entry.wokeAt)
+            self.warn(mouse)
             return
         mouse.readFromUPower = False
         mouse.reading = entry.reading
-        mouse.asleep = entry.asleep
         mouse.lastRead = entry.lastRead
         mouse.readTimeKnown = True
         mouse.wokeAt = entry.wokeAt
+        self.settleSleep(mouse)
         self.warn(mouse)
+
+    def settleSleep(self, mouse, wokeAt=None):
+        # the mouse is in use while any source that still reads it says so, and a source that's gone doesn't count
+        serviceAwake = mouse.nodePath is not None and self.serviceState is not None and not mouse.serviceAsleep
+        upowerAwake = mouse.upowerPath is not None and not mouse.upowerAsleep
+        awake = serviceAwake or upowerAwake
+        if (awake and mouse.asleep and wokeAt is not None):
+            mouse.wokeAt = wokeAt
+        mouse.asleep = not awake
 
     def warn(self, mouse):
         percent = self.warner.update(mouse.key, mouse.reading, mouse.asleep)
@@ -214,22 +233,10 @@ class MouseList(QObject):
 
     def detachHidpp(self, mouse):
         mouse.nodePath = None
-        if (mouse.upowerPath is None and mouse in self.mice):
+        if (mouse.upowerPath is not None):
+            self.settleSleep(mouse)
+        elif (mouse in self.mice):
             self.removeMouse(mouse)
-
-    def applyReading(self, mouse, reading, woke=False, readAt=None):
-        now = time.time()
-        mouse.stale = False
-        if (reading is None):
-            mouse.asleep = True
-        else:
-            if (woke or mouse.asleep or mouse.reading is None):
-                mouse.wokeAt = now
-            mouse.reading = reading
-            mouse.asleep = False
-            mouse.lastRead = now if readAt is None else readAt
-            mouse.readTimeKnown = True
-        self.warn(mouse)
 
     def mouseFor(self, key, pathKey=False):
         for mouse in self.mice:
@@ -258,40 +265,40 @@ class MouseList(QObject):
         if (upowerMouse.asleep):
             # a receiver and a cable can list one mouse twice, and the receiver's path reads asleep while the cable charges it
             existing = next((mouse for mouse in self.mice if mouse.key == upowerMouse.key), None)
-            if (existing is not None and existing.upowerPath not in (None, upowerMouse.path) and not existing.asleep):
+            if (existing is not None and existing.upowerPath not in (None, upowerMouse.path) and not existing.upowerAsleep):
                 return
         mouse = self.mouseFor(upowerMouse.key, pathKey=upowerMouse.pathKey)
         mouse.upowerPath = upowerMouse.path
+        mouse.upowerAsleep = upowerMouse.asleep
+        mouse.stale = False
         if (mouse.name is None):
             mouse.name = upowerMouse.name
+        now = time.time()
         # UPower says when it read the device, which a clock running behind can put in the future
         readAt = upowerMouse.updatedAt
-        if (readAt is not None and readAt > time.time()):
+        if (readAt is not None and readAt > now):
             readAt = None
-        if (upowerMouse.asleep and mouse.nodePath is not None):
-            # a sleeping report carries no new reading, so the service keeps the level and the sleep state
-            self.changed.emit()
-            return
         if (upowerMouse.asleep):
-            # UPower still holds the reading from before the sleep, so a tray that starts during one shows it with no time
+            # a sleeping report carries no new reading, though UPower still holds the one from before the sleep, so a tray that starts during one shows it with no time
             if (mouse.reading is None):
                 mouse.reading = upowerMouse.reading
-                mouse.lastRead = time.time()
+                mouse.lastRead = now
                 mouse.readTimeKnown = False
+                mouse.readFromUPower = True
+            self.settleSleep(mouse)
+        elif (readAt is not None and not mouse.readFromUPower and isLater(mouse.lastRead, readAt)):
+            # the service read this mouse after UPower last did, so its reading stays, while UPower still shows the mouse is in use
+            self.settleSleep(mouse, wokeAt=now)
+        else:
+            # a mouse whose link stays up while it sleeps sends no sleep signal, so a changed reading is also a sign it's in use
+            if (mouse.reading != upowerMouse.reading or mouse.reading is None):
+                mouse.wokeAt = now
             mouse.readFromUPower = True
-            self.applyReading(mouse, None)
-            self.changed.emit()
-            return
-        if (readAt is not None and not mouse.readFromUPower and isLater(mouse.lastRead, readAt)):
-            # the service read this mouse after UPower last did, so its reading stays, while UPower still shows the mouse is there
-            mouse.stale = False
-            if (self.serviceLost()):
-                mouse.asleep = False
-            self.changed.emit()
-            return
-        mouse.readFromUPower = True
-        # a mouse whose link stays up while it sleeps sends no sleep signal, so a changed reading is also a sign it's in use
-        self.applyReading(mouse, upowerMouse.reading, woke=(mouse.reading != upowerMouse.reading), readAt=readAt)
+            mouse.reading = upowerMouse.reading
+            mouse.lastRead = now if readAt is None else readAt
+            mouse.readTimeKnown = True
+            self.settleSleep(mouse, wokeAt=now)
+        self.warn(mouse)
         self.changed.emit()
 
     def removeUPower(self, path):
@@ -313,7 +320,8 @@ class MouseList(QObject):
         entry = None
         if (state is not None):
             entry = next((each for each in state.mice if each.key == mouse.key), None)
-        mouse.asleep = True if entry is None else entry.asleep
+        mouse.serviceAsleep = True if entry is None else entry.asleep
+        self.settleSleep(mouse)
         mouse.stale = self.serviceLost()
 
     def shownMouse(self):
@@ -322,7 +330,8 @@ class MouseList(QObject):
             return max(awake, key=lambda mouse: mouse.wokeAt or 0)
         read = [mouse for mouse in self.mice if mouse.lastRead is not None]
         if (read):
-            return max(read, key=lambda mouse: mouse.lastRead)
+            # a level of unknown time holds only the time it came in, so it ranks below any dated one
+            return max(read, key=lambda mouse: (mouse.readTimeKnown, mouse.lastRead))
         return None
 
     def displayNames(self):

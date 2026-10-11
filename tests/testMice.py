@@ -12,7 +12,9 @@ from PyQt6.QtWidgets import QApplication
 import hidpp
 import lowBattery
 import mice
+import tray
 import upower
+from icon import IconState
 from serviceState import ServiceEntry, ServiceState
 
 app = QApplication.instance() or QApplication([])
@@ -414,6 +416,85 @@ class MouseListTests(unittest.TestCase):
         self.assertFalse(self.mouse().readTimeKnown)
         self.mice.applyUPower(upower.UPowerMouse(UPOWER_PATH, "12ab34cd", "G703 LS", hidpp.BatteryReading(64, 0), updatedAt=time.time() - 5))
         self.assertTrue(self.mouse().readTimeKnown)
+
+    def assertShows(self, mouse, line, asleep):
+        names = self.mice.displayNames()
+        self.assertEqual((tray.mouseLine(names[mouse.key], mouse, now=mouse.lastRead), tray.iconStateFor(mouse).asleep), (line, asleep))
+
+    def testBothStartupOrdersShowTheServicesDatedReading(self):
+        for upowerFirst in (True, False):
+            with self.subTest(upowerFirst=upowerFirst):
+                self.tearDown()
+                self.setUp()
+                warnings = self.sentWarnings()
+                with mock.patch.object(mice.time, "time", return_value=2000.0):
+                    if (upowerFirst):
+                        self.mice.applyUPower(self.sleepingG703())
+                    self.mice.applyService(state(entry(key="12ab34cd", percent=9, lastRead=1900.0)))
+                    if (not upowerFirst):
+                        self.mice.applyUPower(self.sleepingG703())
+                mouse = self.mouse()
+                self.assertEqual((self.keys(), mouse.asleep, mouse.reading.percent, mouse.lastRead, mouse.readTimeKnown, warnings), (["12ab34cd"], False, 9, 1900.0, True, [9]))
+                self.assertShows(mouse, NAME + ", 9%", False)
+
+    def testAServiceSleepAfterAUPowerSleepPutsTheMouseToSleep(self):
+        self.mice.applyService(state(entry(lastRead=1000.0)))
+        self.mice.applyUPower(upower.UPowerMouse(UPOWER_PATH, "02bc524c", NAME, hidpp.BatteryReading(70, hidpp.CHARGING_UNKNOWN), updatedAt=1100.0, asleep=True))
+        self.assertFalse(self.mouse().asleep)
+        self.mice.applyService(state(entry(lastRead=1000.0, asleep=True)))
+        mouse = self.mouse()
+        self.assertEqual((mouse.asleep, mouse.reading.percent, mouse.lastRead), (True, 81, 1000.0))
+        self.assertShows(mouse, NAME + ", asleep, 81% " + mice.readingTime(1000.0, 1000.0), True)
+
+    def testANewerUPowerReadingThenBothSourcesSleepingPutsTheMouseToSleep(self):
+        for upowerSleepsFirst in (True, False):
+            with self.subTest(upowerSleepsFirst=upowerSleepsFirst):
+                self.tearDown()
+                self.setUp()
+                self.mice.applyService(state(entry(lastRead=1000.0)))
+                self.mice.applyUPower(upower.UPowerMouse(UPOWER_PATH, "02bc524c", NAME, hidpp.BatteryReading(39, 0), updatedAt=1500.0))
+                sleeping = upower.UPowerMouse(UPOWER_PATH, "02bc524c", NAME, hidpp.BatteryReading(39, hidpp.CHARGING_UNKNOWN), updatedAt=1800.0, asleep=True)
+                if (upowerSleepsFirst):
+                    self.mice.applyUPower(sleeping)
+                    self.assertFalse(self.mouse().asleep)
+                self.mice.applyService(state(entry(lastRead=1000.0, asleep=True)))
+                if (not upowerSleepsFirst):
+                    self.assertFalse(self.mouse().asleep)
+                    self.mice.applyUPower(sleeping)
+                mouse = self.mouse()
+                self.assertEqual((mouse.asleep, mouse.reading.percent, mouse.lastRead), (True, 39, 1500.0))
+                self.assertShows(mouse, NAME + ", asleep, 39% " + mice.readingTime(1500.0, 1500.0), True)
+
+    def testAServiceThatGoesAwayLeavesUPowersSleep(self):
+        self.mice.applyService(state(entry(lastRead=1000.0)))
+        self.mice.applyUPower(upower.UPowerMouse(UPOWER_PATH, "02bc524c", NAME, hidpp.BatteryReading(39, 0), updatedAt=1100.0))
+        self.mice.applyService(state(entry(lastRead=1000.0, asleep=True)))
+        sleeping = upower.UPowerMouse(UPOWER_PATH, "02bc524c", NAME, hidpp.BatteryReading(39, hidpp.CHARGING_UNKNOWN), updatedAt=1200.0, asleep=True)
+        self.mice.applyUPower(sleeping)
+        self.mice.applyService(None)
+        self.mice.applyUPower(sleeping)
+        mouse = self.mouse()
+        self.assertEqual((mouse.asleep, mouse.stale, mouse.reading.percent), (True, False, 39))
+        self.assertShows(mouse, NAME + ", asleep, 39% " + mice.readingTime(1100.0, 1100.0), True)
+
+    def testAnAwakeServiceThatGoesAwayLeavesUPowersSleep(self):
+        for gone in ("none", "unlisted"):
+            with self.subTest(gone=gone):
+                self.tearDown()
+                self.setUp()
+                self.mice.applyService(state(entry(lastRead=1000.0)))
+                self.mice.applyUPower(upower.UPowerMouse(UPOWER_PATH, "02bc524c", NAME, hidpp.BatteryReading(70, hidpp.CHARGING_UNKNOWN), updatedAt=1100.0, asleep=True))
+                self.assertFalse(self.mouse().asleep)
+                self.mice.applyService(None if gone == "none" else state())
+                mouse = self.mouse()
+                self.assertEqual((self.keys(), mouse.asleep, mouse.reading.percent), (["02bc524c"], True, 81))
+                self.assertShows(mouse, NAME + ", asleep, 81% " + mice.readingTime(1000.0, 1000.0), True)
+
+    def testAReadingOfUnknownTimeIsShownAfterADatedOne(self):
+        with mock.patch.object(mice.time, "time", return_value=2000.0):
+            self.mice.applyService(state(entry(percent=40, asleep=True, lastRead=1900.0)))
+            self.mice.applyUPower(self.sleepingG703())
+        self.assertEqual(self.mice.shownMouse().key, "02bc524c")
 
     def chargingCable(self, percent):
         return upower.UPowerMouse(CABLE_PATH, "12ab34cd", "G703 LS", hidpp.BatteryReading(percent, hidpp.CHARGING_CHARGING), updatedAt=1000.0 + percent)
