@@ -975,11 +975,12 @@ class Recorder(QObject):
             # loading again saves the source once the database answers
             self.unload(entry)
 
-    def setWakeSupport(self, key, supported, pathKey=False):
+    def setWakeSupport(self, key, supported, pathKey=False, source=SOURCE_HIDPP):
         # None is a lookup that didn't answer, which leaves the saved flag as it is and counts wakes as unseen until one answers
         self.followClock()
         entry = self.entryFor(key, pathKey)
-        self.claim(entry, SOURCE_HIDPP)
+        if (not self.claim(entry, source)):
+            return
         if (supported is None):
             entry.track.wakesUnseen = True
             self.ensureLoaded(entry)

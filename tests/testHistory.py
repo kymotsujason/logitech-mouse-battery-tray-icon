@@ -815,6 +815,44 @@ class StepTests(RecorderCase):
         self.assertEqual([(s[3], s[4]) for s in self.steps()], [(80, 79)])
 
 
+class UPowerWakeTests(RecorderCase):
+    def upower(self, seconds, percent):
+        self.clock.now = START + seconds
+        self.recorder.addReading(OTHER, hidpp.BatteryReading(percent, 0), history.ORIGIN_UPOWER, name="G703 LS", source=history.SOURCE_UPOWER, at=START + seconds)
+        self.at(seconds + history.WAKE_SET_SECONDS)
+
+    def upowerMarker(self, seconds, origin):
+        self.clock.now = START + seconds
+        self.recorder.addMarker(OTHER, origin, source=history.SOURCE_UPOWER, at=START + seconds)
+
+    def testWakeSupportIsSavedForAUPowerMouse(self):
+        self.upower(0, 80)
+        self.recorder.setWakeSupport(OTHER, True, source=history.SOURCE_UPOWER)
+        summary = self.recorder.summary(OTHER)
+        self.assertEqual((summary["source"], summary["wakeSupport"]), (history.SOURCE_UPOWER, True))
+        with self.db() as db:
+            self.assertEqual(db.execute("select source, wakeSupport from mice where key = ?", (OTHER,)).fetchone(), (history.SOURCE_UPOWER, 1))
+
+    def testUPowerWakeSupportLeavesAHidppMouseAlone(self):
+        self.event(0, 80)
+        self.recorder.setWakeSupport(KEY, True, source=history.SOURCE_UPOWER)
+        summary = self.recorder.summary(KEY)
+        self.assertEqual((summary["source"], summary["wakeSupport"]), (history.SOURCE_HIDPP, False))
+
+    def testDropsCountOnlyOnceASleepHasBeenSeen(self):
+        self.upower(0, 80)
+        self.upower(1800, 79)
+        self.upower(3600, 78)
+        self.upowerMarker(3700, history.ORIGIN_ASLEEP)
+        self.upowerMarker(4000, history.ORIGIN_WAKE)
+        self.recorder.setWakeSupport(OTHER, True, source=history.SOURCE_UPOWER)
+        self.upower(4001, 77)
+        self.upower(5800, 76)
+        self.upower(7600, 75)
+        # 79 to 78 is whole but came before any seen sleep, 78 to 77 spans the sleep, and 77 to 76 starts at the wake
+        self.assertEqual([(s[3], s[4], s[6]) for s in self.steps()], [(80, 79, 0), (79, 78, 0), (78, 77, 0), (77, 76, 0), (76, 75, 1)])
+
+
 class ClockStepTests(RecorderCase):
     def testAHeldRowIsWrittenOnTimeAfterTheWallClockStepsBack(self):
         self.event(0, 50)
