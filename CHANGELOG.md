@@ -2,6 +2,18 @@
 
 This file lists the changes in each release of Mouse Battery, newest first.
 
+## 1.2.1, 2026-10-11
+
+### Added
+
+- Two scripts in `diagnostics/` save a report of what the computer sees of a mouse, on its receiver and cable and while it sleeps, to attach to an issue.
+
+### Fixed
+
+- A mouse the kernel drives, such as the G703 LIGHTSPEED, no longer disappears while it's on its cable.
+- A mouse read through UPower gets drain figures once it has been seen falling asleep.
+- A mouse read through UPower shows as asleep while it sleeps, instead of an unknown state.
+
 ## 1.2.0, 2026-10-11
 
 ### Added

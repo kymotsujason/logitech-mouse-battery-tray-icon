@@ -11,19 +11,19 @@ Mouse Battery isn't affiliated with Logitech.
 On Ubuntu and Debian, download the `.deb` from the [latest release](https://github.com/kymotsujason/logitech-mouse-battery-tray-icon/releases/latest) and double click it, or install it from a terminal:
 
 ```bash
-sudo apt install ./logitech-mouse-battery_1.2.0_all.deb
+sudo apt install ./logitech-mouse-battery_1.2.1_all.deb
 ```
 
 On Fedora, download the `.rpm` from the same page:
 
 ```bash
-sudo dnf install ./logitech-mouse-battery-1.2.0-1.noarch.rpm
+sudo dnf install ./logitech-mouse-battery-1.2.1-1.noarch.rpm
 ```
 
 On Arch, download the `.pkg.tar.zst` from the same page and install it with pacman:
 
 ```bash
-sudo pacman -U ./logitech-mouse-battery-1.2.0-1-any.pkg.tar.zst
+sudo pacman -U ./logitech-mouse-battery-1.2.1-1-any.pkg.tar.zst
 ```
 
 An AUR package will follow once the AUR opens account registrations again.
@@ -33,7 +33,7 @@ The package gives Mouse Battery's service access to your receiver or cable, incl
 Each file in a release after 1.1.0 comes with a signed record of how it was built. To check a download with the GitHub CLI before you install it:
 
 ```bash
-gh attestation verify ./logitech-mouse-battery-1.2.0-1-any.pkg.tar.zst --repo kymotsujason/logitech-mouse-battery-tray-icon
+gh attestation verify ./logitech-mouse-battery-1.2.1-1-any.pkg.tar.zst --repo kymotsujason/logitech-mouse-battery-tray-icon
 ```
 
 ## Use
@@ -66,7 +66,7 @@ The battery service saves the history in `/var/lib/logitech-mouse-battery/histor
 
 Mice the Linux kernel already drives, such as most Unifying, LIGHTSPEED, and Bluetooth mice, are read through UPower. Mice on a receiver or cable the kernel leaves alone are read over Logitech's HID++ protocol by Mouse Battery's service. That covers the PRO X3 SUPERSTRIKE's receiver (`046d:c54f`) and USB cable (`046d:c0a9`), and on kernels that don't drive them, receivers such as the LIGHTSPEED `046d:c547` and the Logi Bolt `046d:c548`.
 
-It has been tested with the PRO X3 SUPERSTRIKE on its receiver and its cable, and by one tester with a PRO X Wireless on a `046d:c547` receiver and an MX Master 3S on a Logi Bolt receiver.
+It has been tested with the PRO X3 SUPERSTRIKE on its receiver and its cable, by one tester with a PRO X Wireless on a `046d:c547` receiver and an MX Master 3S on a Logi Bolt receiver, and by another with a G703 LIGHTSPEED on its receiver and its cable.
 
 ## GNOME
 
