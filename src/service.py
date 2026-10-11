@@ -207,6 +207,10 @@ class UPowerHistory(QObject):
             self.recorder.forget(old[0], source=history.SOURCE_UPOWER)
             old = None
         wasAsleep = old is not None and old[2]
+        if (mouse.asleep and not wasAsleep and self.awakeElsewhere(mouse)):
+            # a receiver's path reads asleep while a cable path charges the same mouse, so the receiver's sighting isn't a sleep
+            self.paths[mouse.path] = (mouse.key, mouse.pathKey, False)
+            return
         self.paths[mouse.path] = (mouse.key, mouse.pathKey, mouse.asleep)
         if (mouse.asleep):
             # UPower repeats a sleeping device every 30 s, and only the first of those is a sleep
@@ -218,6 +222,9 @@ class UPowerHistory(QObject):
             self.recorder.addMarker(mouse.key, history.ORIGIN_WAKE, source=history.SOURCE_UPOWER, pathKey=mouse.pathKey)
             self.recorder.setWakeSupport(mouse.key, True, pathKey=mouse.pathKey, source=history.SOURCE_UPOWER)
         self.recorder.addReading(mouse.key, mouse.reading, history.ORIGIN_UPOWER, name=mouse.name, source=history.SOURCE_UPOWER, pathKey=mouse.pathKey)
+
+    def awakeElsewhere(self, mouse):
+        return any(path != mouse.path and saved[0] == mouse.key and not saved[2] for path, saved in self.paths.items())
 
     def onRemoved(self, path):
         found = self.paths.pop(path, None)

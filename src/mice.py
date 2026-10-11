@@ -245,6 +245,11 @@ class MouseList(QObject):
         for other in list(self.mice):
             if (other.upowerPath == upowerMouse.path and other.key != upowerMouse.key):
                 self.dropUPowerHalf(other)
+        if (upowerMouse.asleep):
+            # a receiver and a cable can list one mouse twice, and the receiver's path reads asleep while the cable charges it
+            existing = next((mouse for mouse in self.mice if mouse.key == upowerMouse.key), None)
+            if (existing is not None and existing.upowerPath not in (None, upowerMouse.path) and not existing.asleep):
+                return
         mouse = self.mouseFor(upowerMouse.key, pathKey=upowerMouse.pathKey)
         mouse.upowerPath = upowerMouse.path
         if (mouse.name is None):

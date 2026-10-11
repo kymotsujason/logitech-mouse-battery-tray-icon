@@ -20,6 +20,8 @@ NAME = "PRO X3 SUPERSTRIKE"
 RECEIVER = "/dev/hidraw18"
 OTHER_NODE = "/dev/hidraw10"
 UPOWER_PATH = "/org/freedesktop/UPower/devices/mouse_hidpp_battery_0"
+RECEIVER_PATH = "/org/freedesktop/UPower/devices/battery_hidpp_battery_3"
+CABLE_PATH = "/org/freedesktop/UPower/devices/battery_hidpp_battery_4"
 
 
 def entry(key="02bc524c", percent=81, asleep=False, lastRead=1000.0, wokeAt=900.0, source=RECEIVER, name=NAME, pathKey=False, reportsItself=False, historyRevision=0):
@@ -395,6 +397,49 @@ class MouseListTests(unittest.TestCase):
         self.mice.applyUPower(self.sleepingG703(updatedAt=1000.0))
         mouse = self.mouse()
         self.assertEqual((mouse.asleep, mouse.reading), (False, hidpp.BatteryReading(40, 0)))
+
+    def chargingCable(self, percent):
+        return upower.UPowerMouse(CABLE_PATH, "12ab34cd", "G703 LS", hidpp.BatteryReading(percent, hidpp.CHARGING_CHARGING), updatedAt=1000.0 + percent)
+
+    def sleepingReceiver(self):
+        return upower.UPowerMouse(RECEIVER_PATH, "12ab34cd", "G703 LS", hidpp.BatteryReading(60, hidpp.CHARGING_UNKNOWN), updatedAt=1000.0, asleep=True)
+
+    def assertChargingOnTheCable(self, percent):
+        mouse = self.mouse()
+        self.assertEqual((self.keys(), mouse.asleep, mouse.upowerPath, mouse.reading), (["12ab34cd"], False, CABLE_PATH, hidpp.BatteryReading(percent, hidpp.CHARGING_CHARGING)))
+
+    def testAnAsleepReceiverPathDoesntOverrideAnAwakeCablePath(self):
+        with mock.patch.object(mice.time, "time", return_value=2000.0):
+            self.mice.applyUPower(self.chargingCable(70))
+            self.assertChargingOnTheCable(70)
+            self.mice.applyUPower(self.sleepingReceiver())
+            self.assertChargingOnTheCable(70)
+            self.mice.applyUPower(self.chargingCable(71))
+            self.assertChargingOnTheCable(71)
+            self.mice.applyUPower(self.sleepingReceiver())
+            self.assertChargingOnTheCable(71)
+
+    def testAnAsleepReceiverPathSeenFirstGivesWayToTheCablePath(self):
+        with mock.patch.object(mice.time, "time", return_value=2000.0):
+            self.mice.applyUPower(self.sleepingReceiver())
+            self.mice.applyUPower(self.chargingCable(70))
+            self.assertChargingOnTheCable(70)
+            self.mice.applyUPower(self.sleepingReceiver())
+            self.assertChargingOnTheCable(70)
+            self.mice.applyUPower(self.chargingCable(71))
+            self.assertChargingOnTheCable(71)
+            self.mice.applyUPower(self.sleepingReceiver())
+            self.assertChargingOnTheCable(71)
+
+    def testAnAsleepReceiverPathCountsOnceTheCablePathIsGone(self):
+        with mock.patch.object(mice.time, "time", return_value=2000.0):
+            self.mice.applyUPower(self.chargingCable(70))
+            self.mice.applyUPower(self.sleepingReceiver())
+            self.mice.removeUPower(CABLE_PATH)
+            self.assertEqual(self.keys(), [])
+            self.mice.applyUPower(self.sleepingReceiver())
+        mouse = self.mouse()
+        self.assertEqual((mouse.asleep, mouse.upowerPath, mouse.reading), (True, RECEIVER_PATH, hidpp.BatteryReading(60, hidpp.CHARGING_UNKNOWN)))
 
     def testAnOlderUPowerReadingDoesntReplaceANewerServiceReading(self):
         self.mice.applyService(state(entry(key="12ab34cd", percent=40, lastRead=1900.0)))
