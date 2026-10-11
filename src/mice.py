@@ -46,6 +46,12 @@ def singleShotTimer(parent, interval, slot):
     return timer
 
 
+def readTimeText(mouse, now):
+    if (not mouse.readTimeKnown):
+        return ""
+    return " " + readingTime(mouse.lastRead, now)
+
+
 def isLater(stamp, other):
     # a null stamp is never later, and any stamp is later than none
     if (stamp is None):
@@ -66,6 +72,8 @@ class Mouse:
         # the reading is the last one the service gave before it went away, so it's shown with its time and no claim the mouse sleeps
         self.stale = False
         self.lastRead = None
+        # a mouse the tray found asleep has only UPower's poll stamp, which says nothing about when its level was read
+        self.readTimeKnown = True
         self.wokeAt = None
         self.readFromUPower = False
         self.reportsItself = False
@@ -195,6 +203,7 @@ class MouseList(QObject):
         mouse.reading = entry.reading
         mouse.asleep = entry.asleep
         mouse.lastRead = entry.lastRead
+        mouse.readTimeKnown = True
         mouse.wokeAt = entry.wokeAt
         self.warn(mouse)
 
@@ -219,6 +228,7 @@ class MouseList(QObject):
             mouse.reading = reading
             mouse.asleep = False
             mouse.lastRead = now if readAt is None else readAt
+            mouse.readTimeKnown = True
         self.warn(mouse)
 
     def mouseFor(self, key, pathKey=False):
@@ -258,11 +268,16 @@ class MouseList(QObject):
         readAt = upowerMouse.updatedAt
         if (readAt is not None and readAt > time.time()):
             readAt = None
-        if (upowerMouse.asleep and mouse.nodePath is None):
-            # UPower still holds the reading from before the sleep, so a tray that starts during one shows it with its time
+        if (upowerMouse.asleep and mouse.nodePath is not None):
+            # a sleeping report carries no new reading, so the service keeps the level and the sleep state
+            self.changed.emit()
+            return
+        if (upowerMouse.asleep):
+            # UPower still holds the reading from before the sleep, so a tray that starts during one shows it with no time
             if (mouse.reading is None):
                 mouse.reading = upowerMouse.reading
-                mouse.lastRead = readAt if readAt is not None else time.time()
+                mouse.lastRead = time.time()
+                mouse.readTimeKnown = False
             mouse.readFromUPower = True
             self.applyReading(mouse, None)
             self.changed.emit()

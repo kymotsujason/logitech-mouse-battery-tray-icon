@@ -390,13 +390,30 @@ class MouseListTests(unittest.TestCase):
         with mock.patch.object(mice.time, "time", return_value=2000.0):
             self.mice.applyUPower(self.sleepingG703())
         mouse = self.mouse()
-        self.assertEqual((mouse.asleep, mouse.reading, mouse.lastRead), (True, hidpp.BatteryReading(68, hidpp.CHARGING_UNKNOWN), 1030.0))
+        self.assertEqual((mouse.asleep, mouse.reading, mouse.lastRead), (True, hidpp.BatteryReading(68, hidpp.CHARGING_UNKNOWN), 2000.0))
 
     def testAUPowerSleepLeavesAMouseWithAHidppHalfToTheService(self):
         self.mice.applyService(state(entry(key="12ab34cd", percent=40, lastRead=1900.0)))
         self.mice.applyUPower(self.sleepingG703(updatedAt=1000.0))
         mouse = self.mouse()
         self.assertEqual((mouse.asleep, mouse.reading), (False, hidpp.BatteryReading(40, 0)))
+
+    def testAUPowerSleepNeverWakesAMouseWithAHidppHalf(self):
+        for hidppAsleep in (False, True):
+            for updatedAt in (1000.0, 2000.0, None):
+                with self.subTest(hidppAsleep=hidppAsleep, updatedAt=updatedAt):
+                    self.setUp()
+                    self.mice.applyService(state(entry(key="12ab34cd", percent=40, lastRead=1900.0, asleep=hidppAsleep)))
+                    with mock.patch.object(mice.time, "time", return_value=3000.0):
+                        self.mice.applyUPower(self.sleepingG703(updatedAt=updatedAt))
+                    mouse = self.mouse()
+                    self.assertEqual((mouse.asleep, mouse.reading.percent, mouse.lastRead, mouse.nodePath, mouse.upowerPath), (hidppAsleep, 40, 1900.0, RECEIVER, UPOWER_PATH))
+
+    def testATrayStartedWhileTheMouseSleepsHasNoReadingTime(self):
+        self.mice.applyUPower(self.sleepingG703())
+        self.assertFalse(self.mouse().readTimeKnown)
+        self.mice.applyUPower(upower.UPowerMouse(UPOWER_PATH, "12ab34cd", "G703 LS", hidpp.BatteryReading(64, 0), updatedAt=time.time() - 5))
+        self.assertTrue(self.mouse().readTimeKnown)
 
     def chargingCable(self, percent):
         return upower.UPowerMouse(CABLE_PATH, "12ab34cd", "G703 LS", hidpp.BatteryReading(percent, hidpp.CHARGING_CHARGING), updatedAt=1000.0 + percent)
