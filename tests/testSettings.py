@@ -210,6 +210,47 @@ class PlantedSettingsTests(unittest.TestCase):
                         self.assertEqual(f.read(), before)
                     self.assertEqual(os.listdir(os.path.dirname(path)), ["settings.ini"])
 
+    def testNothingUnpicklesAFileOrFolderAnyAccountCanWrite(self):
+        uses = (("saveLevelRange", lambda home: settings.saveLevelRange(home, "day"), False), ("saveSleepCheck", lambda home: settings.saveSleepCheck(home, 30), False), ("loadLevelRange", settings.loadLevelRange, "week"), ("loadSleepCheck", settings.loadSleepCheck, 0))
+        for writable in ("folder", "file"):
+            for name, use, expected in uses:
+                with self.subTest(writable=writable, use=name):
+                    home = os.path.join(self.temp.name, writable + name)
+                    path = settings.settingsPath(home)
+                    os.makedirs(os.path.dirname(path))
+                    writeCanaries(path)
+                    if (writable == "folder"):
+                        os.chmod(os.path.dirname(path), 0o777)
+                    else:
+                        os.chmod(path, 0o666)
+                    with open(path, "rb") as f:
+                        before = f.read()
+                    del CANARY_CALLS[:]
+                    said = io.StringIO()
+                    with contextlib.redirect_stderr(said):
+                        result = use(home)
+                    self.assertEqual(CANARY_CALLS, [])
+                    self.assertEqual(result, expected)
+                    with open(path, "rb") as f:
+                        self.assertEqual(f.read(), before)
+                    self.assertEqual(os.listdir(os.path.dirname(path)), ["settings.ini"])
+                    if (name.startswith("load")):
+                        self.assertIn("Couldn't read the settings in " + path + ": [Errno 13] Permission denied, any account can write the " + writable, said.getvalue())
+
+    def testAFileAndFolderTheGroupCanWriteAreStillRead(self):
+        # a umask of 002 with a private group for each account leaves group write on the user's own files, so only the bit for any account is refused
+        os.makedirs(self.folder)
+        path = settings.settingsPath(self.configHome)
+        with open(path, "w") as f:
+            f.write("[General]\nlevelRange=month\nsleepCheckSeconds=60\n")
+        os.chmod(self.folder, 0o775)
+        os.chmod(path, 0o664)
+        self.assertEqual(self.loadSaying(settings.loadLevelRange), ("month", ""))
+        self.assertEqual(self.loadSaying(settings.loadSleepCheck), (60, ""))
+        self.assertTrue(settings.saveSleepCheck(self.configHome, 30))
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o664)
+        self.assertEqual(self.loadSaying(settings.loadSleepCheck), (30, ""))
+
     def testTheCanaryRunsWhenThisAccountsOwnFileIsRead(self):
         # the check above only means something if the planted pickle really runs once a file passes the checks
         os.makedirs(self.folder)

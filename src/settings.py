@@ -1,6 +1,7 @@
 import errno
 import fcntl
 import os
+import stat
 import tempfile
 import time
 
@@ -55,11 +56,19 @@ def parsedValues(text):
         return choiceValues(QSettings(path, QSettings.Format.IniFormat))
 
 
+def checkPrivate(info, what, shown):
+    # a file this account owns can still be one any account can change, and QSettings would unpickle what they put in it, while group write is left alone since many systems give each account a private group and a umask of 002
+    if (info.st_mode & stat.S_IWOTH):
+        raise PermissionError(errno.EACCES, "Permission denied, any account can write the " + what, shown)
+
+
 def checkedText(folder, name, shown):
     autostart.checkFolder(folder, shown)
+    checkPrivate(os.fstat(folder), "folder", shown)
     text, info = autostart.readFile(folder, name, shown)
     if (info is not None):
         autostart.checkFile(info, os.path.join(shown, name))
+        checkPrivate(info, "file", os.path.join(shown, name))
     return (text, info)
 
 
