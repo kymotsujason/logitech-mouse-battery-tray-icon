@@ -1367,7 +1367,7 @@ class Recorder(QObject):
         if (saving and not self.takeBudget(entry)):
             # a row left out is handled like a failed write, so the next one saved follows a gap and nothing across it counts as whole
             entry.needsGap = True
-            self.store.say("Mouse " + entry.key + " sent more changes than the history saves, so some were left out", FAILED_BUDGET + entry.key)
+            self.store.say("Mouse " + hidpp.escapedText(entry.key) + " sent more changes than the history saves, so some were left out", FAILED_BUDGET + entry.key)
             return
         if (saving):
             try:
@@ -1399,7 +1399,7 @@ class Recorder(QObject):
             entry.revision = self.revisions
             # only a budget back to full counts as over, so a slow flood that keeps nibbling at it can't fill the journal with pairs of lines
             if (entry.budget >= WRITE_BURST - 1):
-                self.store.works(FAILED_BUDGET + entry.key, "Mouse " + entry.key + "'s changes are saved again")
+                self.store.works(FAILED_BUDGET + entry.key, "Mouse " + hidpp.escapedText(entry.key) + "'s changes are saved again")
             self.noteWrite(entry, row)
             self.changed.emit(entry.key)
             return

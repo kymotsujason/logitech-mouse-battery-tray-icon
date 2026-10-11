@@ -606,3 +606,8 @@ def cleanText(text):
     if (text is None):
         return None
     return "".join(character for character in text if not unicodedata.category(character).startswith("C") and unicodedata.category(character) not in ("Zl", "Zp")).strip()
+
+
+def escapedText(text):
+    # a key has to stay the device's own text, so a log line shows each character cleanText would drop as an escape instead, and a backslash doubled so a real escape can't be faked
+    return "".join(character.encode("unicode_escape").decode("ascii") if (character == "\\" or unicodedata.category(character).startswith("C") or unicodedata.category(character) in ("Zl", "Zp")) else character for character in text)

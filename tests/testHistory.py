@@ -1718,11 +1718,11 @@ class RecorderTests(RecorderCase):
         discharges = [row for row in self.sessions() if row[0] == history.DISCHARGE]
         self.assertEqual(discharges[0][3], 100)
 
-    def flapCharging(self, seconds, count):
+    def flapCharging(self, seconds, count, key=KEY):
         # every reading comes in at the same moment, as a device flooding the node would send them
         self.clock.now = START + seconds
         for i in range(count):
-            self.recorder.addReading(KEY, battery(50, (i + 1) % 2), history.ORIGIN_EVENT, at=START + seconds)
+            self.recorder.addReading(key, battery(50, (i + 1) % 2), history.ORIGIN_EVENT, at=START + seconds)
         self.at(seconds + history.WAKE_SET_SECONDS)
 
     def testAFlappingChargingCodeSavesNoMoreThanTheBudget(self):
@@ -1754,6 +1754,16 @@ class RecorderTests(RecorderCase):
         self.event(3600, 49)
         lines = self.errors.getvalue().splitlines()
         self.assertEqual(lines, ["Mouse " + KEY + " sent more changes than the history saves, so some were left out", "Mouse " + KEY + "'s changes are saved again"])
+
+    def testTheBudgetsLinesShowAKeysControlCharactersAsEscapes(self):
+        # a UPower serial is the device's own text, so a newline or an escape in it can't start a line of its own or move the terminal, while the saved key stays as it came
+        key = "dev\nforged\x1b[2j\u2028x\\n"
+        self.flapCharging(0, 100, key=key)
+        self.event(3600, 49, key=key)
+        shown = "dev\\nforged\\x1b[2j\\u2028x\\\\n"
+        self.assertEqual(self.errors.getvalue(), "Mouse " + shown + " sent more changes than the history saves, so some were left out\nMouse " + shown + "'s changes are saved again\n")
+        with self.db() as db:
+            self.assertEqual(db.execute("select key from mice").fetchall(), [(key,)])
 
     def testAFullChargeAtOneStepEveryTwentySecondsKeepsEveryRow(self):
         self.recorder.setWakeSupport(KEY, True)
