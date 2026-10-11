@@ -205,6 +205,7 @@ class UPowerHistory(QObject):
         # a serial can show up after a device's first reading, which ends the history kept under its path
         old = self.paths.get(mouse.path)
         if (old is not None and old[0] != mouse.key):
+            del self.paths[mouse.path]
             self.endKey(old[0], old[1])
         self.paths[mouse.path] = (mouse.key, mouse.pathKey, mouse.asleep)
         if (mouse.asleep):
@@ -224,6 +225,9 @@ class UPowerHistory(QObject):
         return any(path != mouse.path and saved[0] == mouse.key and not saved[2] for path, saved in self.paths.items())
 
     def endKey(self, key, pathKey):
+        # another path that still reads the mouse awake keeps its history going, while one that's asleep sees nothing until it wakes
+        if (any(saved[0] == key and not saved[2] for saved in self.paths.values())):
+            return
         self.asleepKeys.discard(key)
         self.recorder.addMarker(key, history.ORIGIN_GAP, source=history.SOURCE_UPOWER, pathKey=pathKey)
         self.recorder.forget(key, source=history.SOURCE_UPOWER)

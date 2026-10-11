@@ -836,6 +836,29 @@ class UPowerHistoryTests(unittest.TestCase):
             self.marker("9a1b2c3d", history.ORIGIN_ASLEEP),
         ])
 
+    def testRemovingTheAsleepReceiverLeavesTheChargingCablesHistoryAlone(self):
+        recorder = mock.Mock()
+        glue = service.UPowerHistory(recorder, QDBusConnection("unconnected"))
+        glue.watcher.mouseChanged.emit(FakeUPowerMouse(CABLE_PATH, "9a1b2c3d", 70))
+        glue.watcher.mouseChanged.emit(FakeUPowerMouse(RECEIVER_PATH, "9a1b2c3d", 60, asleep=True))
+        glue.watcher.mouseRemoved.emit(RECEIVER_PATH)
+        glue.watcher.mouseChanged.emit(FakeUPowerMouse(CABLE_PATH, "9a1b2c3d", 71))
+        glue.watcher.mouseRemoved.emit(CABLE_PATH)
+        self.assertEqual(recorder.mock_calls, [
+            self.reading("9a1b2c3d", 70),
+            self.reading("9a1b2c3d", 71),
+            self.marker("9a1b2c3d", history.ORIGIN_GAP),
+            mock.call.forget("9a1b2c3d", source=history.SOURCE_UPOWER),
+        ])
+
+    def testAKeyChangeOnOnePathLeavesASiblingsHistoryAlone(self):
+        recorder = mock.Mock()
+        glue = service.UPowerHistory(recorder, QDBusConnection("unconnected"))
+        glue.watcher.mouseChanged.emit(FakeUPowerMouse(CABLE_PATH, "9a1b2c3d", 70))
+        glue.watcher.mouseChanged.emit(FakeUPowerMouse(RECEIVER_PATH, "9a1b2c3d", 60, asleep=True))
+        glue.watcher.mouseChanged.emit(FakeUPowerMouse(RECEIVER_PATH, "5e6f7a8b", 60))
+        self.assertEqual(recorder.mock_calls, [self.reading("9a1b2c3d", 70), self.reading("5e6f7a8b", 60)])
+
 
 class StateFolderTests(unittest.TestCase):
     def testTheFirstAbsoluteFolderIsTheHistorys(self):
