@@ -64,11 +64,12 @@ def plainValues(props):
 
 
 def inputIsMouse(name):
+    # None means the file couldn't be read, which is how an input looks before udevd writes its file
     try:
         with open(os.path.join(UDEV_DATA, "+input:" + name), encoding="utf-8", errors="replace") as f:
             return any(line.rstrip("\n") == UDEV_MOUSE_LINE for line in f)
     except OSError:
-        return False
+        return None
 
 
 def cableHasMouse(nativePath):
@@ -81,22 +82,44 @@ def cableHasMouse(nativePath):
     if (not os.path.isfile(os.path.join(interface, "bInterfaceNumber"))):
         return False
     usbDevice = os.path.dirname(interface)
+    found = False
     for inputPath in glob.glob(os.path.join(glob.escape(usbDevice), "*", "*", "input", "input*")):
-        if (inputIsMouse(os.path.basename(inputPath))):
+        isMouse = inputIsMouse(os.path.basename(inputPath))
+        if (isMouse):
             return True
-    return False
+        if (isMouse is None):
+            found = None
+    return found
 
 
-def mouseFromProperties(path, props):
-    if (not isinstance(props, dict)):
-        return None
+def readableValues(props):
     values = plainValues(props)
     # a property of the wrong type is read as missing, so the rest of the device still reads
     for key in wrongProperties(values):
         del values[key]
+    return values
+
+
+def cableCandidate(props):
+    # a battery typed keyboard can turn out a mouse on its cable once its inputs are all there, so it's read again on each change
+    if (not isinstance(props, dict)):
+        return False
+    values = readableValues(props)
+    return values.get("Type") == TYPE_KEYBOARD and NATIVE_PATH_PATTERN.fullmatch(str(values.get("NativePath", ""))) is not None
+
+
+def mouseFromProperties(path, props, undecided=False):
+    # undecided is what a cable check that couldn't read an input counts as, so a mouse already kept stays through it
+    if (not isinstance(props, dict)):
+        return None
+    values = readableValues(props)
     kind = values.get("Type")
     nativePath = str(values.get("NativePath", ""))
-    if (kind != TYPE_MOUSE and not (kind == TYPE_KEYBOARD and cableHasMouse(nativePath))):
+    if (kind == TYPE_KEYBOARD):
+        cable = cableHasMouse(nativePath)
+        if (not (undecided if cable is None else cable)):
+            return None
+    elif (kind != TYPE_MOUSE):
         return None
     vendor = str(values.get("Vendor", ""))
     if (not nativePath.startswith(NATIVE_PATH_PREFIX) and "logitech" not in vendor.lower()):
@@ -196,6 +219,8 @@ class UPowerWatcher(QObject):
         super().__init__()
         self.bus = bus if bus is not None else QDBusConnection.systemBus()
         self.paths = set()
+        # batteries typed keyboard that the cable check turned away, read again on each change like a kept mouse
+        self.cablePaths = set()
         self.retryPaths = set()
         # the properties each device last sent in a type this version can't read, so each set is printed once
         self.wrongTypes = {}
@@ -244,6 +269,7 @@ class UPowerWatcher(QObject):
         for path in sorted(self.paths):
             self.mouseRemoved.emit(path)
         self.paths.clear()
+        self.cablePaths.clear()
         if (not newOwner):
             return
         self.listDevices()
@@ -322,6 +348,7 @@ class UPowerWatcher(QObject):
                 # a device that's gone has nothing left to recover from
                 self.printedErrors.pop(path, None)
                 self.wrongTypes.pop(path, None)
+                self.cablePaths.discard(path)
                 self.dropPath(path)
             elif (error not in ABSENT_ERRORS):
                 # a call that failed for another reason says nothing about the mouse, so it keeps its last reading until the retry
@@ -339,10 +366,15 @@ class UPowerWatcher(QObject):
         if (not self.retryPaths and not self.enumerateDue):
             self.retryMs = RETRY_MS
         self.reportWrongTypes(path, wrongProperties(plainValues(props)))
-        mouse = mouseFromProperties(path, props)
+        mouse = mouseFromProperties(path, props, undecided=path in self.paths)
         if (mouse is None):
+            if (cableCandidate(props)):
+                self.cablePaths.add(path)
+            else:
+                self.cablePaths.discard(path)
             self.dropPath(path)
             return
+        self.cablePaths.discard(path)
         self.paths.add(path)
         self.mouseChanged.emit(mouse)
 
@@ -375,6 +407,7 @@ class UPowerWatcher(QObject):
         self.wrongTypes.pop(path, None)
         self.refreshing.pop(path, None)
         self.refreshAgain.discard(path)
+        self.cablePaths.discard(path)
         self.dropPath(path)
 
     @pyqtSlot(QDBusMessage)
@@ -390,7 +423,7 @@ class UPowerWatcher(QObject):
         # a device that's failing waits out its backoff, and the retry reads whatever changed meanwhile
         if (path in self.retryPaths):
             return
-        if (path in self.paths):
+        if (path in self.paths or path in self.cablePaths):
             self.refresh(path)
             return
         # UPower can set Type after DeviceAdded, once the mouse's input device shows up

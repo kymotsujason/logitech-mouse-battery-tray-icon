@@ -262,6 +262,83 @@ class CableTests(unittest.TestCase):
         self.addCable()
         self.assertIsNone(upower.mouseFromProperties(PATH, mouseProperties(Type=10, NativePath="hidpp_battery_4")))
 
+    def testAMissingUdevFileLeavesTheCableUndecided(self):
+        self.addCable()
+        os.remove(os.path.join(self.udev, "+input:input51"))
+        self.assertIsNone(upower.cableHasMouse("hidpp_battery_4"))
+        self.assertIsNotNone(upower.mouseFromProperties(PATH, mouseProperties(Type=6, NativePath="hidpp_battery_4"), undecided=True))
+
+    def testACableWithOnlyKeyboardInputsIsDecided(self):
+        self.addCable(mouseFlags=("ID_INPUT_KEYBOARD",))
+        self.assertIs(upower.cableHasMouse("hidpp_battery_4"), False)
+        self.assertIsNone(upower.mouseFromProperties(PATH, mouseProperties(Type=6, NativePath="hidpp_battery_4"), undecided=True))
+
+    def cableWatcher(self, nativePath="hidpp_battery_4"):
+        bus = ScriptedBus(lambda message: message.createReply([mouseProperties(Type=6, NativePath=nativePath)]))
+        watcher = upower.UPowerWatcher(bus)
+        self.addCleanup(watcher.stop)
+        self.changed = []
+        self.removed = []
+        watcher.mouseChanged.connect(self.changed.append)
+        watcher.mouseRemoved.connect(self.removed.append)
+        return bus, watcher
+
+    def readAndSettle(self, watcher):
+        self.assertTrue(waitFor(lambda: not watcher.refreshing))
+        settle()
+
+    def batteryChange(self, watcher):
+        watcher.onPropertiesChanged(FakeMessage(PATH, [upower.DEVICE_INTERFACE, {"Percentage": 50.0, "State": 1}, []]))
+
+    def testACableLeftOutWhileItsUdevFileWasMissingComesBackOnTheNextChange(self):
+        # udevd can write the mouse input's file after UPower lists the battery
+        self.addCable()
+        udevFile = os.path.join(self.udev, "+input:input51")
+        saved = udevFile + ".saved"
+        os.rename(udevFile, saved)
+        bus, watcher = self.cableWatcher()
+        watcher.refresh(PATH)
+        self.readAndSettle(watcher)
+        self.assertEqual((self.changed, watcher.paths), ([], set()))
+        os.rename(saved, udevFile)
+        self.batteryChange(watcher)
+        self.readAndSettle(watcher)
+        self.assertEqual(([mouse.path for mouse in self.changed], watcher.paths, self.removed), ([PATH], {PATH}, []))
+
+    def testAKeptCableKeepsItsMouseThroughAMissingUdevFile(self):
+        self.addCable()
+        bus, watcher = self.cableWatcher()
+        watcher.refresh(PATH)
+        self.readAndSettle(watcher)
+        os.remove(os.path.join(self.udev, "+input:input51"))
+        self.batteryChange(watcher)
+        self.readAndSettle(watcher)
+        self.assertEqual((len(self.changed), self.removed, watcher.paths), (2, [], {PATH}))
+
+    def testAKeptCableWhoseMouseInputIsGoneIsDropped(self):
+        self.addCable()
+        bus, watcher = self.cableWatcher()
+        watcher.refresh(PATH)
+        self.readAndSettle(watcher)
+        os.remove(os.path.join(self.udev, "+input:input51"))
+        shutil.rmtree(os.path.join(self.root, "devices", "usb1", "1-9", "1-9:1.0", "0003:046D:C090.001E", "input", "input51"))
+        self.batteryChange(watcher)
+        self.readAndSettle(watcher)
+        self.assertEqual((len(self.changed), self.removed, watcher.paths), (1, [PATH], set()))
+
+    def testAReceiverKeyboardIsReadOnceForEachChangeUntilItsRemoved(self):
+        self.addReceiver()
+        bus, watcher = self.cableWatcher("hidpp_battery_5")
+        watcher.refresh(PATH)
+        self.readAndSettle(watcher)
+        for i in range(2):
+            self.batteryChange(watcher)
+            self.readAndSettle(watcher)
+        watcher.onDeviceRemoved(FakeMessage("", [PATH]))
+        self.batteryChange(watcher)
+        settle()
+        self.assertEqual((len(bus.calls), self.changed, watcher.paths), (3, [], set()))
+
 
 class ReplyTests(unittest.TestCase):
     def reply(self, *arguments):
@@ -381,6 +458,12 @@ class WatcherOwnerTests(unittest.TestCase):
         self.watcher.onOwnerChanged(upower.SERVICE, ":1.5", "")
         self.assertEqual(sorted(self.removed), sorted([PATH, OTHER_PATH]))
         self.assertEqual((self.watcher.paths, self.watcher.bus.calls), (set(), []))
+
+    def testANewOwnerForgetsTheTurnedAwayCables(self):
+        self.watcher.bus = ScriptedBus(lambda message: message.createReply([[]]))
+        self.watcher.cablePaths.add("/org/freedesktop/UPower/devices/keyboard_hidpp_battery_5")
+        self.watcher.onOwnerChanged(upower.SERVICE, ":1.5", "")
+        self.assertEqual(self.watcher.cablePaths, set())
 
     def testAListingStartedBeforeAnOwnerChangeIsSetAside(self):
         self.watcher.bus = ScriptedBus(lambda message: message.createReply([[OTHER_PATH]]))
