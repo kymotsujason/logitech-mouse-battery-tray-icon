@@ -2,7 +2,7 @@
 
 This file lists the changes in each release of Mouse Battery, newest first.
 
-## 1.2.0, unreleased
+## 1.2.0, 2026-10-11
 
 ### Added
 
