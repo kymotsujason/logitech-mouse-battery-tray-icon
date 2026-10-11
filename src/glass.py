@@ -103,6 +103,11 @@ def easeOut():
     return curve
 
 
+def fadeCurve():
+    # opacity on the strong ease out is mostly there after a frame or two, so a fade reads as a cut, while this one spreads the change over the whole time
+    return QEasingCurve(QEasingCurve.Type.InOutQuad)
+
+
 def paintBackdrop(width, height, pane, color, theme, ratio=1.0):
     image = QImage(max(1, round(width * ratio)), max(1, round(height * ratio)), QImage.Format.Format_ARGB32_Premultiplied)
     image.setDevicePixelRatio(ratio)

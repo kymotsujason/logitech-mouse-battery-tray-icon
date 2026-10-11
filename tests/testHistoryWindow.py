@@ -772,11 +772,13 @@ class WindowTests(WindowCase):
         self.pastOpen(window)
         self.assertFalse(window.isQuiet())
 
-    def testEveryAnimationUsesTheSharedEaseOut(self):
+    def testEveryAnimationButTheCrossfadesUsesTheSharedEaseOut(self):
         window = self.opened(entry())
-        for animation in (window.segments.animation, window.rangeControl.animation, window.glowAnimation, window.paneCrossfade.animation, window.chartCrossfade.animation, window.sidebar.pillAnimation, window.levelChart.morph, window.choiceMenu.animation):
+        for animation in (window.segments.animation, window.rangeControl.animation, window.glowAnimation, window.sidebar.pillAnimation, window.levelChart.morph, window.choiceMenu.animation):
             self.assertEqual(animation.easingCurve().type(), QEasingCurve.Type.BezierSpline)
             self.assertEqual(round(animation.easingCurve().valueForProgress(0.25), 3), 0.775)
+        for animation in (window.paneCrossfade.animation, window.chartCrossfade.animation):
+            self.assertEqual(animation.easingCurve().type(), QEasingCurve.Type.InOutQuad)
 
     def testTheFadesAreOnlyOnWhileTheyRun(self):
         # an opacity effect draws its widget from a cached image, so the chart's fade inside an idle pane fade never showed until the window lost focus
@@ -1086,9 +1088,12 @@ class WindowTests(WindowCase):
     def assertShowsTheOutgoing(self, fade, outgoing, effect, incoming):
         # the picture is the outgoing content itself, and an early frame still shows it over a spot the incoming content leaves clear
         self.assertEqual(fade.picture.toImage(), outgoing)
-        effect.setEnabled(False)
+        # a range switch draws the incoming chart at full strength, so it has no effect to turn off
+        if (effect is not None):
+            effect.setEnabled(False)
         clear = incoming.grab().toImage()
-        effect.setEnabled(True)
+        if (effect is not None):
+            effect.setEnabled(True)
         point = self.inkOnlyIn(outgoing, clear)
         self.assertIsNotNone(point)
         fade.animation.setCurrentTime(fade.animation.duration() // 20)
@@ -1135,6 +1140,11 @@ class WindowTests(WindowCase):
         self.assertEqual(fade.animation.state(), QAbstractAnimation.State.Running)
         self.assertEqual(window.paneFade.opacity(), 0.0)
         self.assertTrue(window.paneFade.isEnabled())
+
+    def drawnAtFullStrength(self, widget):
+        # the window's chartFade can be an effect the chart doesn't carry, so the chart's own effect is the one that counts
+        effect = widget.graphicsEffect()
+        return effect is None or not effect.isEnabled()
 
     def inkOnlyIn(self, image, other):
         # a point the outgoing picture inks and the finished incoming content leaves clear
@@ -1216,10 +1226,10 @@ class WindowTests(WindowCase):
         window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))
         window.motionFactor = 1.0
         window.pickRange("month")
-        self.assertTrue(window.chartFade.isEnabled())
+        self.assertTrue(self.drawnAtFullStrength(window.levelChart))
         window.pick("11111111" if window.selected == "02bc524c" else "02bc524c")
         window.paneCrossfade.animation.setCurrentTime(window.paneCrossfade.animation.duration())
-        self.assertEqual((window.chartFade.isEnabled(), window.paneFade.isEnabled()), (False, False))
+        self.assertEqual((self.drawnAtFullStrength(window.levelChart), window.paneFade.isEnabled()), (True, False))
         self.assertEqual((window.chartCrossfade.isVisible(), window.paneCrossfade.isVisible()), (False, False))
 
     def testAChartSwitchCrossfadesFromAPictureOfTheOldChart(self):
@@ -1331,7 +1341,7 @@ class WindowTests(WindowCase):
         window.pickRange("week")
         self.assertEqual(window.levelChart.rangeName, "week")
         self.assertTrue(window.chartCrossfade.isVisible())
-        self.assertShowsTheOutgoing(window.chartCrossfade, outgoing, window.chartFade, window.levelChart)
+        self.assertShowsTheOutgoing(window.chartCrossfade, outgoing, None, window.levelChart)
 
     def testTheFirstRangeSwitchCrossfadesFromTheWholeBars(self):
         window = self.opened(entry())
@@ -1339,7 +1349,7 @@ class WindowTests(WindowCase):
         outgoing = window.levelChart.grab().toImage()
         window.pickRange("month")
         self.assertEqual(window.levelChart.rangeName, "month")
-        self.assertShowsTheOutgoing(window.chartCrossfade, outgoing, window.chartFade, window.levelChart)
+        self.assertShowsTheOutgoing(window.chartCrossfade, outgoing, None, window.levelChart)
 
     def testClosingFinishesTheCrossfades(self):
         window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))
@@ -1374,6 +1384,8 @@ class WindowTests(WindowCase):
         window.motionFactor = 0.5
         window.pick("11111111")
         self.assertEqual(window.paneCrossfade.animation.duration(), historyWindow.PANE_FADE_MS // 2)
+        # the owner's AnimationDurationFactor of 0.5 halves it, and a 100 ms fade was mostly over in two frames
+        self.assertEqual(window.paneCrossfade.animation.duration(), 150)
 
     def testTheCrossfadesAreHiddenOnOpen(self):
         for rangeName in ("week", "month"):
@@ -1386,14 +1398,13 @@ class WindowTests(WindowCase):
                 window.close()
                 sip.delete(window)
 
-    def testTheOldPictureIsGoneBySixtyPercent(self):
-        self.assertEqual(historyWindow.pictureOpacity(0.0), 1.0)
-        self.assertAlmostEqual(historyWindow.pictureOpacity(0.3), 0.5)
-        self.assertEqual(historyWindow.pictureOpacity(0.6), 0.0)
-        self.assertEqual(historyWindow.pictureOpacity(1.0), 0.0)
+    def testTheOldPictureFadesOutAsTheNewContentFadesIn(self):
+        for progress in (0.0, 0.1, 0.3, 0.5, 0.8, 1.0):
+            self.assertAlmostEqual(historyWindow.pictureOpacity(progress), 1.0 - glass.fadeCurve().valueForProgress(progress))
+        self.assertAlmostEqual(historyWindow.pictureOpacity(0.5), 0.5)
 
-    def testTheOldPictureFadesOnTimeWhileTheNewContentEasesIn(self):
-        # the shared curve passes 0.6 at about a sixth of the time, so the picture fading on it was gone almost at once
+    def testTheOldPictureAndTheNewContentFadeOnTheFadeCurve(self):
+        # the strong ease out passes 0.6 at about a sixth of the time, so a fade on it read as a cut
         window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))
         window.motionFactor = 1.0
         fade = window.paneCrossfade
@@ -1409,8 +1420,8 @@ class WindowTests(WindowCase):
         with mock.patch.object(historyWindow, "QPainter", RecordingPainter):
             fade.grab()
         self.assertEqual(len(opacities), 1)
-        self.assertAlmostEqual(opacities[0], 0.5)
-        self.assertAlmostEqual(window.paneFade.opacity(), glass.easeOut().valueForProgress(0.3))
+        self.assertAlmostEqual(opacities[0], 1.0 - glass.fadeCurve().valueForProgress(0.3), places=3)
+        self.assertAlmostEqual(window.paneFade.opacity(), glass.fadeCurve().valueForProgress(0.3), places=3)
 
     def testTheRangeControlSitsInTheChartBoxsTopRightCorner(self):
         window = self.opened(entry())
@@ -1586,13 +1597,25 @@ class WindowTests(WindowCase):
         self.assertEqual((window.levelChart.rangeName, window.levelChart.emptyText()), ("month", historyWindow.LOADING_TEXT))
         self.assertFalse(window.loadingTimer.isActive())
 
-    def testARangeSwitchCrossfadesFromTheOldBars(self):
+    def testARangeSwitchFadesTheOldBarsOverTheNewOnesGrowing(self):
         window = self.opened(entry())
-        window.motionFactor = 1.0
+        window.motionFactor = 0.5
         window.pickRange("month")
         self.assertTrue(window.chartCrossfade.isVisible())
         self.assertIsNotNone(window.chartCrossfade.picture)
-        self.assertTrue(window.chartFade.isEnabled())
+        # the new bars are the motion, so the chart under the picture is drawn at full strength while they grow
+        self.assertTrue(self.drawnAtFullStrength(window.levelChart))
+        self.assertEqual(window.levelChart.fromRects, [None] * len(window.levelChart.slots))
+        self.assertEqual(window.levelChart.morph.state(), QAbstractAnimation.State.Running)
+        self.assertEqual(window.levelChart.morph.duration(), historyWindow.BAR_MORPH_MS // 2)
+
+    def testARangeSwitchWithMotionOffNeitherFadesNorGrows(self):
+        window = self.opened(entry())
+        window.motionFactor = 0.0
+        window.pickRange("month")
+        self.assertFalse(window.chartCrossfade.isVisible())
+        self.assertIsNone(window.levelChart.fromRects)
+        self.assertEqual(window.levelChart.morphProgress, 1.0)
 
     def testANewHistoryKeepsTheOldBarsWhileTheRangeReloads(self):
         window = self.opened(entry())

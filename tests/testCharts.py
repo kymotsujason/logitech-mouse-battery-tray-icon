@@ -10,7 +10,7 @@ import unittest.mock
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 from PyQt6 import sip
-from PyQt6.QtCore import QAbstractAnimation, QPointF
+from PyQt6.QtCore import QAbstractAnimation, QPointF, QRectF
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QFontMetricsF, QImage
 from PyQt6.QtWidgets import QApplication
 
@@ -115,6 +115,34 @@ class LevelChartTests(ChartCase):
         chart.morph.setCurrentTime(100)
         self.assertEqual(chart.morphProgress, 1.0)
         self.assertEqual(chart.shownRect(3), after)
+
+    def testANewRangeGrowsItsBarsFromTheBottom(self):
+        chart = self.make(charts.LevelChart())
+        chart.resize(700, 238)
+        chart.setSlots(slots(percent=40))
+        chart.show()
+        chart.setSlots(slots(percent=80), rangeName="day", growMs=100)
+        after = chart.barRect(3)
+        self.assertEqual(chart.fromRects, [None] * len(chart.slots))
+        self.assertEqual(chart.morph.duration(), 100)
+        self.assertEqual(chart.shownRect(3), QRectF(after.x(), after.bottom(), after.width(), 0.0))
+        chart.morph.setCurrentTime(50)
+        halfway = chart.shownRect(3)
+        self.assertLess(after.y(), halfway.y())
+        self.assertLess(halfway.y(), after.bottom())
+        chart.morph.setCurrentTime(100)
+        self.assertEqual(chart.shownRect(3), after)
+
+    def testAMessageOrAHiddenChartDoesntGrow(self):
+        chart = self.make(charts.LevelChart())
+        chart.resize(700, 238)
+        chart.setSlots(slots(percent=40), rangeName="day", growMs=100)
+        self.assertIsNone(chart.fromRects)
+        self.assertEqual(chart.morphProgress, 1.0)
+        chart.show()
+        chart.setSlots([], rangeName="day", message="Loading", growMs=100)
+        self.assertIsNone(chart.fromRects)
+        self.assertEqual(chart.morphProgress, 1.0)
 
     def testANewRefreshMidMorphStartsFromWhatIsDrawn(self):
         chart = self.make(charts.LevelChart())

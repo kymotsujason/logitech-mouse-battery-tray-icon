@@ -175,7 +175,7 @@ class LevelChart(Chart):
         p = self.morphProgress
         return QRectF(start.x() + (target.x() - start.x()) * p, start.y() + (target.y() - start.y()) * p, start.width() + (target.width() - start.width()) * p, start.height() + (target.height() - start.height()) * p)
 
-    def setSlots(self, slots, voltage=False, rangeName="week", message=None, rough=False):
+    def setSlots(self, slots, voltage=False, rangeName="week", message=None, rough=False, growMs=0):
         # every state change sets the slots again, so the bar under the pointer keeps its readout until the range changes, a message takes the bars' place, or the bar is gone
         if (rangeName != self.rangeName or message is not None or (self.hover is not None and self.hover >= len(slots))):
             self.hover = None
@@ -185,9 +185,10 @@ class LevelChart(Chart):
             return
         # every slot edge follows the reply's own moment, so once they've moved half a slot each bar would morph towards its neighbor's old height
         shifted = len(slots) > 1 and len(self.slots) > 1 and abs(slots[-1][0] - self.slots[-1][0]) * 2 >= self.slots[-1][0] - self.slots[-2][0]
-        morphs = self.morphMs > 0 and self.isVisible() and rangeName == self.rangeName and message is None and self.message is None and len(slots) == len(self.slots) and slots != self.slots and not shifted
-        # taken before the slots change, so a morph in progress carries on from what's drawn
-        rects = [self.shownRect(index) for index in range(len(self.slots))] if morphs else None
+        grows = growMs > 0 and self.isVisible() and message is None
+        morphs = not grows and self.morphMs > 0 and self.isVisible() and rangeName == self.rangeName and message is None and self.message is None and len(slots) == len(self.slots) and slots != self.slots and not shifted
+        # taken before the slots change, so a morph in progress carries on from what's drawn, while a bar with no start grows from its bottom
+        rects = [None] * len(slots) if grows else [self.shownRect(index) for index in range(len(self.slots))] if morphs else None
         self.morph.stop()
         self.slots = slots
         self.voltage = voltage
@@ -199,9 +200,9 @@ class LevelChart(Chart):
         self.message = message
         self.describe()
         self.fromRects = rects
-        self.morphProgress = 0.0 if morphs else 1.0
-        if (morphs):
-            self.morph.setDuration(self.morphMs)
+        self.morphProgress = 0.0 if (morphs or grows) else 1.0
+        if (morphs or grows):
+            self.morph.setDuration(growMs if grows else self.morphMs)
             self.morph.start()
         self.update()
 

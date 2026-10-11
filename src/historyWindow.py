@@ -51,8 +51,9 @@ CLOCK_BACK_SECONDS = 5 * 60
 RETRY_MS = 30 * 1000
 # KWin answered within 20 ms where it was measured, so the first check comes soon and a slower machine gets one more
 BLUR_CHECK_MS = (25, 100)
-CHART_FADE_MS = 200
-PANE_FADE_MS = 200
+# 150 ms at the owner's AnimationDurationFactor of 0.5, where 100 ms on the strong ease out read as a cut
+CHART_FADE_MS = 300
+PANE_FADE_MS = 300
 # a reply from the service usually comes well inside this, so most range switches never show the word at all
 LOADING_DELAY_MS = 300
 THUMB_SLIDE_MS = 250
@@ -672,7 +673,7 @@ class PopupButton(QWidget):
 
 
 def pictureOpacity(progress):
-    return max(0.0, 1.0 - progress / 0.6)
+    return 1.0 - glass.fadeCurve().valueForProgress(progress)
 
 
 class Crossfade(QWidget):
@@ -681,12 +682,12 @@ class Crossfade(QWidget):
         super().__init__(parent)
         self.owner = window
         self.picture = None
-        # the share of the time gone, which the picture fades on, since the eased progress passes 0.6 at about a sixth of the time and a switch would read as a fade up instead of a handover
+        # the share of the time gone, which the picture fades on
         self.elapsed = 1.0
         self.fade = None
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.animation = QVariantAnimation(self)
-        self.animation.setEasingCurve(glass.easeOut())
+        self.animation.setEasingCurve(glass.fadeCurve())
         self.animation.setStartValue(0.0)
         self.animation.setEndValue(1.0)
         self.animation.valueChanged.connect(self.onStep)
@@ -709,19 +710,21 @@ class Crossfade(QWidget):
         return picture
 
     def start(self, source, durationMs, fade, picture=None):
-        # fade is the QGraphicsOpacityEffect on the incoming content, stepped with the picture, and the picture is taken before a fade still running ends, so a second switch hands over from what's on screen
+        # fade is the QGraphicsOpacityEffect on the incoming content, stepped with the picture, or None when the incoming content stays at full strength, and the picture is taken before a fade still running ends, so a second switch hands over from what's on screen
         if (picture is None and durationMs > 0 and source.isVisible()):
             picture = self.shownPicture(source)
         self.finish()
         self.fade = fade
         if (durationMs <= 0 or not source.isVisible()):
-            fade.setEnabled(False)
+            if (fade is not None):
+                fade.setEnabled(False)
             return
         self.picture = picture
         self.setGeometry(source.geometry())
         self.elapsed = 0.0
-        fade.setOpacity(0.0)
-        fade.setEnabled(True)
+        if (fade is not None):
+            fade.setOpacity(0.0)
+            fade.setEnabled(True)
         self.raise_()
         self.show()
         self.animation.setDuration(durationMs)
@@ -729,11 +732,13 @@ class Crossfade(QWidget):
 
     def onStep(self, value):
         self.elapsed = self.animation.currentTime() / max(1, self.animation.duration())
-        self.fade.setOpacity(value)
+        if (self.fade is not None):
+            self.fade.setOpacity(value)
         self.update()
 
     def done(self):
-        self.fade.setEnabled(False)
+        if (self.fade is not None):
+            self.fade.setEnabled(False)
         self.picture = None
         self.hide()
 
@@ -1546,20 +1551,22 @@ class HistoryWindow(QWidget):
         self.levelChart.morphMs = int(BAR_MORPH_MS * self.motionFactor) if steady else 0
         if (rangeName == "week"):
             # the history reply already holds the week, so the default range costs no call
+            growMs = 0
             if (self.levelChartKey == key and self.levelChart.rangeName != rangeName):
-                self.crossfadeLevelChart()
+                growMs = self.crossfadeLevelChart()
             self.loadingTimer.stop()
-            self.levelChart.setSlots(summary.get("recent") or [], voltage, rangeName, rough=rough)
+            self.levelChart.setSlots(summary.get("recent") or [], voltage, rangeName, rough=rough, growMs=growMs)
             self.levelChartKey = key
             return
         slots = self.levels.get(key, {}).get(rangeName)
         error = self.levelErrors.get((key, rangeName))
         if (slots is not None):
+            growMs = 0
             if (self.loadingTimer.isActive() or (self.levelChartKey == key and self.levelChart.rangeName != rangeName)):
-                self.crossfadeLevelChart()
+                growMs = self.crossfadeLevelChart()
             self.loadingTimer.stop()
             self.loadingShown = None
-            self.levelChart.setSlots(slots, voltage, rangeName, rough=rough)
+            self.levelChart.setSlots(slots, voltage, rangeName, rough=rough, growMs=growMs)
             self.levelChartKey = key
         elif (error in RESTART_LEVEL_ERRORS):
             self.loadingTimer.stop()
@@ -1583,17 +1590,16 @@ class HistoryWindow(QWidget):
     def crossfadeLevelChart(self):
         # a range the user picks fades in even during the quiet after an open, while an answer that lands then swaps the bars at once
         if (not self.levelChart.isVisible() or (self.isQuiet() and not self.pickingRange)):
-            return
+            return 0
         duration = int(CHART_FADE_MS * self.motionFactor)
         picture = self.chartCrossfade.shownPicture(self.levelChart) if duration > 0 else None
-        # a new effect on the chart replaces the old one, so a fade still running ends before that
+        # finishing a fade still running turns its effect off, so the new range is drawn at full strength while its bars grow under the old picture
         self.chartCrossfade.finish()
         self.levelChart.morphMs = 0
-        if (self.levelChart.graphicsEffect() is not self.chartFade):
-            self.chartFade = QGraphicsOpacityEffect(self.levelChart)
-            self.levelChart.setGraphicsEffect(self.chartFade)
-        self.chartCrossfade.start(self.levelChart, duration, self.chartFade, picture)
+        self.chartCrossfade.start(self.levelChart, duration, None, picture)
         self.rangeControl.raise_()
+        # the slot counts differ between ranges, so the new bars grow from the bottom instead of morphing from old ones
+        return int(BAR_MORPH_MS * self.motionFactor) if duration > 0 else 0
 
     def fillForm(self, result):
         values = ("-", "-", "-") if result is None else (str(result.cycles), result.lastCharged or "-", result.chargingSpeed or "-")
