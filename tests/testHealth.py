@@ -202,6 +202,20 @@ class LineTests(unittest.TestCase):
         large = summary(drain={"buckets": readyBuckets((), 0, ()), "largeSteps": True})
         self.assertEqual(self.lines(large)[0], [(health.LEARNING, health.LARGE_STEPS_TEXT)])
 
+    def testAUPowerMouseNotYetSeenSleepingIsToldWhenDrainStarts(self):
+        self.assertEqual(health.UPOWER_NO_SLEEP_TEXT, "Drain is measured once this mouse has been seen falling asleep. Charging speed already can.")
+        upowerValue = summary(wakeSupport=False, source=history.SOURCE_UPOWER)
+        self.assertEqual(self.lines(upowerValue)[0], [(health.LEARNING, health.UPOWER_NO_SLEEP_TEXT)])
+        hidppValue = summary(wakeSupport=False, source=history.SOURCE_HIDPP)
+        self.assertEqual(self.lines(hidppValue)[0], [(health.LEARNING, health.NO_WAKES_TEXT)])
+
+    def testTheUPowerLineHidesTheUseLineLikeTheOtherCapabilityLines(self):
+        monthly = [{"month": "2026-10", "drain": 25.0, "charge": [], "drained": 0, "sessions": 1}]
+        value = summary(wakeSupport=False, source=history.SOURCE_UPOWER, monthly=monthly)
+        self.assertEqual(self.lines(value)[0], [(health.LEARNING, health.UPOWER_NO_SLEEP_TEXT)])
+        rough = hidpp.BatteryReading(None, 0, level="good")
+        self.assertEqual(self.lines(summary(wakeSupport=False, source=history.SOURCE_UPOWER), rough)[0], [(health.LEARNING, health.ROUGH_TEXT)])
+
     def testAMouseWhoseWakesArentVisibleYetIsntStillLearning(self):
         value = summary(wakesVisible=False, drain={"buckets": readyBuckets((80,), 30.0, (30.0, 30.0, 30.0)), "largeSteps": False})
         self.assertEqual(self.lines(value), ([(health.LEARNING, health.WAKES_UNSEEN_TEXT)], health.SYMBOL_CLOCK))

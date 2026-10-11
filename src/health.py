@@ -33,12 +33,13 @@ GOOD_TEXT = "The battery is doing as well as when tracking began."
 ROUGH_TEXT = "This mouse reports only rough levels, so drain and charge speed can't be measured."
 VOLTAGE_TEXT = "This mouse reports only its voltage, so drain and charge speed can't be measured."
 NO_WAKES_TEXT = "This mouse doesn't say when it wakes, so drain can't be measured. Charging speed still can."
+UPOWER_NO_SLEEP_TEXT = "Drain is measured once this mouse has been seen falling asleep. Charging speed already can."
 LARGE_STEPS_TEXT = "This mouse reports its level in large steps, so drain can't be measured."
 WAKES_UNSEEN_TEXT = "This mouse's wakes aren't visible yet, so drain isn't being measured."
 FIRST_FIGURES_TEXT = "Still learning. The first figures come after a few charges."
 WEAR_STARTS_TEXT = "Still learning. The wear check starts after a few more charges."
 WEAR_DEPTH_TEXT = "Still learning. The wear check needs charges that run the battery down to about 55%."
-CAPABILITY_TEXTS = (ROUGH_TEXT, VOLTAGE_TEXT, NO_WAKES_TEXT, LARGE_STEPS_TEXT, WAKES_UNSEEN_TEXT)
+CAPABILITY_TEXTS = (ROUGH_TEXT, VOLTAGE_TEXT, NO_WAKES_TEXT, UPOWER_NO_SLEEP_TEXT, LARGE_STEPS_TEXT, WAKES_UNSEEN_TEXT)
 USE_FRESH_DAYS = 7
 READY_SESSIONS = history.BASELINE_SESSIONS + history.WINDOW_SESSIONS + history.WINDOWS - 1
 
@@ -132,6 +133,9 @@ def drainMessage(summary, reading, hasUse):
     # a lookup that hasn't answered leaves wakeSupport at its saved or default value, which nobody has confirmed, and a summary from a service older than the field says nothing either way
     wakesVisible = summary.get("wakesVisible", True)
     if (wakesVisible and not summary.get("wakeSupport")):
+        # a UPower mouse gets wake support once the service sees its link drop for a sleep, so it isn't the mouse's fault yet
+        if (summary.get("source") == history.SOURCE_UPOWER):
+            return Line(LEARNING, UPOWER_NO_SLEEP_TEXT)
         return Line(LEARNING, NO_WAKES_TEXT)
     if (summary["drain"].get("largeSteps")):
         return Line(LEARNING, LARGE_STEPS_TEXT)
