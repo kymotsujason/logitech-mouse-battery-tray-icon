@@ -148,8 +148,8 @@ wiredMice() {
 }
 
 plainText() {
-    # a device chooses its own name strings, so the lines shown on screen keep only printable ASCII and newlines,
-    # and anything else, such as a control or multibyte character, shows as a question mark, while the report file keeps
+    # a device chooses its own name strings, so the lines shown on screen keep only printable ASCII and newlines, and
+    # every other byte shows as a question mark (so a multibyte character shows as several), while the report file keeps
     # the raw values
     LC_ALL=C tr -c '\012\040-\176' '?'
 }
