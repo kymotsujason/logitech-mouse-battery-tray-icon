@@ -13,6 +13,7 @@ sleepLimit=$((12 * 60))
 work=$(mktemp -d /tmp/mouseReport.XXXXXX)
 pids=()
 finished=0
+keepWork=0
 
 if [ -t 1 ]; then
     bold=$(tput bold 2>/dev/null)
@@ -37,7 +38,9 @@ stopWatchers() {
 cleanup() {
     stopWatchers
     { stty echo < /dev/tty; } 2>/dev/null
-    rm -rf "$work"
+    if [ "$keepWork" = 0 ]; then
+        rm -rf "$work"
+    fi
     if [ "$finished" = 0 ]; then
         printf "\n\nStopped before the end, so no report was saved.\n"
     fi
@@ -685,6 +688,8 @@ fi
 if [ $? != 0 ]; then
     echo
     echo "Couldn't save the report at $report."
+    echo "Your readings are still saved in $work, so copy that folder before you restart or turn off the computer."
+    keepWork=1
     finished=1
     exit 1
 fi
