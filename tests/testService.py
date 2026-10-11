@@ -804,6 +804,38 @@ class UPowerHistoryTests(unittest.TestCase):
         glue.watcher.mouseChanged.emit(FakeUPowerMouse(RECEIVER_PATH, "9a1b2c3d", 71))
         self.assertEqual(recorder.mock_calls, [self.reading("9a1b2c3d", 70), self.reading("9a1b2c3d", 71)])
 
+    def testTheCableGoingAsleepNextToAnAsleepReceiverIsASleep(self):
+        recorder = mock.Mock()
+        glue = service.UPowerHistory(recorder, QDBusConnection("unconnected"))
+        glue.watcher.mouseChanged.emit(FakeUPowerMouse(CABLE_PATH, "9a1b2c3d", 79))
+        glue.watcher.mouseChanged.emit(FakeUPowerMouse(RECEIVER_PATH, "9a1b2c3d", 60, asleep=True))
+        glue.watcher.mouseChanged.emit(FakeUPowerMouse(CABLE_PATH, "9a1b2c3d", 79, asleep=True))
+        # the receiver's repeat belongs to the sleep already marked
+        glue.watcher.mouseChanged.emit(FakeUPowerMouse(RECEIVER_PATH, "9a1b2c3d", 60, asleep=True))
+        glue.watcher.mouseChanged.emit(FakeUPowerMouse(CABLE_PATH, "9a1b2c3d", 78))
+        self.assertEqual(recorder.mock_calls, [
+            self.reading("9a1b2c3d", 79),
+            self.marker("9a1b2c3d", history.ORIGIN_ASLEEP),
+            self.marker("9a1b2c3d", history.ORIGIN_WAKE),
+            mock.call.setWakeSupport("9a1b2c3d", True, pathKey=False, source=history.SOURCE_UPOWER),
+            self.reading("9a1b2c3d", 78),
+        ])
+
+    def testAnotherPathWakingEndsASleepMarkedOnTheFirst(self):
+        recorder = mock.Mock()
+        glue = service.UPowerHistory(recorder, QDBusConnection("unconnected"))
+        glue.watcher.mouseChanged.emit(FakeUPowerMouse(CABLE_PATH, "9a1b2c3d", 79, asleep=True))
+        glue.watcher.mouseChanged.emit(FakeUPowerMouse(RECEIVER_PATH, "9a1b2c3d", 60, asleep=True))
+        glue.watcher.mouseChanged.emit(FakeUPowerMouse(RECEIVER_PATH, "9a1b2c3d", 78))
+        glue.watcher.mouseChanged.emit(FakeUPowerMouse(RECEIVER_PATH, "9a1b2c3d", 60, asleep=True))
+        self.assertEqual(recorder.mock_calls, [
+            self.marker("9a1b2c3d", history.ORIGIN_ASLEEP),
+            self.marker("9a1b2c3d", history.ORIGIN_WAKE),
+            mock.call.setWakeSupport("9a1b2c3d", True, pathKey=False, source=history.SOURCE_UPOWER),
+            self.reading("9a1b2c3d", 78),
+            self.marker("9a1b2c3d", history.ORIGIN_ASLEEP),
+        ])
+
 
 class StateFolderTests(unittest.TestCase):
     def testTheFirstAbsoluteFolderIsTheHistorys(self):
