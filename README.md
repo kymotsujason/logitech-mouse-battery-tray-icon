@@ -76,7 +76,15 @@ GNOME's top bar has no system tray of its own, so Mouse Battery needs the AppInd
 
 `logitech-mouse-battery check` prints each mouse it can read with its battery, and says what to do when it can't read one. `logitech-mouse-battery --version` prints the installed version.
 
-If a mouse doesn't show up or reads wrong, `bash diagnostics/mouseReport.sh` saves a report to attach to an issue. It walks you through using the mouse wirelessly, letting it sleep if you like, and plugging in its cable, and it only reads, without needing root.
+If a mouse doesn't show up or reads wrong, [diagnostics/mouseReport.sh](diagnostics/mouseReport.sh) saves a report to attach to an issue. It walks you through using the mouse wirelessly, letting it sleep if you like, and plugging in its cable, and it only reads, without needing root. To get it and run it without a copy of this repository:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/kymotsujason/logitech-mouse-battery-tray-icon/main/diagnostics/mouseReport.sh
+```
+
+```bash
+bash mouseReport.sh
+```
 
 ## Privacy and permissions
 

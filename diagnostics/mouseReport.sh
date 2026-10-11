@@ -4,7 +4,7 @@
 # root, and changes nothing. The first argument picks another report path
 set -u
 
-report="${1:-$HOME/mouse-report-$(date +%Y%m%d-%H%M%S).txt}"
+report=$(realpath -m "${1:-$HOME/mouse-report-$(date +%Y%m%d-%H%M%S).txt}")
 appDir=/usr/share/logitech-mouse-battery
 psRoot="${PS_ROOT:-/sys/class/power_supply}"
 usbRoot="${USB_ROOT:-/sys/bus/usb/devices}"
@@ -23,17 +23,20 @@ else
 fi
 
 stopWatchers() {
-    # each watcher is a pipeline inside a subshell, so its children go first or they'd outlive the script
+    # each watcher is a pipeline inside a subshell, so its children go first or they'd outlive the script, and the wait
+    # takes the notice bash prints for a killed job off the screen
     local pid
     for pid in ${pids[@]+"${pids[@]}"}; do
         pkill -P "$pid" 2>/dev/null
         kill "$pid" 2>/dev/null
+        wait "$pid" 2>/dev/null
     done
     pids=()
 }
 
 cleanup() {
     stopWatchers
+    stty echo < /dev/tty 2>/dev/null
     rm -rf "$work"
     if [ "$finished" = 0 ]; then
         printf "\n\nStopped before the end, so no report was saved.\n"
@@ -54,6 +57,27 @@ title() {
 
 clearLine() {
     printf "\r\033[K"
+}
+
+drainInput() {
+    # an Enter pressed while nothing was asking would otherwise answer the next question unseen
+    while read -r -s -t 0.05 < /dev/tty; do
+        :
+    done
+}
+
+quiet() {
+    stty -echo < /dev/tty 2>/dev/null
+}
+
+loud() {
+    stty echo < /dev/tty 2>/dev/null
+}
+
+ask() {
+    # $1 is the prompt, and the answer lands in $answer
+    drainInput
+    read -r -p "$1" answer < /dev/tty
 }
 
 readValue() {
@@ -86,19 +110,54 @@ hasMouseInput() {
     return 1
 }
 
-wiredMice() {
-    # a Logitech USB device that isn't a receiver and has an input udev calls a mouse is a mouse on its cable
+isReceiver() {
+    local driver
+    case "$(readValue "$1/product")" in
+        *[Rr]eceiver*) return 0 ;;
+    esac
+    for driver in "$1"/*/*/driver; do
+        [ -e "$driver" ] || continue
+        if [ "$(basename "$(readlink -f "$driver")")" = "logitech-djreceiver" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+logitechDevices() {
     local dev
     for dev in "$usbRoot"/*; do
         [ -f "$dev/idVendor" ] || continue
         [ "$(readValue "$dev/idVendor")" = "046d" ] || continue
-        case "$(readValue "$dev/product")" in
-            *[Rr]eceiver*) continue ;;
-        esac
-        if hasMouseInput "$dev" 4; then
+        echo "$dev"
+    done
+}
+
+wiredMice() {
+    # a Logitech USB device that isn't a receiver and has an input udev calls a mouse is a mouse on its cable
+    local dev
+    for dev in $(logitechDevices); do
+        if ! isReceiver "$dev" && hasMouseInput "$dev" 4; then
             basename "$dev"
         fi
     done
+}
+
+wiredNames() {
+    local name
+    for name in $(wiredMice); do
+        readValue "$usbRoot/$name/product"
+    done | paste -sd "," | sed 's/,/, /g'
+}
+
+receiverPresent() {
+    local dev
+    for dev in $(logitechDevices); do
+        if isReceiver "$dev"; then
+            return 0
+        fi
+    done
+    return 1
 }
 
 noWiredMouse() {
@@ -120,17 +179,35 @@ isAsleep() {
     [ "$(readValue "$1/status")" = "Unknown" ] || [ "$(readValue "$1/online")" = "0" ]
 }
 
+batteryIsMouse() {
+    # on a receiver the mouse's own HID device holds its input, while on a cable the battery sits on an interface of its
+    # own and the mouse input is on another interface of the same USB device
+    local hid usb
+    if hasMouseInput "$1/device" 2; then
+        return 0
+    fi
+    hid=$(readlink -f "$1/device")
+    [ -f "$(dirname "$hid")/bInterfaceNumber" ] || return 1
+    usb=$(dirname "$(dirname "$hid")")
+    hasMouseInput "$usb" 4
+}
+
 mouseBatteries() {
-    # a receiver can hold a keyboard's battery too, and the one whose own device has a mouse input is the mouse
+    # a receiver can hold a keyboard's battery too, and only a battery with a mouse input beside it is the mouse's,
+    # unless udev's database can't be read at all
     local supply mice="" every=""
     for supply in "$psRoot"/hidpp_battery_*; do
         [ -e "$supply" ] || continue
         every="$every $(basename "$supply")"
-        if hasMouseInput "$supply/device" 2; then
+        if batteryIsMouse "$supply"; then
             mice="$mice $(basename "$supply")"
         fi
     done
-    echo ${mice:-$every}
+    if [ -r "$udevData" ]; then
+        echo $mice
+    else
+        echo $every
+    fi
 }
 
 watchedAwake() {
@@ -176,7 +253,8 @@ sleptAwake() {
 waitFor() {
     # waits until the check in $2 passes, for up to $1 seconds or with no limit when $1 is 0, showing $3 on one line and
     # $4 once after a minute, and gives 0 when the check passed, 1 when the time ran out, and 2 when Enter skipped it
-    local limit=$1 check=$2 label=$3 hint=${4:-} waited=0 left
+    local limit=$1 check=$2 label=$3 hint=${4:-} waited=0 left status
+    drainInput
     while true; do
         if "$check"; then
             clearLine
@@ -196,7 +274,10 @@ waitFor() {
         else
             printf "\r  %s " "$label"
         fi
-        if read -r -s -t 1 < /dev/tty; then
+        read -r -s -t 1 < /dev/tty
+        status=$?
+        # a status above 128 is the second running out, while 0 is Enter and anything else is a terminal that's gone
+        if [ "$status" -le 128 ]; then
             clearLine
             return 2
         fi
@@ -207,11 +288,13 @@ waitFor() {
 pause() {
     # shows $2 for $1 seconds, so a device that just showed up has time to settle
     local left=$1
+    quiet
     while [ "$left" -gt 0 ]; do
         printf "\r  %s %d " "$2" "$left"
         sleep 1
         left=$((left - 1))
     done
+    loud
     clearLine
 }
 
@@ -257,7 +340,7 @@ listInputs() {
 
 runCheck() {
     if command -v logitech-mouse-battery >/dev/null; then
-        timeout 40 logitech-mouse-battery check 2>&1
+        timeout --foreground 40 logitech-mouse-battery check 2>&1
     else
         echo "Mouse Battery isn't installed."
     fi
@@ -341,18 +424,20 @@ checkLines() {
 }
 
 keyboardNotes() {
-    local path native type
+    local path native type model
     for path in $(upower -e 2>/dev/null); do
         native=$(upower -i "$path" 2>/dev/null | sed -n 's/^ *native-path: *//p')
         case "$native" in
             hidpp_battery*) ;;
             *) continue ;;
         esac
+        batteryIsMouse "$psRoot/$native" || continue
+        model=$(readValue "$psRoot/$native/model_name")
         type=$(upowerType "$path")
         case "$type" in
             mouse*) ;;
-            keyboard*) echo "UPower calls the mouse's battery a keyboard, which Mouse Battery 1.2.0 and older don't show." ;;
-            *) echo "UPower calls the mouse's battery $type, which Mouse Battery doesn't show." ;;
+            keyboard*) echo "UPower calls the battery of the $model a keyboard, which Mouse Battery 1.2.0 and older don't show." ;;
+            *) echo "UPower calls the battery of the $model $type, which Mouse Battery doesn't show." ;;
         esac
     done
 }
@@ -372,11 +457,14 @@ summaryLines() {
 }
 
 readStep() {
-    # $1 is the step's key, and it saves the check output, the snapshot, and the summary lines for that step
+    # $1 is the step's key, $2 its title, and $3 a note for the summary, and it saves the check output, the snapshot, and
+    # the summary lines for that step
+    quiet
     printf "  Reading the mouse..."
     runCheck > "$work/$1-check"
     snapshot "$2" "$work/$1-check" > "$work/$1-snapshot"
-    { checkLines "$work/$1-check"; keyboardNotes; } > "$work/$1-summary"
+    { if [ -n "${3:-}" ]; then echo "$3"; fi; checkLines "$work/$1-check"; keyboardNotes; } > "$work/$1-summary"
+    loud
     clearLine
     echo "  Done."
 }
@@ -437,11 +525,11 @@ sleepStep() {
     local result started slept woke
     watched=$(mouseBatteries)
     if [ -z "$watched" ]; then
-        echo "  Skipped. This check only works for mice whose battery Linux reads, and Mouse Battery reads this one itself."
-        sleepSummary="Skipped, since Mouse Battery reads this mouse itself."
+        echo "  Skipped. Linux shows no battery for this mouse, so there's no sleep to watch."
+        sleepSummary="Skipped, since Linux shows no battery for this mouse."
         return
     fi
-    read -r -p "  Also check what happens when the mouse sleeps? It takes up to 12 minutes. (y/N) " answer < /dev/tty
+    ask "  Also check what happens when the mouse sleeps? It takes up to 12 minutes. (y/N) "
     case "$answer" in
         [Yy]*) ;;
         *)
@@ -452,22 +540,27 @@ sleepStep() {
     esac
     if ! watchedAwake; then
         echo
-        waitFor 0 watchedAwake "Move the mouse a little to wake it first..." "Still waiting. Press Enter to go on anyway."
+        waitFor 0 watchedAwake "Move the mouse a little to wake it first..." "Still waiting. Press Enter to skip the sleep check."
+        if ! watchedAwake; then
+            echo "  Skipped, since the mouse didn't wake."
+            sleepSummary="Skipped, since the mouse was already asleep and didn't wake."
+            return
+        fi
     fi
 
     : > "$work/sleep-events"
-    watchSysfs >> "$work/sleep-events" &
+    watchSysfs >> "$work/sleep-events" 2>/dev/null &
     pids+=($!)
-    watchUevents >> "$work/sleep-events" &
+    watchUevents >> "$work/sleep-events" 2>/dev/null &
     pids+=($!)
-    watchKernel >> "$work/sleep-events" &
+    watchKernel >> "$work/sleep-events" 2>/dev/null &
     pids+=($!)
     upower --monitor-detail > "$work/sleep-upower" 2>&1 &
     pids+=($!)
 
     echo
-    echo "  Put the mouse down and don't touch it. Keep the computer on, it's fine if the screen turns off."
-    echo "  Press Enter to stop early."
+    echo "  Put the mouse down and don't touch it. Keep the computer on. It's fine if the screen turns off."
+    echo "  You'll hear a beep when it falls asleep. Press Enter to stop early."
     echo
     mark "mouse left alone"
     started=$SECONDS
@@ -479,7 +572,7 @@ sleepStep() {
         printf "\a"
         echo "  The mouse fell asleep after $(duration "$slept"). Move it now to wake it."
         started=$SECONDS
-        waitFor 60 sleptAwake "Waiting for the mouse to wake..."
+        waitFor 0 sleptAwake "Waiting for the mouse to wake..." "Still waiting. Move the mouse, or press Enter to go on."
         result=$?
         woke=$((SECONDS - started))
         if [ "$result" = 0 ]; then
@@ -487,11 +580,11 @@ sleepStep() {
             # the kernel sends a few battery updates as the mouse comes back, and the log should hold them
             pause 5 "Finishing the sleep check"
             mark "done"
-            sleepSummary="The mouse fell asleep after $(duration "$slept") and woke $(duration "$woke") after it moved."
+            sleepSummary="The mouse fell asleep after $(duration "$slept") and woke $(duration "$woke") after the beep."
         else
             mark "done"
-            echo "  It didn't come back within a minute. That's fine, carrying on."
-            sleepSummary="The mouse fell asleep after $(duration "$slept") but didn't come back within a minute of moving it."
+            echo "  Going on without seeing it wake."
+            sleepSummary="The mouse fell asleep after $(duration "$slept"), and its wake wasn't seen."
         fi
     elif [ "$result" = 1 ]; then
         mark "done"
@@ -507,26 +600,37 @@ sleepStep() {
 
 wiredBefore=""
 sleepSummary="Skipped."
-: > "$report" 2>/dev/null || { echo "Can't write $report."; finished=1; exit 1; }
-rm -f "$report"
+if [ ! -d "$(dirname "$report")" ] || [ ! -w "$(dirname "$report")" ]; then
+    echo "Can't save a report in $(dirname "$report")."
+    finished=1
+    exit 1
+fi
 
 title "Mouse Report"
 echo "This checks how your computer sees your Logitech mouse, wirelessly and on its cable,"
-echo "and saves what it finds to a file you can send back. It only looks, it doesn't change"
+echo "and saves what it finds to a file you can send back. It only looks. It doesn't change"
 echo "anything, and nothing is sent anywhere."
 echo
 echo "It takes about a minute, or up to 12 more if you also check sleep."
 echo
-read -r -p "Press Enter to start, or Ctrl+C to stop at any time. " < /dev/tty
+ask "Press Enter to start, or Ctrl+C to stop at any time. "
 
 title "Step 1 of 3: Wireless"
 if ! noWiredMouse; then
-    echo "  It looks like the mouse is plugged in with its cable. Unplug the cable to use it wirelessly."
+    echo "  It looks like your $(wiredNames) is plugged in with its cable. Unplug the cable to use it wirelessly."
     waitFor 0 noWiredMouse "Waiting for the cable to come out..." "Still waiting. Press Enter if the mouse is already wireless."
 fi
+if ! receiverPresent; then
+    echo "  Plug the mouse's receiver into the computer. If it fits into the end of the cable, plug it in there."
+    waitFor 0 receiverPresent "Waiting for the receiver..." "Still waiting. Press Enter if the mouse has no receiver."
+fi
 echo "  Move the mouse a little so it's awake."
-pause 3 "Reading in"
-readStep wireless "wireless"
+pause 5 "Reading in"
+wirelessNote=""
+if ! noWiredMouse; then
+    wirelessNote="The cable was still plugged in, so this may be a wired reading."
+fi
+readStep wireless "wireless" "$wirelessNote"
 wiredBefore=$(wiredMice | tr '\n' ' ')
 
 title "Step 2 of 3: Sleep (optional)"
@@ -534,14 +638,16 @@ sleepStep
 
 title "Step 3 of 3: Cable"
 echo "  Plug the mouse in with its USB cable."
+echo "  If your mouse has no cable, or its cable only charges it, press Enter to skip."
 waitFor 0 cableConnected "Waiting for the cable..." "Still waiting. Press Enter if it's already plugged in."
 if [ $? = 0 ]; then
     echo "  Cable connected."
+    pause 5 "Letting it settle"
+    readStep cable "cable"
 else
     echo "  Going on without seeing the cable."
+    readStep cable "cable" "The cable wasn't seen, so this may be a wireless reading."
 fi
-pause 5 "Letting it settle"
-readStep cable "cable"
 
 {
     echo "Mouse report"
@@ -572,5 +678,5 @@ finished=1
 title "All done"
 sed -n '/^==== summary ====/,/^====/p' "$report" | sed '1d;$d' | sed '/^$/d'
 echo
-echo "Please send this file:"
+echo "Attach this file to your GitHub issue, or send it to whoever asked you to run this:"
 echo "$bold$report$plain"
