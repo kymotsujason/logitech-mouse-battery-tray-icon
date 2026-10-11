@@ -7,8 +7,8 @@ maintainer: kymotsujason <kymotsujason@gmail.com>
 description: |
   Logitech mouse battery in the system tray
   Mouse Battery shows the battery level of every connected Logitech mouse
-  in the system tray and warns at 10% and 5%. It isn't affiliated with
-  Logitech.
+  in the system tray, warns at 10% and 5%, and keeps a battery history in
+  a window. It isn't affiliated with Logitech.
 homepage: https://github.com/kymotsujason/logitech-mouse-battery-tray-icon
 license: GPL-3.0-or-later
 contents:

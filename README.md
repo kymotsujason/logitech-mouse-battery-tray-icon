@@ -1,6 +1,6 @@
 # Mouse Battery
 
-Mouse Battery shows the battery level of your Logitech mouse in the system tray on Linux. It warns you once at 10% and once more at 5% on each charge, and once more after a login or an update while the mouse is still low. When you have more than one mouse, it follows the one you're using.
+Mouse Battery shows the battery level of your Logitech mouse in the system tray on Linux, with a battery window that tracks how the battery holds up over time. It warns you at 10% and again at 5%, and when you have more than one mouse, it follows the one you're using.
 
 ![The tray icon and its menu](docs/screenshot.png)
 
@@ -26,152 +26,74 @@ On Arch, download the `.pkg.tar.zst` from the same page and install it with pacm
 sudo pacman -U ./logitech-mouse-battery-1.2.0-1-any.pkg.tar.zst
 ```
 
-An AUR package is ready and will follow once the AUR opens account registrations again.
+An AUR package will follow once the AUR opens account registrations again.
 
-Each file in a release after 1.1.0 comes with a signed record of the commit and the workflow run that built it. With the GitHub CLI, this checks a download before you install it:
+The package gives Mouse Battery's service access to your receiver or cable, including one that's already plugged in, so there's no need to replug anything.
+
+Each file in a release after 1.1.0 comes with a signed record of how it was built. To check a download with the GitHub CLI before you install it:
 
 ```bash
 gh attestation verify ./logitech-mouse-battery-1.2.0-1-any.pkg.tar.zst --repo kymotsujason/logitech-mouse-battery-tray-icon
 ```
 
-The package also installs a udev rule that hands your receiver or cable to Mouse Battery's service, and applies it to devices that are already plugged in, so there's no need to replug anything.
-
 ## Use
 
-Installing doesn't start Mouse Battery, so open "Mouse Battery" from your app menu once and its icon shows up in the tray. From the next login on it starts by itself, for every account on the computer, whether or not that account ever opened it, until that account turns off "Open at Login" in its menu.
+Installing doesn't start Mouse Battery, so open "Mouse Battery" from your app menu once. After that it starts by itself at login, for every account on the computer, until that account turns off "Open at Login" in the menu.
 
-The icon is a mouse that fills up with the battery level and shows the percentage, which it leaves out when the tray draws the icon smaller than 22 pixels. The fill turns green while the mouse is on its charger, charging or full, red at 20% or below, and gray while the mouse sleeps. The menu lists every mouse it found, for example:
+The icon is a mouse that fills up with the battery level and shows the percentage when the tray is large enough. The fill turns green while the mouse is on its charger, red at 20% or below, and gray while the mouse sleeps. The menu lists every mouse it found, for example:
 
 - `PRO X3 SUPERSTRIKE, 69%`
 - `PRO X3 SUPERSTRIKE, charging, 82%`
 - `PRO X3 SUPERSTRIKE, asleep, 69% at 21:40`
 
-Opening the menu takes a fresh reading from each mouse it reads over HID++, while UPower keeps the others current on its own. A mouse that has gone to sleep shows its last reading and the time it was taken. Every 5 minutes the tray also reads each mouse that hasn't shown it reports its battery on its own. A mouse that sends a reading with each step down, as the PRO X3 SUPERSTRIKE does, isn't read on a timer, so its icon stays in color while it sleeps until you open the menu or the window, unless you turn on "Check whether mice are asleep" in the window. If the battery service can't be reached, the menu says so under the mice, and the ones it reads keep their last reading and its time until it's back. Opening the menu tries to start the service again if it has stopped, and the tray tries on its own once an hour.
+Opening the menu refreshes each mouse's reading, and a mouse that's asleep shows its last reading and when it was taken. A mouse that reports its own battery, as the PRO X3 SUPERSTRIKE does, isn't read on a timer. So its icon stays in color while it sleeps, unless you turn on "Check whether mice are asleep" in the battery window.
 
-## Battery health
+## Battery window
 
-Click the tray icon, or pick "Battery Health" from its menu, to open the battery window. It shows the mouse with its level and status, a health box of up to three lines, a level chart over the last 24 hours, 7 days, or 30 days with each bar colored by state (blue otherwise, green with a dot for a charge, red at 20% or below), how many hours a charge lasts and how fast it charges month by month, the number of charge cycles, when the mouse was last charged and on which charger, and its charging speed. Once it has measured enough of the current discharge or charge, the status also says about how many hours are left, or about how long until the mouse is full. The chart keeps the range you picked the next time it opens. With two or more mice a sidebar lists them all. The window's title bar icon follows the shown mouse, white in use, green on its charger, red at 20% or below, gray while asleep, and an empty outline before its first reading.
+Click the tray icon, or pick "Battery Health" from its menu, to open the battery window. It shows the mouse's level and status, a health box, and a level chart for the last 24 hours, 7 days, or 30 days. It also shows how many hours a charge lasts and how fast it charges month by month, and when the mouse was last charged. With two or more mice, a sidebar lists them all.
 
 ![The battery window with the level chart](docs/window-level.png)
 
 ![The battery window with the hours per charge chart](docs/window-hours.png)
 
-The battery service saves each mouse's charges and discharges in `/var/lib/logitech-mouse-battery/history.sqlite3`, about 20 MB after 10 years of heavy use. It saves a row when a reading changes, and also when a mouse wakes, falls asleep, or drops out of sight, and it asks a mouse for no more readings than before, except that a mouse whose wireless status lookup didn't answer gets the lookup asked again with its next read, battery event, or reconnect until it answers, and after three failed tries a read or battery event asks at most once a minute, with that wait doubling up to an hour. The health line compares how fast the battery drains and charges now with how it did when tracking began, stretch by stretch of the battery, and says when a charge lasts 15% less or charging takes 15% longer than it used to. That needs about 42 discharges first, and about 42 charges on the same charger for the charging check. Until then the health box says it's still learning, and once three stretches of the battery each have a measured discharge, it says how many more charges the wear check needs. Once a month has five measured drops, the box also says how many hours of use a full charge gives, and the hours per charge chart shows that month. A drop in a discharge's first 30 minutes doesn't count, since a mouse's reading tends to fall fast for a few minutes after it comes off the charger. After a charge, the box says how long charging from 20% to 80% takes on that charger. A charging error the mouse reported in the last week, or a last charge that ran slow for most of its readings, comes first. A mouse that doesn't give a serial number gets no history. One that reports only a rough level or a voltage gets no drain or charge figures, and one that doesn't say when it wakes, or that reports its level in steps of 5% or more, gets no drain figures, although its charging can still be measured.
+The health box compares how the battery drains and charges now with how it did when tracking began, and warns when a charge lasts 15% less or charging takes 15% longer. That takes about 42 charges, so until then it says it's still learning. Once it has measured enough, it also says how many hours a full charge gives and how long charging from 20% to 80% takes. Some mice report too little for these figures, and the box says so when that happens.
 
-Any account on the computer can read the history through the service, as it can read the battery levels, and the history shows when each mouse was in use.
+"Check whether mice are asleep" reads every mouse every 30 seconds, every minute, or every 5 minutes, so the icon turns gray soon after a mouse sleeps. It's off unless you turn it on.
 
-"Check whether mice are asleep" in the window reads every mouse every 30 seconds, every minute, or every 5 minutes, so the icon turns gray soon after a mouse sleeps. It's off unless you turn it on, and it's saved in `~/.config/logitech-mouse-battery/settings.ini`.
-
-## GNOME
-
-GNOME's top bar has no system tray of its own, so Mouse Battery needs the AppIndicator extension there. When it can't find a tray, it sends a notification with a button that turns the extension on, or opens the extension's page when it isn't installed. The same notification has a "Don't Open at Login" button, since without a tray there's no menu to turn that off from.
-
-## Check from a terminal
-
-`logitech-mouse-battery check` prints each mouse it can read with its battery, and says what to do when it can't read one. When it can't reach the battery service it names the error, and when the service turns its read down it says the readings may be old. `logitech-mouse-battery --version` prints the installed version.
+The battery service saves the history in `/var/lib/logitech-mouse-battery/history.sqlite3`, about 20 MB after 10 years of heavy use. Any account on the computer can read it, as it can read the battery levels, and it shows when each mouse was in use. A mouse that doesn't give a serial number gets no history.
 
 ## Which mice work
 
-Mouse Battery reads mice in two ways:
+Mice the Linux kernel already drives, such as most Unifying, LIGHTSPEED, and Bluetooth mice, are read through UPower. Mice on a receiver or cable the kernel leaves alone are read over Logitech's HID++ protocol by Mouse Battery's service. That covers the PRO X3 SUPERSTRIKE's receiver (`046d:c54f`) and USB cable (`046d:c0a9`), and on kernels that don't drive them, receivers such as the LIGHTSPEED `046d:c547` and the Logi Bolt `046d:c548`.
 
-- Mice the Linux kernel already drives, such as most Unifying, LIGHTSPEED, and Bluetooth mice, are read through UPower.
-- Mice on a receiver or cable the kernel leaves alone are read over Logitech's HID++ protocol by a small system service, which is the only program this package lets open the receiver or cable. That covers the PRO X3 SUPERSTRIKE's receiver (`046d:c54f`) and USB cable (`046d:c0a9`), and on kernels that don't drive them, receivers such as the LIGHTSPEED `046d:c547` and the Logi Bolt `046d:c548`.
+It has been tested with the PRO X3 SUPERSTRIKE on its receiver and its cable, and by one tester with a PRO X Wireless on a `046d:c547` receiver and an MX Master 3S on a Logi Bolt receiver.
 
-It has been tested with the PRO X3 SUPERSTRIKE on its receiver and on its cable, and by one tester with a PRO X Wireless on a `046d:c547` receiver and an MX Master 3S on a Logi Bolt receiver (see "Not tested" below).
+## GNOME
 
-## What the udev rule allows
+GNOME's top bar has no system tray of its own, so Mouse Battery needs the AppIndicator extension there. When it can't find a tray, it sends a notification with a button that turns the extension on, or opens its page when it isn't installed.
 
-The rule hands the HID++ interface of any Logitech USB device that the kernel leaves to its generic HID driver, such as a receiver or a mouse on its cable, to the `logitech-mouse-battery` group, when that interface's report descriptor passes the app's own check. The check rejects any interface with a keyboard, keypad, or mouse collection and any receiver interface that carries a paired keyboard's keystrokes. Only Mouse Battery's service runs in that group, as its own system user in a systemd sandbox, and it offers nothing but battery readings and each mouse's saved history on the system bus. Any local user may read those, which include each mouse's name, its unit id, and when it last woke and was read, and any local user may ask for a new read. The service reads the mice at most once a second, with either a full read or a silent read (a read of only the mice that don't report on their own), and each account gets five reads at once and then one every 30 seconds, after which a read is turned down with an error. Reading a mouse's saved history has its own budget of the same size, and reading the levels for the chart gets ten at once and then one every 5 seconds. Nothing this package installs lets a program you run open the receiver or cable, or send it HID++ commands.
+## Check from a terminal
 
-Another package's udev rule can still give your account access of its own, as Solaar's does for every Logitech receiver. A current Solaar keeps that access when Mouse Battery is installed. However, the older Solaar that Debian 12 and Ubuntu 24.04 ship loses it until the receiver is plugged in again or the computer restarts.
+`logitech-mouse-battery check` prints each mouse it can read with its battery, and says what to do when it can't read one. `logitech-mouse-battery --version` prints the installed version.
 
-One limit stays after an upgrade from 1.0.x. A program that already had a receiver or cable open when the upgrade was installed keeps that open handle until it closes it, since Linux checks access when a file is opened. Closing that program, replugging the receiver or cable, or restarting the computer closes the handle.
+## Privacy and permissions
+
+Mouse Battery's service is the only program this package lets open your receiver or cable, and it runs as its own system user in a sandbox. It offers only battery readings and each mouse's saved history, which any account on the computer can read. [docs/security.md](docs/security.md) has the details.
 
 ## Uninstall
 
-Remove the package the way you installed it, with Discover, GNOME Software, `sudo apt remove logitech-mouse-battery`, `sudo dnf remove logitech-mouse-battery`, or `sudo pacman -R logitech-mouse-battery`. The running app notices and quits within a few seconds.
+Remove the package the way you installed it, with Discover, GNOME Software, `sudo apt remove logitech-mouse-battery`, `sudo dnf remove logitech-mouse-battery`, or `sudo pacman -R logitech-mouse-battery`. The running app quits within a few seconds.
 
-Removing the package leaves the battery history in `/var/lib/logitech-mouse-battery`, since systemd makes that folder and no package owns it, so delete it with `sudo rm -r /var/lib/logitech-mouse-battery` if you don't want it kept. Each account can also be left with `~/.config/logitech-mouse-battery/settings.ini`, written when you change the sleep check or the chart range, and `~/.config/autostart/logitech-mouse-battery.desktop`, written only when you turn off "Open at Login", and neither does anything once the app is gone. The service's group keeps its access to a plugged in receiver or cable until you replug it or restart, and the `logitech-mouse-battery` system user stays, as package managers leave system users in place.
-
-## Not tested
-
-These haven't been tested yet:
-
-- The GNOME, GNOME Classic, GNOME Flashback, XFCE, Cinnamon, MATE, Budgie, and LXQt desktops
-- Mice other than the PRO X3 SUPERSTRIKE, the PRO X Wireless, and the MX Master 3S
-- Any Logitech mouse through UPower
-- Bluetooth mice
-- Light app themes on panels that stay dark outside Plasma and GNOME
-- Double click installs in Ubuntu's App Center and GNOME Software
-- An Open at Login override that another tool wrote with GNOME's `X-GNOME-Autostart-enabled` key
-- The `.deb` and `.rpm` on a real Debian, Ubuntu, or Fedora desktop, including the rule applying without a replug (only clean containers have run them, plus the `.deb` on GitHub's Ubuntu runner with a fake receiver)
-- The service on a booted Debian, Fedora, or Arch system before release, since only GitHub's Ubuntu runner and clean containers run it automatically
+The battery history stays in `/var/lib/logitech-mouse-battery`, so delete it with `sudo rm -r /var/lib/logitech-mouse-battery` if you don't want it. Each account can also be left with `~/.config/logitech-mouse-battery/settings.ini` and `~/.config/autostart/logitech-mouse-battery.desktop`, which do nothing once the app is gone.
 
 ## Known limits
 
-These are known and left as they are for now:
+- A mouse that reports a rough level or a voltage instead of a percentage gets an estimated level, shown without a number.
+- A mouse on a receiver the kernel leaves alone keeps showing as awake after it's turned off, until the app next reads it.
+- For a mouse read through UPower, the battery window can show an older list of charges for up to 2 hours in rare cases.
+- When the clock is set while the battery service is stopped, readings it saved with the wrong time keep that time.
 
-- A mouse that reports its battery without a percentage gets an estimate instead. A level such as "low" or "critical" counts as the warning it matches, and a voltage goes through the same curve the Linux kernel uses, which the kernel notes won't fit every battery. The icon fills to that estimate without a number, the warning says the battery is low without a percent, and the menu line shows what the mouse reported, such as a level name.
-- A mouse on a receiver the kernel leaves alone keeps showing as awake with its last reading after it's turned off, until the app next reads it (when you open the menu or the window, every 5 minutes for a mouse that doesn't report on its own, or as often as "Check whether mice are asleep" says), since the receivers tested so far don't announce a mouse turning off.
-- For a mouse read through UPower, the battery window can show an older list of charges for a while in two rare cases, when it's first opened within a couple of seconds of the mouse starting or stopping charging, or right after the history couldn't save for a moment. It catches up at the mouse's next change, or within 2 hours. The level and status at the top of the window stay current.
-- The read budgets in "What the udev rule allows" are kept per account, with no limit across accounts, so someone with many local accounts could keep the service busy. That slows it down but doesn't change the saved history.
-- Mouse Battery shows and saves the battery level UPower reports, the same as the desktop's own battery applet does. On a computer shared by several people, another local account that can talk to BlueZ may be able to change what UPower reports for a paired Bluetooth mouse, and that value would show in the tray and be saved in the history.
-- When the clock is set while the battery service is stopped, such as an upgrade restarting it right as the clock is corrected after boot, readings it saved with the wrong time keep that time, so the chart can show a few readings hours ahead until the clock catches up. A clock set while the service runs is handled.
-
-## Code layout
-
-The app is the flat set of modules in `src/`, which the packages install side by side in `/usr/share/logitech-mouse-battery/`:
-
-- `tray.py` starts the app and owns the tray icon, its menu and tooltip, Open at Login, and About.
-- `service.py` is the battery service, the only part that opens receivers and cables. It serves their readings and the saved history on the system bus, and it runs its own UPower watcher so the history covers the mice UPower reads too.
-- `receivers.py` finds, opens, and reads the receivers and cables in the service, with a worker thread for each HID++ node.
-- `serviceState.py` is the state the service sends and the tray reads.
-- `serviceClient.py` follows the service from the tray, sends it read requests, and asks it for the history and chart levels the window shows.
-- `clearAccess.py` closes the access 1.0.x gave plugged in receivers and cables, when the package is installed.
-- `exceptionHooks.py` prints an exception in a slot or a thread instead of ending the app or the service.
-- `trayHost.py` waits for a system tray and sends a notice when none shows up.
-- `installWatch.py` quits the app when it's uninstalled and restarts it into a new version after an update.
-- `mice.py` keeps the tray's list of mice, merging HID++ and UPower readings by mouse, with the status and the timed read.
-- `history.py` saves each mouse's readings, charges, discharges, and steps in the service, and puts together the history the window shows.
-- `health.py` turns a history into the window's health line and figures.
-- `historyWindow.py` is the battery window, with `glass.py` for its colors and glass panels and `charts.py` for its charts.
-- `settings.py` saves the window's sleep check setting and chart range.
-- `hidpp.py` speaks Logitech's HID++ protocol over hidraw.
-- `hidDescriptor.py` checks a HID report descriptor, for discovery and for the udev rule.
-- `isHidpp.py` is the check the udev rule runs.
-- `upower.py` reads the mice the kernel drives through UPower, for the tray and the window and for the service's history.
-- `lowBattery.py` decides when a mouse gets a low battery warning.
-- `notify.py` sends desktop notifications.
-- `dbusCalls.py` makes the tray's D-Bus calls to the desktop and to UPower with a timeout, answering through a callback so a slow peer never holds it still. It also makes the blocking calls, each with a timeout, for the terminal check (to the battery service and UPower) and for the notice a second tray sends before it quits, and it unwraps the values in a reply. `serviceClient.py` makes the tray's own state and read calls to the battery service with its own callbacks and timeout, while its history and chart level calls go through `dbusCalls.py`.
-- `panelColor.py` works out the color the icon is drawn in from the desktop's theme, and reads the desktop portal's color scheme and reduced motion settings, which the window follows too.
-- `icon.py` draws the tray icon and the mouse picture in the battery window, and picks the window's title bar icon.
-- `autostart.py` turns Open at Login on and off.
-- `check.py` is the terminal check.
-- `version.py` holds the version.
-
-`packaging/` holds the launcher, the desktop entries, the udev rule, the service's systemd, D-Bus, and sysusers files, the install scripts, the package configs, and the build scripts. `tests/` holds the unit tests, with the fake devices and D-Bus services in `tests/fakes/`, the checks that run the real tray on private buses in `tests/live/`, the container checks in `tests/containers/`, and the checks that run the packaged service on a booted runner in `tests/booted/`.
-
-## Build from source
-
-The app is plain Python and needs Python 3.11 or later with PyQt6 on Qt 6.4 or later. The tests run with:
-
-```bash
-python3 -m unittest discover -s tests -t .
-```
-
-`packaging/build.sh` builds the `.deb` and `.rpm` into `dist/` with nfpm's Docker image. `packaging/tarball.sh` builds the release tarball from the last commit, and `packaging/buildArch.sh` builds the Arch package from it. `tests/containers/testPackages.sh` installs each package in a clean container, checks it, and removes it again.
-
-To install from a clone instead of a release, build the package for your distro with Docker running, then install the file it leaves in `dist/`. On Arch that's:
-
-```bash
-packaging/tarball.sh
-packaging/buildArch.sh
-sudo pacman -U dist/logitech-mouse-battery-1.2.0-1-any.pkg.tar.zst
-```
-
-On Debian, Ubuntu, or Fedora, run `packaging/build.sh` and install `dist/logitech-mouse-battery_1.2.0_all.deb` with `sudo apt install` or `dist/logitech-mouse-battery-1.2.0-1.noarch.rpm` with `sudo dnf install`, giving the path with a leading `./`.
-
-To release a new version, run `python3 packaging/bumpVersion.py <VERSION>`, where `<VERSION>` is the new version number. It updates every file that carries the version, and the tests fail if any of them disagree. Then commit and push to `main`, and the release workflow builds, tests, and publishes `v<VERSION>` with the packages attached, since that version has no release yet. A push that keeps the version publishes nothing.
+Only KDE Plasma and the three mice above have been tested so far. [docs/development.md](docs/development.md) lists what hasn't been tested, and how to build Mouse Battery from source.
 
 ## License
 
