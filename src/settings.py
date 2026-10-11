@@ -1,11 +1,8 @@
 import errno
 import fcntl
 import os
-import stat
-import tempfile
+import re
 import time
-
-from PyQt6.QtCore import QSettings
 
 import autostart
 from exceptionHooks import printLine
@@ -15,7 +12,6 @@ SLEEP_CHECK_CHOICES = (0, 30, 60, 300)
 LEVEL_RANGE_KEY = "levelRange"
 LEVEL_RANGE_CHOICES = ("day", "week", "month", "halfYear", "year", "all")
 LEVEL_RANGE_DEFAULT = "week"
-COPY_PREFIX = "logitech-mouse-battery-"
 # anyone who can open the settings folder can hold its lock, so a save waits this long and then gives up
 LOCK_WAIT_SECONDS = 2.0
 
@@ -25,7 +21,7 @@ def settingsPath(configHome):
 
 
 def sleepChoice(value):
-    # INI values read back as text, so the choice is turned back into a number, and anything else is no choice
+    # a choice handed in as text is turned into a number, and anything else is no choice
     if (type(value) is not int):
         try:
             value = int(value)
@@ -34,41 +30,38 @@ def sleepChoice(value):
     return value if value in SLEEP_CHECK_CHOICES else None
 
 
-def choiceValues(qtSettings):
-    # a list, a byte array, or any other type QSettings unpacks is no choice, so it reads as None, while a packed integer is a number of seconds as 1.1.1 read it
+def choiceValues(text):
+    # PyQt unpickles a Python value it finds while QSettings reads a file, so the file is read here by hand, and only a plain or quoted choice in the General group counts, while any other form, such as @Variant(...), is no choice
     values = {}
-    for key in (SLEEP_CHECK_KEY, LEVEL_RANGE_KEY):
-        if (qtSettings.contains(key)):
-            value = qtSettings.value(key)
-            if (key == SLEEP_CHECK_KEY and type(value) is int):
-                values[key] = value
-            else:
-                values[key] = value if isinstance(value, str) else None
+    group = None
+    if (text.startswith("\ufeff")):
+        text = text[1:]
+    for line in re.split("\r\n|\r|\n", text):
+        line = line.strip(" \t")
+        if (line == "" or line[0] in ";#"):
+            continue
+        if (line[0] == "["):
+            group = line[1:-1] if line.endswith("]") else None
+            continue
+        key, equals, value = line.partition("=")
+        if (group != "General" or equals == ""):
+            continue
+        key = key.strip(" \t")
+        value = value.strip(" \t")
+        if (len(value) >= 2 and value[0] == "\"" and value[-1] == "\""):
+            value = value[1:-1]
+        if (key == LEVEL_RANGE_KEY):
+            values[key] = value if value in LEVEL_RANGE_CHOICES else None
+        elif (key == SLEEP_CHECK_KEY):
+            values[key] = int(value) if value in [str(seconds) for seconds in SLEEP_CHECK_CHOICES] else None
     return values
-
-
-def parsedValues(text):
-    # PyQt unpickles a Python value in the file while QSettings reads it, so only text from a folder and file that passed the checks gets here, and QSettings only ever opens a copy in a fresh folder only this account can open, since it follows a link at the path it's given
-    with tempfile.TemporaryDirectory(prefix=COPY_PREFIX, ignore_cleanup_errors=True) as work:
-        path = os.path.join(work, "read.ini")
-        with open(path, "xb") as f:
-            f.write(text.encode("utf-8", "surrogateescape"))
-        return choiceValues(QSettings(path, QSettings.Format.IniFormat))
-
-
-def checkPrivate(info, what, shown):
-    # a file this account owns can still be one any account can change, and QSettings would unpickle what they put in it, while group write is left alone since many systems give each account a private group and a umask of 002
-    if (info.st_mode & stat.S_IWOTH):
-        raise PermissionError(errno.EACCES, "Permission denied, any account can write the " + what, shown)
 
 
 def checkedText(folder, name, shown):
     autostart.checkFolder(folder, shown)
-    checkPrivate(os.fstat(folder), "folder", shown)
     text, info = autostart.readFile(folder, name, shown)
     if (info is not None):
         autostart.checkFile(info, os.path.join(shown, name))
-        checkPrivate(info, "file", os.path.join(shown, name))
     return (text, info)
 
 
@@ -92,12 +85,7 @@ def readValues(configHome):
         return {}
     if (text is None):
         return {}
-    # a value QSettings can't decode, such as a broken pickle, raises SystemError or whatever else PyQt meets, and the tray still has to start
-    try:
-        return parsedValues(text)
-    except Exception as error:
-        printLine("Couldn't read the settings in " + path + ": " + str(error))
-        return {}
+    return choiceValues(text)
 
 
 def fileText(values):
@@ -140,10 +128,7 @@ def saveValue(configHome, key, value):
         autostart.checkFolder(folder, shown)
         lock = lockFolder(folder, shown)
         text, info = checkedText(folder, name, shown)
-        try:
-            values = {} if text is None else parsedValues(text)
-        except Exception:
-            return False
+        values = {} if text is None else choiceValues(text)
         values[key] = value
         autostart.writeText(folder, name, shown, info, fileText(values))
     except (OSError, ValueError):

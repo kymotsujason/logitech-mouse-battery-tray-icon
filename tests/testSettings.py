@@ -210,53 +210,59 @@ class PlantedSettingsTests(unittest.TestCase):
                         self.assertEqual(f.read(), before)
                     self.assertEqual(os.listdir(os.path.dirname(path)), ["settings.ini"])
 
-    def testNothingUnpicklesAFileOrFolderAnyAccountCanWrite(self):
-        uses = (("saveLevelRange", lambda home: settings.saveLevelRange(home, "day"), False), ("saveSleepCheck", lambda home: settings.saveSleepCheck(home, 30), False), ("loadLevelRange", settings.loadLevelRange, "week"), ("loadSleepCheck", settings.loadSleepCheck, 0))
-        for writable in ("folder", "file"):
-            for name, use, expected in uses:
-                with self.subTest(writable=writable, use=name):
-                    home = os.path.join(self.temp.name, writable + name)
+    def testNothingUnpicklesThisAccountsOwnFileWhoeverCanWriteIt(self):
+        # a group the account shares, or any account at all, can put a pickle in a file this account owns, so the pickle is read as text and never run
+        uses = (("saveLevelRange", lambda home: settings.saveLevelRange(home, "day"), True, "[General]\nlevelRange=day\n"), ("saveSleepCheck", lambda home: settings.saveSleepCheck(home, 30), True, "[General]\nsleepCheckSeconds=30\n"), ("loadLevelRange", settings.loadLevelRange, "week", None), ("loadSleepCheck", settings.loadSleepCheck, 0, None))
+        for mode in (0o600, 0o664, 0o666):
+            for name, use, expected, written in uses:
+                with self.subTest(mode=oct(mode), use=name):
+                    home = os.path.join(self.temp.name, oct(mode) + name)
                     path = settings.settingsPath(home)
                     os.makedirs(os.path.dirname(path))
                     writeCanaries(path)
-                    if (writable == "folder"):
-                        os.chmod(os.path.dirname(path), 0o777)
-                    else:
-                        os.chmod(path, 0o666)
+                    os.chmod(path, mode)
                     with open(path, "rb") as f:
                         before = f.read()
+                    self.assertIn(b"recordCanary", before)
                     del CANARY_CALLS[:]
                     said = io.StringIO()
                     with contextlib.redirect_stderr(said):
                         result = use(home)
                     self.assertEqual(CANARY_CALLS, [])
-                    self.assertEqual(result, expected)
+                    self.assertEqual((result, said.getvalue()), (expected, ""))
                     with open(path, "rb") as f:
-                        self.assertEqual(f.read(), before)
+                        self.assertEqual(f.read(), before if written is None else written.encode())
                     self.assertEqual(os.listdir(os.path.dirname(path)), ["settings.ini"])
-                    if (name.startswith("load")):
-                        self.assertIn("Couldn't read the settings in " + path + ": [Errno 13] Permission denied, any account can write the " + writable, said.getvalue())
 
-    def testAFileAndFolderTheGroupCanWriteAreStillRead(self):
-        # a umask of 002 with a private group for each account leaves group write on the user's own files, so only the bit for any account is refused
-        os.makedirs(self.folder)
-        path = settings.settingsPath(self.configHome)
-        with open(path, "w") as f:
-            f.write("[General]\nlevelRange=month\nsleepCheckSeconds=60\n")
-        os.chmod(self.folder, 0o775)
-        os.chmod(path, 0o664)
-        self.assertEqual(self.loadSaying(settings.loadLevelRange), ("month", ""))
-        self.assertEqual(self.loadSaying(settings.loadSleepCheck), (60, ""))
-        self.assertTrue(settings.saveSleepCheck(self.configHome, 30))
-        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o664)
-        self.assertEqual(self.loadSaying(settings.loadSleepCheck), (30, ""))
+    def testAFileAndFolderOtherAccountsCanWriteAreStillRead(self):
+        # a umask of 002 leaves group write on the user's own files, and a vfat or CIFS home reports 0777 for everything, so neither turns the user's settings away
+        for folderMode, fileMode in ((0o775, 0o664), (0o777, 0o666)):
+            with self.subTest(folder=oct(folderMode), file=oct(fileMode)):
+                if (os.path.isdir(self.folder)):
+                    shutil.rmtree(self.folder)
+                os.makedirs(self.folder)
+                path = settings.settingsPath(self.configHome)
+                with open(path, "w") as f:
+                    f.write("[General]\nlevelRange=month\nsleepCheckSeconds=60\n")
+                os.chmod(self.folder, folderMode)
+                os.chmod(path, fileMode)
+                self.assertEqual(self.loadSaying(settings.loadLevelRange), ("month", ""))
+                self.assertEqual(self.loadSaying(settings.loadSleepCheck), (60, ""))
+                self.assertTrue(settings.saveSleepCheck(self.configHome, 30))
+                self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), fileMode)
+                self.assertEqual(self.loadSaying(settings.loadSleepCheck), (30, ""))
 
-    def testTheCanaryRunsWhenThisAccountsOwnFileIsRead(self):
-        # the check above only means something if the planted pickle really runs once a file passes the checks
+    def testTheCanaryRunsWhenQSettingsReadsTheFile(self):
+        # the checks above only mean something if the planted pickle really runs once QSettings reads the file
         os.makedirs(self.folder)
         writeCanaries(settings.settingsPath(self.configHome))
+        # QSettings keeps the files it has read in a cache by their path, so a copy is what gets read
+        copy = os.path.join(self.temp.name, "copy.ini")
+        shutil.copyfile(settings.settingsPath(self.configHome), copy)
         del CANARY_CALLS[:]
-        self.assertEqual(settings.loadLevelRange(self.configHome), "week")
+        reader = QSettings(copy, QSettings.Format.IniFormat)
+        reader.value(settings.LEVEL_RANGE_KEY)
+        del reader
         self.assertIn("ran", CANARY_CALLS)
 
     def testALinkThisAccountMadeIsFollowed(self):
@@ -278,10 +284,9 @@ class PlantedSettingsTests(unittest.TestCase):
 
 
 
-MISSING = object()
 # every value goes in under both keys this app reads, written by the real QSettings
 QT_VALUES = ["month", "60", " month ", "month ", "mo\"nth", "mo\\nth", "mo\nnth", "\t\r\x07\x08\x0b\x0c", "a,b", "a, b", "a;b", "a=b", "@month", "@@x", "@Invalid()", "", "caf\u00e9", "first\u2028second", "\x01\x7f", "x\u00a0y", ";x", "[x]", "#x", " ", "\\x41", "\U0001F600", 60, ["a", "b"], ["month"], QByteArray(b"60"), QPoint(1, 2), None, QColor("red")]
-# forms a hand or another writer leaves, each read by the real QSettings too
+# forms a hand or another writer leaves
 HAND_FORMS = [
     "[General]\nlevelRange=\"month\"\nsleepCheckSeconds=\"60\"\n",
     "[General]\nlevelRange=\"mo\"nth\nsleepCheckSeconds=6\"0\"\n",
@@ -328,10 +333,20 @@ HAND_FORMS = [
     "[General]\n\ufeff\ufefflevelRange=month\n[\ufeffGeneral]\nsleepCheckSeconds=60\n",
     "[General]\nsleepCheckSeconds=@Variant(\\0\\0\\0\\x2\\0\\0\\0<)\nlevelRange=@Variant(\\0\\0\\0\\x2\\0\\0\\0<)\n",
 ]
+# the forms that hold a plain or quoted choice in the General group, while every other form reads as no choice
+CHOICE_FORMS = {
+    "[General]\nlevelRange=\"month\"\nsleepCheckSeconds=\"60\"\n": ("month", 60),
+    "[General]\n;levelRange=day\nlevelRange=month\n": ("month", 0),
+    "[General]\n \t levelRange \t = \t month \t \n": ("month", 0),
+    "[General]\nlevelRange=day\nlevelRange=month\n": ("month", 0),
+    "[Other]\n[General]\nlevelRange=month\n": ("month", 0),
+    "[General]\r\nlevelRange=month\r\nsleepCheckSeconds=60\r\n": ("month", 60),
+    "[General]\rlevelRange=month\rsleepCheckSeconds=60\r": ("month", 60),
+}
 
 
-class QSettingsFormTests(unittest.TestCase):
-    # QSettings reads every file on a private copy, so each form loads as QSettings itself reads it
+class HandReaderFormTests(unittest.TestCase):
+    # the file is read by hand instead of through QSettings, so an odd form reads as no choice and runs nothing
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -373,8 +388,7 @@ class QSettingsFormTests(unittest.TestCase):
         del reader
         return found
 
-    def appChoices(self, found):
-        # what the app made of QSettings' answer while it read through QSettings
+    def qtChoices(self, found):
         level = found.get(settings.LEVEL_RANGE_KEY, settings.LEVEL_RANGE_DEFAULT)
         level = level if isinstance(level, str) and level in settings.LEVEL_RANGE_CHOICES else settings.LEVEL_RANGE_DEFAULT
         seconds = found.get(settings.SLEEP_CHECK_KEY, 0)
@@ -384,95 +398,63 @@ class QSettingsFormTests(unittest.TestCase):
             seconds = 0
         return (level, seconds if seconds in settings.SLEEP_CHECK_CHOICES else 0)
 
-    def assertReadsAsQSettings(self, home, exact=True):
-        found = self.qtRead(home)
-        values = settings.readValues(home)
-        for key in (settings.LEVEL_RANGE_KEY, settings.SLEEP_CHECK_KEY):
-            theirs = found.get(key, MISSING)
-            ours = values.get(key, MISSING)
-            if (theirs is MISSING):
-                self.assertIs(ours, MISSING, key)
-            elif (isinstance(theirs, str) and exact):
-                self.assertEqual(ours, theirs, key)
-            elif (key == settings.SLEEP_CHECK_KEY and type(theirs) is int):
-                # a packed integer is a number of seconds, as 1.1.1 read it through int()
-                self.assertEqual(ours, theirs, key)
-            elif (not isinstance(theirs, str)):
-                # a list, a byte array, an invalid value, or another type is no choice, so it reads as nothing
-                self.assertIsNone(ours, key)
-        self.assertEqual((settings.loadLevelRange(home), settings.loadSleepCheck(home)), self.appChoices(found))
+    def loaded(self, home):
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            choices = (settings.loadLevelRange(home), settings.loadSleepCheck(home))
+        self.assertEqual(said.getvalue(), "")
+        return choices
 
-    def testEveryValueQSettingsWritesReadsTheSame(self):
+    def assertNoChoiceQSettingsWouldntFind(self, home):
+        # the hand reader turns away forms QSettings reads, but it never finds a choice QSettings wouldn't
+        theirs = self.qtChoices(self.qtRead(home))
+        for ours, qt, default in zip(self.loaded(home), theirs, (settings.LEVEL_RANGE_DEFAULT, 0)):
+            self.assertIn(ours, (default, qt))
+
+    def testNoValueQSettingsWritesReadsAsAnotherChoice(self):
         for value in QT_VALUES:
             with self.subTest(value=repr(value)):
-                home = self.qtWrite({settings.LEVEL_RANGE_KEY: value, settings.SLEEP_CHECK_KEY: value})
-                self.assertReadsAsQSettings(home)
+                self.assertNoChoiceQSettingsWouldntFind(self.qtWrite({settings.LEVEL_RANGE_KEY: value, settings.SLEEP_CHECK_KEY: value}))
 
-    def testHandWrittenFormsReadAsQSettingsReadsThem(self):
+    def testChoicesQSettingsWroteAsTextLoad(self):
+        self.assertEqual(self.loaded(self.qtWrite({settings.LEVEL_RANGE_KEY: "month", settings.SLEEP_CHECK_KEY: "60"})), ("month", 60))
+
+    def testHandWrittenFormsReadOnlyAsPlainOrQuotedChoices(self):
+        self.assertLessEqual(set(CHOICE_FORMS), set(HAND_FORMS))
         for text in HAND_FORMS:
             with self.subTest(text=text):
-                self.assertReadsAsQSettings(self.handWrite(text))
+                home = self.handWrite(text)
+                level, seconds = CHOICE_FORMS.get(text, (settings.LEVEL_RANGE_DEFAULT, 0))
+                self.assertEqual(self.loaded(home), (level, seconds))
+                self.assertNoChoiceQSettingsWouldntFind(home)
+                self.assertTrue(settings.saveSleepCheck(home, 30))
+                self.assertEqual(self.fileText(home), "[General]\n" + ("" if text not in CHOICE_FORMS else "levelRange=" + level + "\n") + "sleepCheckSeconds=30\n")
 
     def testQuotedChoicesLoad(self):
         home = self.handWrite("[General]\nlevelRange=\"month\"\nsleepCheckSeconds=\"60\"\n")
-        self.assertEqual((settings.loadLevelRange(home), settings.loadSleepCheck(home)), ("month", 60))
+        self.assertEqual(self.loaded(home), ("month", 60))
 
-    def testAPackedIntegerSleepCheckLoads(self):
-        home = self.handWrite("[General]\nsleepCheckSeconds=@Variant(\\0\\0\\0\\x2\\0\\0\\0<)\nlevelRange=@Variant(\\0\\0\\0\\x2\\0\\0\\0<)\n")
-        self.assertEqual((settings.loadSleepCheck(home), settings.loadLevelRange(home)), (60, "week"))
+    def testAPackedValueIsNoChoice(self):
+        # no release wrote anything but plain text, so a packed value, even one QSettings reads as a choice, is one to turn away
+        home = self.handWrite("[General]\nsleepCheckSeconds=@Variant(\\0\\0\\0\\x2\\0\\0\\0<)\nlevelRange=@Variant(\\0\\0\\0\\n\\0\\0\\0\\n\\0m\\0o\\0n\\0t\\0h)\n")
+        self.assertEqual(self.qtChoices(self.qtRead(home)), ("month", 60))
+        self.assertEqual(self.loaded(home), ("week", 0))
         self.assertTrue(settings.saveLevelRange(home, "day"))
-        self.assertEqual((settings.loadSleepCheck(home), settings.loadLevelRange(home)), (60, "day"))
-        other = self.handWrite("[General]\nsleepCheckSeconds=@Variant(\\0\\0\\0\\x2\\0\\0\\0-)\n")
-        self.assertEqual(settings.loadSleepCheck(other), 0)
+        self.assertEqual(self.fileText(home), "[General]\nlevelRange=day\n")
 
-    def malformedHome(self):
-        # a pickle naming a function that doesn't exist makes QSettings raise SystemError as it reads the file
+    def testAMalformedPythonValueIsNoChoice(self):
+        # a pickle naming a function that doesn't exist made QSettings raise SystemError as it read the file
         home = self.qtWrite({settings.LEVEL_RANGE_KEY: Canary(), settings.SLEEP_CHECK_KEY: "60"})
         text = self.fileText(home)
         self.assertIn("recordCanary", text)
         with open(settings.settingsPath(home), "w", encoding="utf-8", newline="") as f:
             f.write(text.replace("recordCanary", "missingCanar"))
-        return home
-
-    def assertFallsBack(self, home):
-        before = self.fileText(home)
-        for load, default in ((settings.loadSleepCheck, 0), (settings.loadLevelRange, "week")):
-            errors = io.StringIO()
-            with contextlib.redirect_stderr(errors):
-                self.assertEqual(load(home), default)
-            self.assertEqual(len(errors.getvalue().splitlines()), 1, errors.getvalue())
-            self.assertIn("Couldn't read the settings in " + settings.settingsPath(home), errors.getvalue())
-        with contextlib.redirect_stderr(io.StringIO()):
-            saved = (settings.saveLevelRange(home, "day"), settings.saveSleepCheck(home, 30))
-        self.assertEqual(saved, (False, False))
-        self.assertEqual(self.fileText(home), before)
-        self.assertEqual(os.listdir(os.path.dirname(settings.settingsPath(home))), ["settings.ini"])
-
-    def testAMalformedPythonValueLoadsTheDefaultsAndFailsASave(self):
-        self.assertFallsBack(self.malformedHome())
-
-    def testAnyErrorFromQSettingsLoadsTheDefaultsAndFailsASave(self):
-        home = self.handWrite("[General]\nlevelRange=month\nsleepCheckSeconds=60\n")
-
-        class Broken(QSettings):
-            def contains(self, key):
-                raise RuntimeError("broken")
-
-            def value(self, *args):
-                raise RuntimeError("broken")
-
-        with mock.patch.object(settings, "QSettings", Broken):
-            self.assertFallsBack(home)
-
-    def testAVariantValueReadsAsQSettingsReadsIt(self):
-        home = self.handWrite("[General]\nlevelRange=@Variant(\\0\\0\\0\\n\\0\\0\\0\\n\\0m\\0o\\0n\\0t\\0h)\n")
-        self.assertEqual(self.qtRead(home)[settings.LEVEL_RANGE_KEY], "month")
-        self.assertEqual(settings.loadLevelRange(home), "month")
-        self.assertTrue(settings.saveSleepCheck(home, 60))
-        self.assertEqual(self.qtRead(home), {settings.LEVEL_RANGE_KEY: "month", settings.SLEEP_CHECK_KEY: "60"})
+        self.assertEqual(self.loaded(home), ("week", 60))
+        self.assertTrue(settings.saveLevelRange(home, "day"))
+        self.assertEqual(self.fileText(home), "[General]\nlevelRange=day\nsleepCheckSeconds=60\n")
 
     def testALineSeparatorInAnotherGroupDoesntSplitTheChoices(self):
-        home = self.qtWrite({"Other/note": "first\u2028levelRange=day", settings.LEVEL_RANGE_KEY: "month", settings.SLEEP_CHECK_KEY: 30})
+        home = self.qtWrite({"Other/note": "first\u2028levelRange=day", settings.LEVEL_RANGE_KEY: "month", settings.SLEEP_CHECK_KEY: "30"})
         self.assertTrue(settings.saveSleepCheck(home, 60))
         self.assertEqual(self.fileText(home), "[General]\nlevelRange=month\nsleepCheckSeconds=60\n")
 
@@ -511,51 +493,35 @@ class QSettingsFormTests(unittest.TestCase):
                     self.assertEqual(str(load(home)), value)
                     self.assertEqual(self.qtRead(home), {key: value})
 
-    def testASaveOfAFileQSettingsFindsMalformedKeepsItsValues(self):
-        home = self.handWrite("[General\nlevelRange=month\n")
-        self.assertTrue(settings.saveSleepCheck(home, 60))
-        self.assertEqual((settings.loadLevelRange(home), settings.loadSleepCheck(home)), ("month", 60))
 
-
-class PrivateCopyTests(unittest.TestCase):
-    # QSettings follows a link at the path it's given, so it only ever gets a copy in a folder of this account's own
+class FileOnlyTests(unittest.TestCase):
+    # PyQt unpickles what QSettings reads, so a load or a save never hands the file to QSettings at all
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.home = os.path.join(self.temp.name, "config")
-        self.opened = []
-        self.realQSettings = settings.QSettings
-        opened = self.opened
 
-        class Recording(self.realQSettings):
-            def __init__(self, path, *args):
-                folder = os.path.dirname(path)
-                opened.append((path, folder, stat.S_IMODE(os.lstat(folder).st_mode), os.lstat(folder).st_uid))
-                super().__init__(path, *args)
+    def testLoadsAndSavesNeverMakeAQSettings(self):
+        made = []
 
-        patch = mock.patch.object(settings, "QSettings", Recording)
-        patch.start()
-        self.addCleanup(patch.stop)
+        class Recording(QSettings):
+            def __init__(self, *args):
+                made.append(args)
+                super().__init__(*args)
 
-    def assertOnlyPrivateCopies(self):
-        self.assertTrue(self.opened)
-        for path, folder, mode, owner in self.opened:
-            self.assertFalse(path.startswith(self.home), path)
-            self.assertEqual((mode, owner), (0o700, os.getuid()), folder)
-            self.assertFalse(os.path.lexists(folder), folder)
+        with mock.patch("PyQt6.QtCore.QSettings", Recording), mock.patch.object(settings, "QSettings", Recording, create=True):
+            self.assertTrue(settings.saveSleepCheck(self.home, 60))
+            self.assertTrue(settings.saveLevelRange(self.home, "day"))
+            self.assertEqual((settings.loadSleepCheck(self.home), settings.loadLevelRange(self.home)), (60, "day"))
+        self.assertEqual(made, [])
 
-    def testLoadsAndSavesHandQSettingsOnlyAPrivateCopy(self):
+    def testAFailedSaveChangesNothing(self):
         self.assertTrue(settings.saveSleepCheck(self.home, 60))
-        self.assertTrue(settings.saveLevelRange(self.home, "day"))
-        self.assertEqual((settings.loadSleepCheck(self.home), settings.loadLevelRange(self.home)), (60, "day"))
-        self.assertOnlyPrivateCopies()
-
-    def testAFailedSaveRemovesItsPrivateCopy(self):
-        self.assertTrue(settings.saveSleepCheck(self.home, 60))
+        path = settings.settingsPath(self.home)
         with mock.patch.object(settings.autostart, "writeText", side_effect=OSError("No space left on device")):
             self.assertFalse(settings.saveLevelRange(self.home, "day"))
-        self.assertEqual(settings.loadLevelRange(self.home), "week")
-        self.assertOnlyPrivateCopies()
+        self.assertEqual((settings.loadLevelRange(self.home), settings.loadSleepCheck(self.home)), ("week", 60))
+        self.assertEqual(os.listdir(os.path.dirname(path)), ["settings.ini"])
 
     def testASaveOfAValueThatIsntAChoiceChangesNothing(self):
         self.assertTrue(settings.saveSleepCheck(self.home, 60))
