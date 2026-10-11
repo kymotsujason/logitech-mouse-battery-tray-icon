@@ -490,6 +490,26 @@ class MouseListTests(unittest.TestCase):
                 self.assertEqual((self.keys(), mouse.asleep, mouse.reading.percent), (["02bc524c"], True, 81))
                 self.assertShows(mouse, NAME + ", asleep, 81% " + mice.readingTime(1000.0, 1000.0), True)
 
+    def testASearchingReplacementServiceDoesntBringBackTheOldServicesWake(self):
+        for fresh in (False, True):
+            with self.subTest(fresh=fresh):
+                self.tearDown()
+                self.setUp()
+                sleeping = upower.UPowerMouse(UPOWER_PATH, "02bc524c", NAME, hidpp.BatteryReading(70, hidpp.CHARGING_UNKNOWN), updatedAt=1100.0, asleep=True)
+                self.mice.applyService(state(entry(lastRead=1000.0)))
+                self.mice.applyUPower(sleeping)
+                self.assertFalse(self.mouse().asleep)
+                self.mice.applyService(None)
+                self.mice.applyService(state(searching=True))
+                self.assertTrue(self.mouse().asleep)
+                self.mice.applyUPower(sleeping)
+                mouse = self.mouse()
+                self.assertEqual((self.keys(), mouse.asleep, mouse.nodePath, mouse.reading.percent), (["02bc524c"], True, RECEIVER, 81))
+                self.assertShows(mouse, NAME + ", asleep, 81% " + mice.readingTime(1000.0, 1000.0), True)
+                # the new service's own word counts once it lists the mouse
+                self.mice.applyService(state(entry(lastRead=1000.0, asleep=not fresh)))
+                self.assertEqual(self.mouse().asleep, not fresh)
+
     def testAReadingOfUnknownTimeIsShownAfterADatedOne(self):
         with mock.patch.object(mice.time, "time", return_value=2000.0):
             self.mice.applyService(state(entry(percent=40, asleep=True, lastRead=1900.0)))

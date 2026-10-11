@@ -173,6 +173,8 @@ class MouseList(QObject):
             for mouse in self.mice:
                 if (mouse.nodePath is not None and mouse.upowerPath is None):
                     mouse.stale = True
+                # a replacement service keeps the mouse while it searches, so only its own entry may count the mouse as awake again
+                mouse.serviceAsleep = True
                 self.settleSleep(mouse)
             self.updateTimer()
             self.changed.emit()
