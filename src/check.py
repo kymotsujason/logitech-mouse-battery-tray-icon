@@ -95,7 +95,7 @@ def printService(state, notes):
 def checkUPower(bus):
     found, errors = upower.listMice(bus)
     for mouse in found:
-        printMouse(mouse.name, "UPower", mouse.reading)
+        printMouse(mouse.name, "UPower", mouse.reading, asleep=mouse.asleep, lastRead=mouse.updatedAt)
     for error in sorted(set(errors)):
         # UPower missing from the bus isn't a fault worth printing, since mice it would read just aren't there
         if (error not in upower.ABSENT_ERRORS):
