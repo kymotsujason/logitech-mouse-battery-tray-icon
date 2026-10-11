@@ -245,6 +245,14 @@ class WindowTests(WindowCase):
         self.state(entry(asleep=True, lastRead=time.time()))
         self.assertTrue(window.statusLabel.text().startswith("Asleep, read at "))
 
+    def testAnAsleepMouseWithNoKnownReadingTimeSaysOnlyAsleep(self):
+        mouse = mice.Mouse("02bc524c")
+        mouse.reading = hidpp.BatteryReading(45, 0)
+        mouse.asleep = True
+        mouse.lastRead = time.time()
+        mouse.readTimeKnown = False
+        self.assertEqual(historyWindow.statusWords(mouse), "Asleep")
+
     def assertWindowIcon(self, window, name):
         self.assertEqual(window.stateIconName, name)
         # without Qt's SVG plugin no state icon loads, and the window keeps the app's icon

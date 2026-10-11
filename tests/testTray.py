@@ -91,6 +91,11 @@ class TrayTextTests(unittest.TestCase):
         self.assertEqual(tray.mouseLine(NAME, makeMouse(hidpp.BatteryReading(None, 0, level="low"))), NAME + ", low")
         self.assertEqual(tray.mouseLine(NAME, makeMouse(None)), NAME + ", no reading yet")
 
+    def testAnAsleepLineWithNoKnownReadingTimeLeavesItOut(self):
+        asleep = makeMouse(hidpp.BatteryReading(69, 0), asleep=True)
+        asleep.readTimeKnown = False
+        self.assertEqual(tray.mouseLine(NAME, asleep), NAME + ", asleep, 69%")
+
     def testAnAsleepLineDatesAnOlderReading(self):
         local = time.localtime(LAST_READ)
         clock = time.strftime("%H:%M", local)

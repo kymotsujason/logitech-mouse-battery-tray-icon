@@ -165,8 +165,12 @@ def statusWords(mouse):
     if (reading is None):
         return "No reading yet"
     if (mouse.stale):
+        if (not mouse.readTimeKnown):
+            return "Last known level"
         return "Last read " + mice.readingTime(mouse.lastRead, time.time())
     if (mouse.asleep):
+        if (not mouse.readTimeKnown):
+            return "Asleep"
         return "Asleep, read " + mice.readingTime(mouse.lastRead, time.time())
     words = {hidpp.CHARGING_CHARGING: "Charging", hidpp.CHARGING_SLOW: "Charging slowly", hidpp.CHARGING_FULL: "Full", hidpp.CHARGING_ERROR: "Charging error", hidpp.CHARGING_PENDING: "Pending charge", hidpp.CHARGING_UNKNOWN: "Unknown state"}
     return words.get(reading.charging, "In use")

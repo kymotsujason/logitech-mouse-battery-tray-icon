@@ -52,9 +52,9 @@ def mouseLine(name, mouse, now=None):
         return name + ", no reading yet"
     level = hidpp.levelText(mouse.reading)
     if (mouse.stale):
-        return name + ", " + level + " " + mice.readingTime(mouse.lastRead, time.time() if now is None else now)
+        return name + ", " + level + mice.readTimeText(mouse, time.time() if now is None else now)
     if (mouse.asleep):
-        return name + ", asleep, " + level + " " + mice.readingTime(mouse.lastRead, time.time() if now is None else now)
+        return name + ", asleep, " + level + mice.readTimeText(mouse, time.time() if now is None else now)
     charging = mouse.reading.charging
     if (charging in (hidpp.CHARGING_CHARGING, hidpp.CHARGING_SLOW)):
         return name + ", charging, " + level

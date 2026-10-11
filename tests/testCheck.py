@@ -124,11 +124,13 @@ class CheckTests(unittest.TestCase):
         with self.withUPower():
             self.assertEqual(self.runCheck(FakeServiceBus(stateText(nodes=()))), (0, "MX Master 3 (UPower)\n  55%, discharging\n"))
 
-    def testASleepingUPowerMousePrintsWhenItWasRead(self):
-        found = [upower.UPowerMouse("/p", "12ab34cd", "G703 LS", hidpp.BatteryReading(68, hidpp.CHARGING_UNKNOWN), updatedAt=LAST_READ, asleep=True)]
-        with mock.patch.object(upower, "listMice", return_value=(found, [])), mock.patch.object(check.time, "time", return_value=LAST_READ + 600):
-            result = self.runCheck(FakeServiceBus(stateText(nodes=())))
-        self.assertEqual(result, (0, "G703 LS (UPower)\n  68%, unknown, asleep, read " + mice.readingTime(LAST_READ, LAST_READ + 600) + "\n"))
+    def testASleepingUPowerMouseNeverShowsUPowersPollTime(self):
+        for updatedAt in (LAST_READ, None):
+            with self.subTest(updatedAt=updatedAt):
+                found = [upower.UPowerMouse("/p", "12ab34cd", "G703 LS", hidpp.BatteryReading(68, hidpp.CHARGING_UNKNOWN), updatedAt=updatedAt, asleep=True)]
+                with mock.patch.object(upower, "listMice", return_value=(found, [])):
+                    result = self.runCheck(FakeServiceBus(stateText(nodes=())))
+                self.assertEqual(result, (0, "G703 LS (UPower)\n  68%, unknown, asleep\n"))
 
     def testOneMouseOnBothPathsShowsWhereEachLineCameFrom(self):
         with self.withUPower(80, "02bc524c", NAME):

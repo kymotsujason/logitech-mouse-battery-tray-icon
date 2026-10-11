@@ -31,8 +31,10 @@ def printMouse(name, source, reading, asleep=False, lastRead=None):
         print("  no battery reply")
         return
     line = "  " + hidpp.describeReading(reading)
-    if (asleep and lastRead is not None):
-        line += ", asleep, read " + mice.readingTime(lastRead, time.time())
+    if (asleep):
+        line += ", asleep"
+        if (lastRead is not None):
+            line += ", read " + mice.readingTime(lastRead, time.time())
     print(line)
 
 
@@ -95,7 +97,7 @@ def printService(state, notes):
 def checkUPower(bus):
     found, errors = upower.listMice(bus)
     for mouse in found:
-        printMouse(mouse.name, "UPower", mouse.reading, asleep=mouse.asleep, lastRead=mouse.updatedAt)
+        printMouse(mouse.name, "UPower", mouse.reading, asleep=mouse.asleep, lastRead=None if mouse.asleep else mouse.updatedAt)
     for error in sorted(set(errors)):
         # UPower missing from the bus isn't a fault worth printing, since mice it would read just aren't there
         if (error not in upower.ABSENT_ERRORS):
