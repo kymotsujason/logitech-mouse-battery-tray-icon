@@ -68,8 +68,8 @@ The app is the flat set of modules in `src/`, which the packages install side by
 These haven't been tested yet:
 
 - The GNOME, GNOME Classic, GNOME Flashback, XFCE, Cinnamon, MATE, Budgie, and LXQt desktops
-- Mice other than the PRO X3 SUPERSTRIKE, the PRO X Wireless, and the MX Master 3S
-- Any Logitech mouse through UPower
+- Mice other than the PRO X3 SUPERSTRIKE, the PRO X Wireless, the MX Master 3S, and the G703 LIGHTSPEED
+- Logitech mice through UPower other than the G703 LIGHTSPEED
 - Bluetooth mice
 - Light app themes on panels that stay dark outside Plasma and GNOME
 - Double click installs in Ubuntu's App Center and GNOME Software

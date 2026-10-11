@@ -46,7 +46,7 @@ The icon is a mouse that fills up with the battery level and shows the percentag
 - `PRO X3 SUPERSTRIKE, charging, 82%`
 - `PRO X3 SUPERSTRIKE, asleep, 69% at 21:40`
 
-Opening the menu refreshes each mouse's reading, and a mouse that's asleep shows its last reading and when it was taken. A mouse that reports its own battery, as the PRO X3 SUPERSTRIKE does, isn't read on a timer. So its icon stays in color while it sleeps, unless you turn on "Check whether mice are asleep" in the battery window.
+Opening the menu refreshes the reading of each mouse the battery service reads itself, while a mouse read through UPower follows UPower's own updates. A mouse that's asleep shows its last reading and when it was taken. A mouse that reports its own battery, as the PRO X3 SUPERSTRIKE does, isn't read on a timer. So its icon stays in color while it sleeps, unless you turn on "Check whether mice are asleep" in the battery window.
 
 ## Battery window
 
@@ -58,7 +58,7 @@ Click the tray icon, or pick "Battery Health" from its menu, to open the battery
 
 The health box compares how the battery drains and charges now with how it did when tracking began, and warns when a charge lasts 15% less or charging takes 15% longer. That takes about 42 charges, so until then it says it's still learning. Once it has measured enough, it also says how many hours a full charge gives and how long charging from 20% to 80% takes. Some mice report too little for these figures, and the box says so when that happens.
 
-"Check whether mice are asleep" reads every mouse every 30 seconds, every minute, or every 5 minutes, so the icon turns gray soon after a mouse sleeps. It's off unless you turn it on.
+"Check whether mice are asleep" reads the mice the battery service reads itself every 30 seconds, every minute, or every 5 minutes, so the icon turns gray soon after one sleeps. A mouse read through UPower updates on its own and shows as asleep when its link drops. The check is off unless you turn it on.
 
 The battery service saves the history in `/var/lib/logitech-mouse-battery/history.sqlite3`, about 20 MB after 10 years of heavy use. Any account on the computer can read it, as it can read the battery levels, and it shows when each mouse was in use. A mouse that doesn't give a serial number gets no history.
 
@@ -104,7 +104,7 @@ The battery history stays in `/var/lib/logitech-mouse-battery`, so delete it wit
 - For a mouse read through UPower, the battery window can show an older list of charges for up to 2 hours in rare cases.
 - When the clock is set while the battery service is stopped, readings it saved with the wrong time keep that time.
 
-Only KDE Plasma and the three mice above have been tested so far. [docs/development.md](docs/development.md) lists what hasn't been tested, and how to build Mouse Battery from source.
+Only KDE Plasma and the mice listed above have been tested so far. [docs/development.md](docs/development.md) lists what hasn't been tested, and how to build Mouse Battery from source.
 
 ## License
 
