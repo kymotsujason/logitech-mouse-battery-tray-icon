@@ -2,7 +2,9 @@ import contextlib
 import errno
 import io
 import os
+import shutil
 import sys
+import tempfile
 import time
 import unittest
 from unittest import mock
@@ -143,6 +145,115 @@ class ReadingTests(unittest.TestCase):
     def testWrongPropertiesNamesEachOneOfTheWrongType(self):
         self.assertEqual(upower.wrongProperties(mouseProperties(State="2", Model=5, Unknown=[1])), ["Model", "State"])
         self.assertEqual(upower.wrongProperties(mouseProperties(UpdateTime=1800000000)), [])
+
+    def testUnknownStateOnAKernelBatteryIsAsleep(self):
+        mouse = upower.mouseFromProperties(PATH, mouseProperties(State=0))
+        self.assertTrue(mouse.asleep)
+        # the reading is kept as UPower gave it
+        self.assertEqual(mouse.reading, hidpp.BatteryReading(55, hidpp.CHARGING_UNKNOWN))
+
+    def testUnknownStateFromAnotherDriverIsntAsleep(self):
+        self.assertFalse(upower.mouseFromProperties(PATH, mouseProperties(State=0, NativePath="unrelated", Vendor="Logitech")).asleep)
+
+    def testAwakeStatesArentAsleep(self):
+        for state in range(1, 7):
+            self.assertFalse(upower.mouseFromProperties(PATH, mouseProperties(State=state)).asleep, state)
+
+    def testAStateOfTheWrongTypeIsntAsleep(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertFalse(upower.mouseFromProperties(PATH, mouseProperties(State="0")).asleep)
+        props = mouseProperties()
+        del props["State"]
+        self.assertFalse(upower.mouseFromProperties(PATH, props).asleep)
+
+
+class CableTests(unittest.TestCase):
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.root)
+        self.supplies = os.path.join(self.root, "class", "power_supply")
+        self.udev = os.path.join(self.root, "udev")
+        os.makedirs(self.supplies)
+        os.makedirs(self.udev)
+        for patch in (mock.patch.object(upower, "SYSFS_POWER_SUPPLY", self.supplies), mock.patch.object(upower, "UDEV_DATA", self.udev)):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def addInput(self, hidDevice, name, flags):
+        os.makedirs(os.path.join(hidDevice, "input", name))
+        with open(os.path.join(self.udev, "+input:" + name), "w") as f:
+            f.write("I:4454399\n" + "".join("E:" + flag + "=1\n" for flag in flags))
+
+    def linkBattery(self, name, hidDevice):
+        supply = os.path.join(self.supplies, name)
+        os.makedirs(supply)
+        os.symlink(hidDevice, os.path.join(supply, "device"))
+
+    def addCable(self, mouseFlags=("ID_INPUT_MOUSE",)):
+        # the G703 on its cable as the tester's report showed it, with the battery on interface 2 and no input of its own
+        usb = os.path.join(self.root, "devices", "usb1", "1-9")
+        interfaces = []
+        for number in range(3):
+            interface = os.path.join(usb, "1-9:1." + str(number))
+            os.makedirs(interface)
+            with open(os.path.join(interface, "bInterfaceNumber"), "w") as f:
+                f.write("0" + str(number) + "\n")
+            interfaces.append(interface)
+        batteryHid = os.path.join(interfaces[2], "0003:046D:C090.0020")
+        os.makedirs(batteryHid)
+        self.addInput(os.path.join(interfaces[0], "0003:046D:C090.001E"), "input51", mouseFlags)
+        self.addInput(os.path.join(interfaces[1], "0003:046D:C090.001F"), "input52", ("ID_INPUT_KEYBOARD",))
+        self.linkBattery("hidpp_battery_4", batteryHid)
+
+    def addReceiver(self):
+        # a paired keyboard's battery next to a paired mouse, both under the receiver's own HID device
+        interface = os.path.join(self.root, "devices", "usb1", "1-8", "1-8:1.2")
+        os.makedirs(interface)
+        with open(os.path.join(interface, "bInterfaceNumber"), "w") as f:
+            f.write("02\n")
+        receiverHid = os.path.join(interface, "0003:046D:C539.001C")
+        keyboardHid = os.path.join(receiverHid, "0003:046D:4075.0021")
+        os.makedirs(keyboardHid)
+        self.addInput(os.path.join(receiverHid, "0003:046D:4086.001D"), "input50", ("ID_INPUT_MOUSE",))
+        self.addInput(keyboardHid, "input53", ("ID_INPUT_KEYBOARD",))
+        self.linkBattery("hidpp_battery_5", keyboardHid)
+
+    def keyboardBattery(self, nativePath):
+        return upower.mouseFromProperties(PATH, mouseProperties(Type=6, NativePath=nativePath, Model="G703 LIGHTSPEED Wireless Gaming Mouse w/ HERO"))
+
+    def testACableBatteryNextToAMouseInputIsKept(self):
+        self.addCable()
+        mouse = self.keyboardBattery("hidpp_battery_4")
+        self.assertEqual(mouse, upower.UPowerMouse(PATH, "12ab34cd", "G703 LIGHTSPEED Wireless Gaming Mouse w/ HERO", hidpp.BatteryReading(55, 0)))
+
+    def testAReceiverKeyboardNextToAPairedMouseIsLeftOut(self):
+        self.addReceiver()
+        self.assertIsNone(self.keyboardBattery("hidpp_battery_5"))
+
+    def testACableWithoutTheMousesUdevFileIsLeftOut(self):
+        self.addCable()
+        os.remove(os.path.join(self.udev, "+input:input51"))
+        self.assertIsNone(self.keyboardBattery("hidpp_battery_4"))
+
+    def testACableWithOnlyKeyboardInputsIsLeftOut(self):
+        self.addCable(mouseFlags=("ID_INPUT_KEYBOARD",))
+        self.assertIsNone(self.keyboardBattery("hidpp_battery_4"))
+
+    def testANativePathThatLeavesTheFolderIsLeftOut(self):
+        self.addCable()
+        for nativePath in ("hidpp_battery_4/../hidpp_battery_4", "../hidpp_battery_4", "hidpp_battery_", "hidpp_battery_4x"):
+            self.assertIsNone(self.keyboardBattery(nativePath), nativePath)
+
+    def testABatteryThatsGoneIsLeftOut(self):
+        self.addCable()
+        self.assertIsNone(self.keyboardBattery("hidpp_battery_7"))
+
+    def testAMouseTypedDeviceNeedsNoTree(self):
+        self.assertIsNotNone(upower.mouseFromProperties(PATH, mouseProperties(NativePath="hidpp_battery_4")))
+
+    def testOtherTypesStayLeftOutEvenNextToAMouse(self):
+        self.addCable()
+        self.assertIsNone(upower.mouseFromProperties(PATH, mouseProperties(Type=10, NativePath="hidpp_battery_4")))
 
 
 class ReplyTests(unittest.TestCase):

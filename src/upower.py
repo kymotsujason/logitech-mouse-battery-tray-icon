@@ -1,4 +1,7 @@
+import glob
 import math
+import os
+import re
 from dataclasses import dataclass
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal, pyqtSlot
@@ -13,8 +16,15 @@ ROOT_PATH = "/org/freedesktop/UPower"
 DEVICE_INTERFACE = "org.freedesktop.UPower.Device"
 PROPERTIES_INTERFACE = "org.freedesktop.DBus.Properties"
 TYPE_MOUSE = 5
+TYPE_KEYBOARD = 6
 # hid-logitech-hidpp names its power supplies hidpp_battery_<N>, and UPower's NativePath carries that name
 NATIVE_PATH_PREFIX = "hidpp_battery"
+NATIVE_PATH_PATTERN = re.compile(r"hidpp_battery_[0-9]+")
+SYSFS_POWER_SUPPLY = "/sys/class/power_supply"
+UDEV_DATA = "/run/udev/data"
+UDEV_MOUSE_LINE = "E:ID_INPUT_MOUSE=1"
+# hid-logitech-hidpp sets its battery's status to unknown when the mouse drops its link, which the G703 does when it sleeps
+STATE_UNKNOWN = 0
 LEVEL_NONE = 1
 LEVEL_NAMES = {3: "low", 4: "critical", 6: "normal", 7: "high", 8: "full"}
 # UPower's State values mapped onto the charging codes, where pending charge keeps a code of its own and any value missing here, such as 0 (unknown), becomes CHARGING_UNKNOWN
@@ -41,6 +51,7 @@ class UPowerMouse:
     pathKey: bool = False
     # when UPower last read the device, in seconds since the epoch, or None when it didn't say
     updatedAt: float | None = None
+    asleep: bool = False
 
 
 def wrongProperties(values):
@@ -52,6 +63,30 @@ def plainValues(props):
     return {key: dbusCalls.plain(value) for key, value in props.items()}
 
 
+def inputIsMouse(name):
+    try:
+        with open(os.path.join(UDEV_DATA, "+input:" + name)) as f:
+            return any(line.rstrip("\n") == UDEV_MOUSE_LINE for line in f)
+    except OSError:
+        return False
+
+
+def cableHasMouse(nativePath):
+    # UPower looks at every interface of a USB device and ranks a keyboard above a mouse, so a mouse on its cable can come out a keyboard
+    if (not NATIVE_PATH_PATTERN.fullmatch(nativePath)):
+        return False
+    hidDevice = os.path.realpath(os.path.join(SYSFS_POWER_SUPPLY, nativePath, "device"))
+    interface = os.path.dirname(hidDevice)
+    # a battery on a receiver hangs off the receiver's HID device, whose USB device also holds every other paired device's inputs
+    if (not os.path.isfile(os.path.join(interface, "bInterfaceNumber"))):
+        return False
+    usbDevice = os.path.dirname(interface)
+    for inputPath in glob.glob(os.path.join(glob.escape(usbDevice), "*", "*", "input", "input*")):
+        if (inputIsMouse(os.path.basename(inputPath))):
+            return True
+    return False
+
+
 def mouseFromProperties(path, props):
     if (not isinstance(props, dict)):
         return None
@@ -59,9 +94,10 @@ def mouseFromProperties(path, props):
     # a property of the wrong type is read as missing, so the rest of the device still reads
     for key in wrongProperties(values):
         del values[key]
-    if (values.get("Type") != TYPE_MOUSE):
-        return None
+    kind = values.get("Type")
     nativePath = str(values.get("NativePath", ""))
+    if (kind != TYPE_MOUSE and not (kind == TYPE_KEYBOARD and cableHasMouse(nativePath))):
+        return None
     vendor = str(values.get("Vendor", ""))
     if (not nativePath.startswith(NATIVE_PATH_PREFIX) and "logitech" not in vendor.lower()):
         return None
@@ -79,7 +115,8 @@ def mouseFromProperties(path, props):
     model = hidpp.cleanText(values.get("Model")) or None
     updatedAt = values.get("UpdateTime", 0)
     updatedAt = float(updatedAt) if isinstance(updatedAt, (int, float)) and updatedAt > 0 else None
-    return UPowerMouse(path, serial or path, model, reading, pathKey=not serial, updatedAt=updatedAt)
+    asleep = values.get("State") == STATE_UNKNOWN and nativePath.startswith(NATIVE_PATH_PREFIX)
+    return UPowerMouse(path, serial or path, model, reading, pathKey=not serial, updatedAt=updatedAt, asleep=asleep)
 
 
 def methodCall(path, interface, method, arguments=None):
