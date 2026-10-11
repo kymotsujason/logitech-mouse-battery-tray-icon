@@ -144,11 +144,17 @@ wiredMice() {
     done
 }
 
+plainText() {
+    # a device chooses its own name strings, so the lines shown on screen lose their control characters and keep their
+    # newlines, while the report file keeps the raw values
+    tr -d '\000-\011\013-\037\177'
+}
+
 wiredNames() {
     local name
     for name in $(wiredMice); do
         readValue "$usbRoot/$name/product"
-    done | sed 's/^-$/mouse/' | paste -sd "," | sed 's/,/, /g'
+    done | plainText | sed 's/^-$/mouse/' | paste -sd "," | sed 's/,/, /g'
 }
 
 receiverPresent() {
@@ -684,7 +690,7 @@ fi
 finished=1
 
 title "All done"
-sed -n '/^==== summary ====/,/^====/p' "$report" | sed '1d;$d' | sed '/^$/d'
+sed -n '/^==== summary ====/,/^====/p' "$report" | sed '1d;$d' | sed '/^$/d' | plainText
 echo
 echo "Attach this file to your GitHub issue, or send it to whoever asked you to run this:"
 echo "$bold$report$plain"
