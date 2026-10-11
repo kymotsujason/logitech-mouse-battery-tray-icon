@@ -1650,15 +1650,26 @@ class RecorderTests(RecorderCase):
         discharges = [row for row in self.sessions() if row[0] == history.DISCHARGE]
         self.assertEqual(discharges[0][3], 84)
 
-    def testADischargesFirstMinuteGivesNoWholeSteps(self):
+    def testADischargesFirstHalfHourGivesNoWholeSteps(self):
         self.recorder.setWakeSupport(KEY, True)
         self.event(0, 85, charging=1, power=1)
         self.event(600, 100, charging=3, power=2)
-        for seconds, percent in ((601, 99), (612, 90), (625, 84), (700, 83), (2500, 82)):
+        for seconds, percent in ((601, 99), (612, 90), (625, 84), (700, 83), (2500, 82), (4500, 81)):
             self.event(seconds, percent)
         drops = [(row[3], row[4], row[6]) for row in self.steps() if row[0] == history.DISCHARGE]
-        self.assertEqual(drops, [(100, 99, 0), (99, 90, 0), (90, 84, 0), (84, 83, 0), (83, 82, 1)])
-        self.assertEqual((self.recorder.summary(KEY)["open"]["median"], self.recorder.summary(KEY)["open"]["count"]), (30.0, 1))
+        self.assertEqual(drops, [(100, 99, 0), (99, 90, 0), (90, 84, 0), (84, 83, 0), (83, 82, 0), (82, 81, 1)])
+        self.assertEqual(self.recorder.summary(KEY)["open"]["count"], 1)
+        self.assertAlmostEqual(self.recorder.summary(KEY)["open"]["median"], 2000 / 60)
+
+    def testTheFallAfterAChargeIsntMeasured(self):
+        # the X3 on 2026-10-09 20:42 kept falling fast for five minutes after a charge, at 0.35, 1.1, then 3.37 min per point, and then took over half an hour for each
+        self.recorder.setWakeSupport(KEY, True)
+        self.event(0, 80, charging=1, power=1)
+        self.event(60, 86, charging=1, power=1)
+        for seconds, percent in ((73, 86), (99, 85), (157, 84), (178, 83), (244, 82), (446, 81), (3000, 80), (6000, 79)):
+            self.event(seconds, percent)
+        drops = [(row[3], row[4], row[6]) for row in self.steps() if row[0] == history.DISCHARGE]
+        self.assertEqual(drops, [(86, 85, 0), (85, 84, 0), (84, 83, 0), (83, 82, 0), (82, 81, 0), (81, 80, 0), (80, 79, 1)])
 
     def testARealFullStartsItsDischargeAtFull(self):
         self.event(0, 95, charging=1, power=1)
@@ -2314,12 +2325,20 @@ class SummaryTests(RecorderCase):
     def testMonthlyFiguresGroupByUtcMonth(self):
         nextMonth = 31 * 24 * 60 * 60
         first = self.addSession(history.DISCHARGE, 0, 1000, 80, 30)
-        for j in range(3):
+        for j in range(history.MONTH_DRAIN_STEPS):
             self.addStep(first, history.DISCHARGE, j + 1, 30.0, 75 - j, 74 - j)
         self.addSession(history.DISCHARGE, nextMonth, nextMonth + 1000, 90, 40)
         monthly = self.recorder.summary(KEY)["monthly"]
         self.assertEqual([(month["drain"], month["drained"], month["sessions"]) for month in monthly], [(30.0, 50, 1), (None, 50, 1)])
         self.assertEqual(monthly[0]["month"], history.monthOf(START))
+
+    def testAMonthWithFewerThanFiveDropsHasNoDrainFigure(self):
+        # on 2026-10-09 three drops measured right after charges gave the X3 12 hours a charge
+        first = self.addSession(history.DISCHARGE, 0, 1000, 80, 30)
+        for j, minutes in enumerate((7.32, 0.57, 8.32, 60.0)):
+            self.addStep(first, history.DISCHARGE, j + 1, minutes, 75 - j, 74 - j)
+        self.assertEqual(history.MONTH_DRAIN_STEPS, 5)
+        self.assertIsNone(self.recorder.summary(KEY)["monthly"][0]["drain"])
 
     def testSessionsAreTheLastNinetyDaysOldestFirst(self):
         self.clock.now = START + 100 * 24 * 60 * 60

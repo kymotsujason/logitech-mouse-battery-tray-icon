@@ -27,6 +27,10 @@ WRITE_REFILL_SECONDS = HOLD_SECONDS
 # measured on the X3 on 2026-10-09: one cable charge rose a point every few seconds for about a minute before it settled, and a full reading on going from the cable to the pad counted down to the real level within about 20 s
 CHARGE_SETTLE_SECONDS = 2 * 60
 DISCHARGE_SETTLE_SECONDS = 60
+# after a charge the X3's reading kept falling a point every few minutes for 5 to 10 minutes before each point took over half an hour (2026-10-09), so a discharge's drops are measured only after this
+DISCHARGE_MEASURE_SECONDS = 30 * 60
+# a month's drain figure from the X3's first three measured drops said 12 hours a charge, so a figure waits for this many
+MONTH_DRAIN_STEPS = 5
 # a mouse's row in mice is made the first time it's seen, so a device that names a new unit id at each identify would add one a second without a limit of its own
 NEW_MICE_BURST = 10
 NEW_MICE_REFILL_SECONDS = 5 * 60
@@ -745,8 +749,8 @@ class Track:
         sinceStart = secondsBetween(session.startAt, session.startElapsed, step.startAt, step.startElapsed)
         if (moved < 0):
             newLow = step.lowestBefore is None or step.startPercent < step.lowestBefore
-            # a discharge's first minute can count down from a full reading to the real level, so those steps aren't measured
-            unbroken = whole and self.seesWakes() and newLow and not step.power and sinceStart >= DISCHARGE_SETTLE_SECONDS
+            # a discharge's first minutes can count down from a full reading and then fall fast while the level settles, so those steps aren't measured
+            unbroken = whole and self.seesWakes() and newLow and not step.power and sinceStart >= DISCHARGE_MEASURE_SECONDS
             kind = DISCHARGE
         else:
             # a charge's first minutes can rise faster than the battery fills while the level catches up, so those steps aren't measured
@@ -1568,7 +1572,7 @@ def monthlySummary(db, mouseId):
     result = []
     for key in sorted(months):
         values = months[key]
-        result.append({"month": key, "drain": statistics.median(values["drainValues"]) if values["drainValues"] else None, "charge": [[power, statistics.median(minutes)] for power, minutes in values["chargeValues"].items()], "drained": values["drained"], "sessions": values["sessions"]})
+        result.append({"month": key, "drain": statistics.median(values["drainValues"]) if len(values["drainValues"]) >= MONTH_DRAIN_STEPS else None, "charge": [[power, statistics.median(minutes)] for power, minutes in values["chargeValues"].items()], "drained": values["drained"], "sessions": values["sessions"]})
     return result
 
 
