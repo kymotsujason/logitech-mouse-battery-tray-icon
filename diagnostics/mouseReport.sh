@@ -661,7 +661,9 @@ else
     readStep cable "cable" "The cable wasn't seen, so this may be a wireless reading."
 fi
 
-{
+# the subshell stops at its first failed command, so any capture that can't be read fails the save and keeps the folder
+(
+    set -e
     echo "Mouse report"
     echo "kernel: $(uname -r)"
     echo "system: $(. /etc/os-release 2>/dev/null && echo "${PRETTY_NAME:-unknown}")"
@@ -684,10 +686,10 @@ fi
         cat "$work/sleep-upower"
     fi
     cat "$work/cable-snapshot"
-} > "$report"
+) > "$report"
 if [ $? != 0 ]; then
     echo
-    echo "Couldn't save the report at $report."
+    echo "Couldn't save the whole report at $report."
     echo "Your readings are still saved in $work, so copy that folder before you restart or turn off the computer."
     keepWork=1
     finished=1
