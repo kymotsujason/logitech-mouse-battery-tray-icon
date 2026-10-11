@@ -36,7 +36,7 @@ stopWatchers() {
 
 cleanup() {
     stopWatchers
-    stty echo < /dev/tty 2>/dev/null
+    { stty echo < /dev/tty; } 2>/dev/null
     rm -rf "$work"
     if [ "$finished" = 0 ]; then
         printf "\n\nStopped before the end, so no report was saved.\n"
@@ -60,18 +60,19 @@ clearLine() {
 }
 
 drainInput() {
-    # an Enter pressed while nothing was asking would otherwise answer the next question unseen
-    while read -r -s -t 0.05 < /dev/tty; do
+    # a key pressed while nothing was asking would otherwise answer the next question unseen, and reading one key at a
+    # time takes keys typed without Enter too
+    while read -r -s -n 1 -t 0.05 < /dev/tty; do
         :
     done
 }
 
 quiet() {
-    stty -echo < /dev/tty 2>/dev/null
+    { stty -echo < /dev/tty; } 2>/dev/null
 }
 
 loud() {
-    stty echo < /dev/tty 2>/dev/null
+    { stty echo < /dev/tty; } 2>/dev/null
 }
 
 ask() {
@@ -147,7 +148,7 @@ wiredNames() {
     local name
     for name in $(wiredMice); do
         readValue "$usbRoot/$name/product"
-    done | paste -sd "," | sed 's/,/, /g'
+    done | sed 's/^-$/mouse/' | paste -sd "," | sed 's/,/, /g'
 }
 
 receiverPresent() {
@@ -432,7 +433,7 @@ keyboardNotes() {
             *) continue ;;
         esac
         batteryIsMouse "$psRoot/$native" || continue
-        model=$(readValue "$psRoot/$native/model_name")
+        model=$(readValue "$psRoot/$native/model_name" | sed 's/^-$/mouse/')
         type=$(upowerType "$path")
         case "$type" in
             mouse*) ;;
@@ -600,8 +601,8 @@ sleepStep() {
 
 wiredBefore=""
 sleepSummary="Skipped."
-if [ ! -d "$(dirname "$report")" ] || [ ! -w "$(dirname "$report")" ]; then
-    echo "Can't save a report in $(dirname "$report")."
+if [ -d "$report" ] || { [ -e "$report" ] && [ ! -w "$report" ]; } || [ ! -d "$(dirname "$report")" ] || [ ! -w "$(dirname "$report")" ]; then
+    echo "Can't save a report at $report."
     finished=1
     exit 1
 fi
@@ -622,6 +623,7 @@ if ! noWiredMouse; then
 fi
 if ! receiverPresent; then
     echo "  Plug the mouse's receiver into the computer. If it fits into the end of the cable, plug it in there."
+    echo "  If your mouse has no receiver, press Enter to go on."
     waitFor 0 receiverPresent "Waiting for the receiver..." "Still waiting. Press Enter if the mouse has no receiver."
 fi
 echo "  Move the mouse a little so it's awake."
@@ -673,6 +675,12 @@ fi
     fi
     cat "$work/cable-snapshot"
 } > "$report"
+if [ $? != 0 ]; then
+    echo
+    echo "Couldn't save the report at $report."
+    finished=1
+    exit 1
+fi
 finished=1
 
 title "All done"
