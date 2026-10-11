@@ -13,6 +13,12 @@ This file lists the changes in each release of Mouse Battery, newest first.
 - A mouse the kernel drives, such as the G703 LIGHTSPEED, no longer disappears while it's on its cable.
 - A mouse read through UPower gets drain figures once it has been seen falling asleep.
 - A mouse read through UPower shows as asleep while it sleeps, instead of an unknown state.
+- A mouse on its cable that shows up before the system has finished describing it appears once it's ready, instead of staying hidden until it's replugged.
+- The tray shows the right level and sleep state for a mouse that both Mouse Battery's service and UPower read.
+
+### Security
+
+- The tray reads its settings file as plain text, so a settings file another account can write can't run code as you.
 
 ## 1.2.0, 2026-10-11
 
