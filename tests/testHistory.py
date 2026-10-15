@@ -816,9 +816,9 @@ class StepTests(RecorderCase):
 
 
 class UPowerWakeTests(RecorderCase):
-    def upower(self, seconds, percent):
+    def upower(self, seconds, percent, charging=0):
         self.clock.now = START + seconds
-        self.recorder.addReading(OTHER, hidpp.BatteryReading(percent, 0), history.ORIGIN_UPOWER, name="G703 LS", source=history.SOURCE_UPOWER, at=START + seconds)
+        self.recorder.addReading(OTHER, hidpp.BatteryReading(percent, charging), history.ORIGIN_UPOWER, name="G703 LS", source=history.SOURCE_UPOWER, at=START + seconds)
         self.at(seconds + history.WAKE_SET_SECONDS)
 
     def upowerMarker(self, seconds, origin):
@@ -851,6 +851,35 @@ class UPowerWakeTests(RecorderCase):
         self.upower(7600, 75)
         # 79 to 78 is whole but came before any seen sleep, 78 to 77 spans the sleep, and 77 to 76 starts at the wake
         self.assertEqual([(s[3], s[4], s[6]) for s in self.steps()], [(80, 79, 0), (79, 78, 0), (78, 77, 0), (77, 76, 0), (76, 75, 1)])
+
+    def seeASleep(self):
+        self.upower(0, 60)
+        self.upowerMarker(100, history.ORIGIN_ASLEEP)
+        self.upowerMarker(400, history.ORIGIN_WAKE)
+        self.recorder.setWakeSupport(OTHER, True, source=history.SOURCE_UPOWER)
+
+    def testAUPowerRiseIsNoCharge(self):
+        # the kernel's voltage table moves a percent every 3 or 4 mV in the middle of the range, so a G703 wobbles up while in use
+        self.seeASleep()
+        self.upower(401, 58)
+        self.upower(1000, 60)
+        self.upower(1600, 61)
+        self.upower(2200, 62)
+        self.assertEqual([s[0] for s in self.sessions()], [0])
+
+    def testAUPowerRiseAcrossASleepIsNoCharge(self):
+        self.seeASleep()
+        self.upower(401, 55)
+        self.upowerMarker(1000, history.ORIGIN_ASLEEP)
+        self.upowerMarker(9000, history.ORIGIN_WAKE)
+        self.upower(9001, 62)
+        self.assertEqual([(s[0], s[9]) for s in self.sessions()], [(0, 0), (0, 0)])
+
+    def testAUPowerChargingStateStillStartsACharge(self):
+        self.seeASleep()
+        self.upower(401, 60, charging=hidpp.CHARGING_CHARGING)
+        self.upower(1000, 62, charging=hidpp.CHARGING_CHARGING)
+        self.assertEqual([(s[0], s[3], s[9]) for s in self.sessions()], [(0, 60, 0), (1, 60, 0)])
 
 
 class ClockStepTests(RecorderCase):

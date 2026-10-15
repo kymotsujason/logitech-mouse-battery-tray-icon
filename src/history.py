@@ -626,6 +626,8 @@ class Track:
             self.startSession(row, previous, boundary, writer, CHARGE if row.charging in CHARGING_CODES else DISCHARGE, fromCode=row.charging in CHARGING_CODES)
         elif (session.kind == DISCHARGE):
             rise = None if (previous is None or previous.percent is None or row.percent is None) else row.percent - previous.percent
+            # the kernel driver behind UPower reports charging itself, while its percent can come from a voltage table where 3 mV is a percent, so a rise there is no charge
+            guessesCharges = row.origin != ORIGIN_UPOWER
             if (row.charging in CHARGING_CODES):
                 # a charging code wins over the rise rules, so no inferred charge is saved and this one starts normally
                 self.endSession(writer)
@@ -633,9 +635,10 @@ class Track:
             elif (boundary and rise is not None and rise >= 5):
                 # a charge done while the mouse slept or the service was down shows only its two ends
                 self.endSession(writer)
-                self.saveChargeAcross(previous, row, writer)
+                if (guessesCharges):
+                    self.saveChargeAcross(previous, row, writer)
                 self.startSession(row, previous, boundary, writer, DISCHARGE)
-            elif (not boundary and self.risesToCharge(rise)):
+            elif (not boundary and guessesCharges and self.risesToCharge(rise)):
                 self.endSession(writer)
                 self.startSession(row, previous, boundary, writer, CHARGE, inferred=True)
             else:
