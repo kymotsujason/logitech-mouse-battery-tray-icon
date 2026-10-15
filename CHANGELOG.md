@@ -2,6 +2,14 @@
 
 This file lists the changes in each release of Mouse Battery, newest first.
 
+## 1.2.2, 2026-10-14
+
+### Fixed
+
+- The number on the tray icon sits in the middle of the mouse, where 10% to 99% used to sit up to a pixel to the right.
+- A mouse read through UPower, such as the G703 LIGHTSPEED, no longer shows a charge in the battery window when its level creeps up without charging. Charges it already saved stay in the history.
+- The battery health text for a mouse read through UPower says tracking has started while drain waits to see the mouse sleep and wake.
+
 ## 1.2.1, 2026-10-11
 
 ### Added
