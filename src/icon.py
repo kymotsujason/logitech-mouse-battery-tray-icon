@@ -15,7 +15,7 @@ GRAY = "#8E8E93"
 # blocky digits drawn cell by cell, since a font at tray size let the hinter drop the tail that tells a 9 from an 8
 DIGITS = {
     "0": ["####", "#..#", "#..#", "#..#", "#..#", "#..#", "####"],
-    "1": ["..#.", ".##.", "..#.", "..#.", "..#.", "..#.", ".###"],
+    "1": [".#.", "##.", ".#.", ".#.", ".#.", ".#.", "###"],
     "2": ["####", "...#", "...#", "####", "#...", "#...", "####"],
     "3": ["####", "...#", "...#", ".###", "...#", "...#", "####"],
     "4": ["#..#", "#..#", "#..#", "####", "...#", "...#", "...#"],
@@ -94,6 +94,11 @@ def numberLayout(text, size):
     k = size / 22
     unit = max(1, round(k))
     columns = sum(len(glyphs[digit][0]) for digit in text) + len(text) - 1
+    # the body's center falls between two pixels, so a number an odd number of pixels wide sits half a pixel off, and a wider gap evens it
+    gap = 1
+    if (len(text) == 2 and columns * unit % 2 == 1):
+        gap = 2
+        columns += 1
     width = columns * unit
     left = round(11 * k) - width // 2
     top = round(14 * k) - rows * unit // 2
@@ -104,7 +109,7 @@ def numberLayout(text, size):
             for column, mark in enumerate(line):
                 if (mark == "#"):
                     cells.append(QRect(x + column * unit, top + row * unit, unit, unit))
-        x += (len(glyphs[digit][0]) + 1) * unit
+        x += (len(glyphs[digit][0]) + gap) * unit
     plate = QRect(left - unit, top - unit, width + 2 * unit, (rows + 2) * unit)
     return cells, plate
 

@@ -81,11 +81,14 @@ class IconTests(unittest.TestCase):
         for size in icon.ICON_SIZES:
             if (size < icon.NUMBER_MIN_SIZE):
                 continue
-            for text in ("8", "29", "100"):
+            for percent in range(101):
+                text = str(percent)
                 cells, plate = icon.numberLayout(text, size)
                 left = min(cell.left() for cell in cells)
                 right = max(cell.right() for cell in cells)
-                self.assertLessEqual(abs((left + right + 1) / 2 - 11 * size / 22), 1, (size, text))
+                # a lone 1 is three cells wide, so on an odd cell it can only sit half a cell off
+                allowed = cells[0].width() / 2 if text == "1" else 0
+                self.assertLessEqual(abs((left + right + 1) / 2 - 11 * size / 22), allowed, (size, text))
                 self.assertGreaterEqual(plate.left(), round(4 * size / 22), (size, text))
                 self.assertLessEqual(plate.right(), round(18 * size / 22) - 1, (size, text))
 
