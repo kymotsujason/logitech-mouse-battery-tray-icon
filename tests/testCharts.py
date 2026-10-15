@@ -529,7 +529,7 @@ class EnglishNameTests(ChartCase):
             self.assertEqual(charts.latestText(41.6, "h", "2026-03", self.at(10, 9, 12)), "42 h, Mar 2026")
             chart = self.make(charts.LevelChart())
             chart.setSlots([[self.at(3, 5), 20, 90, 1]], rangeName="all")
-            self.assertEqual(chart.hoverText(0), "February 2026, 20% to 90%, charged")
+            self.assertEqual(chart.hoverText(0), "March 2026, 20% to 90%, charged")
             chart.setSlots([[self.at(10, 5, 2), 62, None, None, False]])
             self.assertEqual(chart.hoverText(0), "Mon 02:00, 62%")
         finally:
