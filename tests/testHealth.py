@@ -203,7 +203,7 @@ class LineTests(unittest.TestCase):
         self.assertEqual(self.lines(large)[0], [(health.LEARNING, health.LARGE_STEPS_TEXT)])
 
     def testAUPowerMouseNotYetSeenSleepingIsToldWhenDrainStarts(self):
-        self.assertEqual(health.UPOWER_NO_SLEEP_TEXT, "Drain is measured once this mouse has been seen falling asleep. Charging speed already can.")
+        self.assertEqual(health.UPOWER_NO_SLEEP_TEXT, "Tracking has started. Drain is measured once this mouse has been seen falling asleep and waking up, and charging speed already is.")
         upowerValue = summary(wakeSupport=False, source=history.SOURCE_UPOWER)
         self.assertEqual(self.lines(upowerValue)[0], [(health.LEARNING, health.UPOWER_NO_SLEEP_TEXT)])
         hidppValue = summary(wakeSupport=False, source=history.SOURCE_HIDPP)
