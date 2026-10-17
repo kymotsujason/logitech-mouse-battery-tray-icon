@@ -437,6 +437,12 @@ class TitleButton(QWidget):
         self.update()
         super().leaveEvent(event)
 
+    def hideEvent(self, event):
+        # Qt sends no leave to a widget whose window hides under the cursor, so the close button would come back lit
+        self.hovered = False
+        self.pressed = False
+        super().hideEvent(event)
+
     def mousePressEvent(self, event):
         if (event.button() != Qt.MouseButton.LeftButton):
             return

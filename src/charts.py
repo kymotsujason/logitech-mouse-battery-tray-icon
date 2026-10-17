@@ -311,6 +311,11 @@ class LevelChart(Chart):
         self.hover = None
         self.update()
 
+    def hideEvent(self, event):
+        # a window that hides under the cursor sends no leave, so the readout would come back on the old bar
+        self.hover = None
+        super().hideEvent(event)
+
     def slotStart(self, index):
         end = self.slots[index][0]
         seconds = RANGE_SECONDS[self.rangeName]

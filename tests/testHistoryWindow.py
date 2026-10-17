@@ -1528,6 +1528,18 @@ class WindowTests(WindowCase):
         self.state(entry(reading=hidpp.BatteryReading(61, 0)))
         self.assertEqual(window.levelChart.hover, hovered)
 
+    def testClosingDropsTheLevelChartsReadout(self):
+        window = self.opened(entry())
+        QTest.qWaitForWindowExposed(window)
+        chart = window.levelChart
+        # the offscreen cursor is shared, so it's moved off first in case an earlier test left it on the same spot
+        QTest.mouseMove(window.windowHandle(), QPoint(4, 4))
+        QTest.mouseMove(window.windowHandle(), chart.mapTo(window, chart.area().center().toPoint()))
+        self.assertIsNotNone(chart.hover)
+        window.close()
+        window.open()
+        self.assertIsNone(chart.hover)
+
     def testPickingARangeAsksForItOnceAndSavesTheChoice(self):
         window = self.opened(entry())
         saved = []
@@ -2546,6 +2558,20 @@ class TitleStripTests(WindowCase):
         window.open()
         QTest.keyClick(window.titleButtons[2], Qt.Key.Key_Space)
         self.assertFalse(window.isVisible())
+
+    def testTheCloseButtonIsntLitWhenTheWindowComesBack(self):
+        window = self.opened(entry())
+        QTest.qWaitForWindowExposed(window)
+        button = window.titleButtons[2]
+        center = button.mapTo(window, button.rect().center())
+        QTest.mouseMove(window.windowHandle(), QPoint(4, 4))
+        QTest.mouseMove(window.windowHandle(), center)
+        self.assertTrue(button.hovered)
+        QTest.mouseClick(window.windowHandle(), Qt.MouseButton.LeftButton, pos=center)
+        self.assertFalse(window.isVisible())
+        window.open()
+        self.assertFalse(button.hovered)
+        self.assertFalse(button.pressed)
 
     def testADoubleClickOnEmptySpaceMaximizes(self):
         window = self.opened(entry())
