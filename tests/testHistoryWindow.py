@@ -2605,6 +2605,59 @@ class TitleStripTests(WindowCase):
         move.assert_not_called()
 
 
+class RoundedCornerTests(WindowCase):
+    def openedWithBlur(self):
+        self.library = mock.Mock()
+        getattr(self.library, historyWindow.AVAILABLE_SYMBOL).return_value = True
+        self.blur = mock.patch.object(historyWindow.ctypes, "CDLL", return_value=self.library)
+        self.desktop = mock.patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": "KDE"})
+        self.blur.start()
+        self.desktop.start()
+        self.addCleanup(self.blur.stop)
+        self.addCleanup(self.desktop.stop)
+        window = self.opened(entry())
+        QTest.qWaitForWindowExposed(window)
+        return window
+
+    def testTheBlurCoversTheRoundedShapeOnly(self):
+        window = self.openedWithBlur()
+        self.assertTrue(window.roundedCorners())
+        region = window.blurRegion()
+        self.assertFalse(region.contains(QPoint(1, 1)))
+        self.assertFalse(region.contains(QPoint(window.width() - 2, window.height() - 2)))
+        self.assertTrue(region.contains(QPoint(historyWindow.WINDOW_RADIUS, 1)))
+        self.assertTrue(region.contains(window.rect().center()))
+
+    def testTheCornersArentPainted(self):
+        window = self.openedWithBlur()
+        image = window.grab().toImage()
+        ratio = image.devicePixelRatio()
+        self.assertEqual(image.pixelColor(0, 0).alpha(), 0)
+        self.assertEqual(image.pixelColor(image.width() - 1, image.height() - 1).alpha(), 0)
+        # the backdrop is painted at three quarters over KWin's blur
+        self.assertGreater(image.pixelColor(round(historyWindow.WINDOW_RADIUS * 2 * ratio), round(4 * ratio)).alpha(), 150)
+
+    def testAResizeAsksForANewRegionAndTheSameSizeDoesnt(self):
+        window = self.openedWithBlur()
+        enable = getattr(self.library, historyWindow.BLUR_SYMBOL)
+        count = enable.call_count
+        window.resize(window.width(), window.height())
+        self.assertEqual(enable.call_count, count)
+        window.resize(window.width() + 40, window.height())
+        self.assertEqual(enable.call_count, count + 1)
+
+    def testAMaximizedWindowIsSquareAndBlursEverything(self):
+        window = self.openedWithBlur()
+        window.showMaximized()
+        self.assertFalse(window.roundedCorners())
+        self.assertTrue(window.blurRegion().isEmpty())
+
+    def testAWindowThatCantShowThroughStaysSquare(self):
+        with mock.patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": "GNOME"}):
+            window = self.opened(entry())
+        self.assertFalse(window.roundedCorners())
+
+
 class WindowShadowTests(unittest.TestCase):
     def testOutsideKdeNoShadowIsMade(self):
         with mock.patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": "GNOME"}):
@@ -2631,7 +2684,25 @@ class WindowShadowTests(unittest.TestCase):
         top = images["Top"]
         self.assertGreater(top.pixelColor(0, historyWindow.SHADOW_SIZE - 1).alpha(), top.pixelColor(0, 0).alpha())
         corner = images["BottomRight"]
-        self.assertGreater(corner.pixelColor(0, 0).alpha(), corner.pixelColor(historyWindow.SHADOW_SIZE - 1, historyWindow.SHADOW_SIZE - 1).alpha())
+        radius = historyWindow.WINDOW_RADIUS
+        far = historyWindow.SHADOW_SIZE + radius - 1
+        self.assertGreater(corner.pixelColor(radius, radius).alpha(), corner.pixelColor(far, far).alpha())
+
+    def testACornerTileReachesUnderTheCutCornerButNotTheWindow(self):
+        radius = historyWindow.WINDOW_RADIUS
+        corner = historyWindow.shadowImages(1.0)["BottomRight"]
+        self.assertEqual((corner.width(), corner.height()), (historyWindow.SHADOW_SIZE + radius,) * 2)
+        # the arc's center is the tile's top left, so a point near it is inside the window and one past the arc is in the cut corner
+        self.assertEqual(corner.pixelColor(1, 1).alpha(), 0)
+        self.assertGreater(corner.pixelColor(radius - 2, radius - 2).alpha(), 0)
+
+    def testACornerMeetsItsSidesWithoutASeam(self):
+        images = historyWindow.shadowImages(1.0)
+        radius = historyWindow.WINDOW_RADIUS
+        for offset in (2, 10):
+            side = images["Bottom"].pixelColor(0, offset).alpha()
+            corner = images["BottomRight"].pixelColor(0, radius + offset).alpha()
+            self.assertLessEqual(abs(side - corner), 6)
 
 
 if (__name__ == "__main__"):

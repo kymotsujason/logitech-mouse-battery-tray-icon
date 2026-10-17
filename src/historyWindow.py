@@ -35,6 +35,7 @@ TITLE_BUTTON_Y = 8
 TITLE_BUTTON_RIGHT = 10
 # how far in from the window's edge a press resizes it, since a window without a frame has no border to grab
 RESIZE_EDGE = 6
+WINDOW_RADIUS = 16
 SHADOW_SIZE = 28
 SHADOW_ALPHA = 0.32
 ICON_SIZE = 120
@@ -144,7 +145,7 @@ def desktopBlurAvailable():
     return bool(available(BLUR_BEHIND))
 
 
-def enableDesktopBlur(widget):
+def enableDesktopBlur(widget, region=None):
     enable = windowSystemCall(BLUR_SYMBOL)
     if (enable is None):
         return False
@@ -153,7 +154,8 @@ def enableDesktopBlur(widget):
         return False
     enable.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.c_void_p]
     enable.restype = None
-    region = QRegion()
+    # an empty region blurs behind the whole window
+    region = QRegion() if region is None else region
     enable(sip.unwrapinstance(handle), True, sip.unwrapinstance(region))
     return True
 
@@ -176,26 +178,41 @@ def keepTile(data):
     pass
 
 
-def shadowImage(width, height, ratio, gradient):
+def shadowImage(width, height, ratio, gradient, start=0.0, window=None):
     image = QImage(round(width * ratio), round(height * ratio), QImage.Format.Format_ARGB32_Premultiplied)
     image.fill(Qt.GlobalColor.transparent)
     image.setDevicePixelRatio(ratio)
+    # the shadow is darkest at the window's edge, which sits at start along the gradient
+    gradient.setColorAt(0.0, QColor(0, 0, 0, round(255 * SHADOW_ALPHA)))
     for stop, share in ((0.0, 1.0), (0.2, 0.65), (0.45, 0.3), (0.7, 0.1), (1.0, 0.0)):
-        gradient.setColorAt(stop, QColor(0, 0, 0, round(255 * SHADOW_ALPHA * share)))
+        gradient.setColorAt(start + stop * (1.0 - start), QColor(0, 0, 0, round(255 * SHADOW_ALPHA * share)))
     painter = QPainter(image)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     painter.fillRect(QRectF(0, 0, width, height), gradient)
+    if (window is not None):
+        # KWin draws a corner's tile under the window too, so the window's own shape is cut out of it and the glass never shows the shadow through
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationOut)
+        painter.fillPath(glass.roundedPath(window, WINDOW_RADIUS), QColor(0, 0, 0))
     painter.end()
     return image
 
 
 def shadowImages(ratio):
-    # each corner fades out from the window's corner and each side from the window's edge, and KWin stretches the sides along the window
-    size = SHADOW_SIZE
+    # each corner fades out from its arc and each side from the window's edge, and KWin stretches the sides along the window
+    size, radius = SHADOW_SIZE, WINDOW_RADIUS
+    # a corner's tile reaches the radius into the window, under the corner the rounding cuts away
+    corner = size + radius
+    edge = radius / corner
+    big = 2 * corner
+
+    def cornerImage(center, window):
+        return shadowImage(corner, corner, ratio, QRadialGradient(center, corner), edge, window)
+
     return {
-        "TopLeft": shadowImage(size, size, ratio, QRadialGradient(QPointF(size, size), size)),
-        "TopRight": shadowImage(size, size, ratio, QRadialGradient(QPointF(0, size), size)),
-        "BottomRight": shadowImage(size, size, ratio, QRadialGradient(QPointF(0, 0), size)),
-        "BottomLeft": shadowImage(size, size, ratio, QRadialGradient(QPointF(size, 0), size)),
+        "TopLeft": cornerImage(QPointF(corner, corner), QRectF(size, size, big, big)),
+        "TopRight": cornerImage(QPointF(0, corner), QRectF(radius - big, size, big, big)),
+        "BottomRight": cornerImage(QPointF(0, 0), QRectF(radius - big, radius - big, big, big)),
+        "BottomLeft": cornerImage(QPointF(corner, 0), QRectF(size, radius - big, big, big)),
         "Top": shadowImage(1, size, ratio, QLinearGradient(QPointF(0, size), QPointF(0, 0))),
         "Bottom": shadowImage(1, size, ratio, QLinearGradient(QPointF(0, 0), QPointF(0, size))),
         "Left": shadowImage(size, 1, ratio, QLinearGradient(QPointF(size, 0), QPointF(0, 0))),
@@ -1183,6 +1200,9 @@ class HistoryWindow(QWidget):
         self.dragFrom = None
         self.cursorEdges = Qt.Edge(0)
         self.windowShadow = WindowShadow()
+        self.blurAsked = False
+        # the size and corners the blur region was last made for
+        self.blurShape = None
         self.portalScheme = 0
         self.reducedMotion = 0
         self.motionFactor = 1.0
@@ -1338,7 +1358,9 @@ class HistoryWindow(QWidget):
             self.show()
             self.watchScreen()
             # the blur is asked for once the window has a handle, and a window without it keeps its painted backdrop opaque
-            if (enableDesktopBlur(self)):
+            self.blurShape = None
+            self.blurAsked = self.askForBlur()
+            if (self.blurAsked):
                 self.blurred = desktopBlurAvailable()
                 if (not self.blurred):
                     # KWin's answer comes after the event loop has run once, measured at under 20 ms
@@ -2009,6 +2031,28 @@ class HistoryWindow(QWidget):
         self.placeScrollBars(sidebarWidth, viewWidth, width, contentHeight)
         self.placeTitleButtons()
 
+    def roundedCorners(self):
+        # a window that can't show through keeps square corners, as does one filling the screen
+        return self.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) and not self.isMaximized() and not self.isFullScreen()
+
+    def windowPath(self):
+        return glass.roundedPath(QRectF(self.rect()), WINDOW_RADIUS)
+
+    def blurRegion(self):
+        if (not self.roundedCorners()):
+            return QRegion()
+        # KWin blurs the rounded shape only, so the cut corners stay clear
+        return QRegion(self.windowPath().toFillPolygon().toPolygon())
+
+    def askForBlur(self):
+        shape = (self.size(), self.roundedCorners())
+        if (shape == self.blurShape):
+            return True
+        if (not enableDesktopBlur(self, self.blurRegion())):
+            return False
+        self.blurShape = shape
+        return True
+
     def updateShadow(self):
         # a maximized window has no edges to cast a shadow past
         if (self.isVisible() and not self.isMaximized() and not self.isFullScreen()):
@@ -2028,6 +2072,8 @@ class HistoryWindow(QWidget):
                 button.nameForState()
             self.setEdgeCursor(Qt.Edge(0))
             self.updateShadow()
+            if (self.blurAsked):
+                self.askForBlur()
         super().changeEvent(event)
 
     def onChart(self, point):
@@ -2229,12 +2275,16 @@ class HistoryWindow(QWidget):
     def resizeEvent(self, event):
         self.choiceMenu.hide()
         self.layoutParts()
+        if (self.blurAsked):
+            self.askForBlur()
         super().resizeEvent(event)
 
     def paintEvent(self, event):
         self.ensureFrost()
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if (self.roundedCorners()):
+            painter.setClipPath(self.windowPath())
         if (self.blurred):
             # the desktop shows through, blurred by KWin, under the glows at three quarters
             painter.setOpacity(0.75)
@@ -2247,7 +2297,7 @@ class HistoryWindow(QWidget):
             glass.paintPanel(painter, sidebar, 18, self.frostImage, theme)
         offset = SIDEBAR_WIDTH if self.sidebar.isVisibleTo(self) else 0
         # the panels slide with the content and stop at the pane's edge
-        painter.setClipRect(QRectF(offset, 0, self.width() - offset, self.height()))
+        painter.setClipRect(QRectF(offset, 0, self.width() - offset, self.height()), Qt.ClipOperation.IntersectClip)
         painter.translate(-self.scrollX, -self.scrollY)
         rects = {"health": (getattr(self, "healthRect", None), 18), "segments": (getattr(self, "segmentRect", None), SEGMENT_HEIGHT / 2), "chart": (getattr(self, "chartRect", None), 18), "form": (getattr(self, "formRect", None), 18)}
         for name in self.panels:
