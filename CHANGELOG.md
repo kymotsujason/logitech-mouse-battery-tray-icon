@@ -2,6 +2,13 @@
 
 This file lists the changes in each release of Mouse Battery, newest first.
 
+## 1.2.4, 2026-10-17
+
+### Fixed
+
+- The close button in the battery window no longer stays red when the window opens again after you closed it with that button.
+- The level chart no longer shows the readout for the bar the cursor was on when the window closed.
+
 ## 1.2.3, 2026-10-17
 
 ### Changed
