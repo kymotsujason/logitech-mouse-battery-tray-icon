@@ -10,7 +10,7 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 from PyQt6 import sip
 from PyQt6.QtCore import QAbstractAnimation, QEasingCurve, QEvent, QObject, QPoint, QPointF, QRectF, QSize, QSizeF, Qt, pyqtSignal
 from PyQt6.QtDBus import QDBusPendingCall, QDBusVariant
-from PyQt6.QtGui import QColor, QFocusEvent, QIcon, QImage, QImageReader, QPalette, QRegion, QWheelEvent
+from PyQt6.QtGui import QColor, QFocusEvent, QIcon, QImage, QImageReader, QPalette, QRegion, QWheelEvent, QWindow
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QMenu, QWidget
 
@@ -2500,6 +2500,138 @@ class WindowBlurTests(WindowCase):
     def testABlurThatNeverComesKeepsTheBackdropOpaque(self):
         window, intervals = self.openWithBlur([False, False, False])
         self.assertFalse(window.blurred)
+
+
+class TitleStripTests(WindowCase):
+    def stripPoint(self, window):
+        # empty space in the title strip, left of the buttons
+        return QPoint(window.titleButtons[0].x() - 60, historyWindow.TITLE_HEIGHT // 2)
+
+    def testTheWindowAsksForNoFrame(self):
+        self.assertTrue(self.window.windowFlags() & Qt.WindowType.FramelessWindowHint)
+        self.assertEqual(self.window.windowTitle(), "Mouse Battery")
+
+    def testTheButtonsSitInTheTopRightAboveTheContent(self):
+        window = self.opened(entry())
+        names = [button.accessibleName() for button in window.titleButtons]
+        self.assertEqual(names, ["Minimize", "Maximize", "Close"])
+        close = window.titleButtons[2].geometry()
+        self.assertEqual(close.right() + 1, window.width() - historyWindow.TITLE_BUTTON_RIGHT)
+        self.assertEqual(close.top(), historyWindow.TITLE_BUTTON_Y)
+        for button in window.titleButtons:
+            self.assertLessEqual(button.geometry().bottom(), window.healthRect.top())
+        self.assertEqual(window.healthRect.top(), historyWindow.TOP_MARGIN)
+
+    def testTheMaximizeButtonTogglesAndRenamesItself(self):
+        window = self.opened(entry())
+        button = window.titleButtons[1]
+        QTest.mouseClick(button, Qt.MouseButton.LeftButton)
+        self.assertTrue(window.isMaximized())
+        self.assertEqual(button.accessibleName(), "Restore")
+        QTest.mouseClick(button, Qt.MouseButton.LeftButton)
+        self.assertFalse(window.isMaximized())
+        self.assertEqual(button.accessibleName(), "Maximize")
+
+    def testAPressThatLeavesTheButtonDoesNothing(self):
+        window = self.opened(entry())
+        button = window.titleButtons[2]
+        QTest.mousePress(button, Qt.MouseButton.LeftButton)
+        QTest.mouseRelease(button, Qt.MouseButton.LeftButton, pos=QPoint(button.width() + 10, 4))
+        self.assertTrue(window.isVisible())
+
+    def testTheCloseButtonClosesAndTheKeysPressIt(self):
+        window = self.opened(entry())
+        QTest.mouseClick(window.titleButtons[2], Qt.MouseButton.LeftButton)
+        self.assertFalse(window.isVisible())
+        window.open()
+        QTest.keyClick(window.titleButtons[2], Qt.Key.Key_Space)
+        self.assertFalse(window.isVisible())
+
+    def testADoubleClickOnEmptySpaceMaximizes(self):
+        window = self.opened(entry())
+        QTest.qWaitForWindowExposed(window)
+        QTest.mouseDClick(window.windowHandle(), Qt.MouseButton.LeftButton, pos=self.stripPoint(window))
+        self.assertTrue(window.isMaximized())
+
+    def testADoubleClickOnTheChartLeavesTheWindowAlone(self):
+        window = self.opened(entry())
+        QTest.qWaitForWindowExposed(window)
+        QTest.mouseDClick(window.windowHandle(), Qt.MouseButton.LeftButton, pos=window.levelChart.mapTo(window, window.levelChart.rect().center()))
+        self.assertFalse(window.isMaximized())
+
+    def testADragPastTheDistanceMovesTheWindowAndAClickDoesnt(self):
+        window = self.opened(entry())
+        QTest.qWaitForWindowExposed(window)
+        start = self.stripPoint(window)
+        with mock.patch.object(QWindow, "startSystemMove") as move:
+            QTest.mousePress(window.windowHandle(), Qt.MouseButton.LeftButton, pos=start)
+            QTest.mouseRelease(window.windowHandle(), Qt.MouseButton.LeftButton, pos=start)
+            move.assert_not_called()
+            QTest.mousePress(window.windowHandle(), Qt.MouseButton.LeftButton, pos=start)
+            QTest.mouseMove(window.windowHandle(), start + QPoint(QApplication.startDragDistance() + 4, 0))
+            move.assert_called_once_with()
+            QTest.mouseRelease(window.windowHandle(), Qt.MouseButton.LeftButton, pos=start)
+
+    def testThePlaceBetweenTheMiceMovesTheWindow(self):
+        window = self.opened(entry(), entry(key="11111111", name="MX Master 3S"))
+        QTest.qWaitForWindowExposed(window)
+        start = QPoint(historyWindow.SIDEBAR_WIDTH // 2, window.height() - 60)
+        with mock.patch.object(QWindow, "startSystemMove") as move:
+            QTest.mousePress(window.windowHandle(), Qt.MouseButton.LeftButton, pos=start)
+            QTest.mouseMove(window.windowHandle(), start + QPoint(0, -(QApplication.startDragDistance() + 4)))
+            QTest.mouseRelease(window.windowHandle(), Qt.MouseButton.LeftButton, pos=start)
+        move.assert_called_once_with()
+        self.assertEqual(window.selected, "02bc524c")
+
+    def testTheEdgesResizeUnlessTheWindowIsMaximized(self):
+        window = self.opened(entry())
+        width, height = window.width(), window.height()
+        self.assertEqual(window.edgesAt(QPointF(2, 2)), Qt.Edge.LeftEdge | Qt.Edge.TopEdge)
+        self.assertEqual(window.edgesAt(QPointF(width - 2, height / 2)), Qt.Edge.RightEdge)
+        self.assertEqual(window.edgesAt(QPointF(width / 2, height - 1)), Qt.Edge.BottomEdge)
+        self.assertEqual(window.edgesAt(QPointF(width / 2, height / 2)), Qt.Edge(0))
+        window.showMaximized()
+        self.assertEqual(window.edgesAt(QPointF(2, 2)), Qt.Edge(0))
+
+    def testAPressOnTheEdgeResizesInsteadOfReachingTheWidgets(self):
+        window = self.opened(entry())
+        QTest.qWaitForWindowExposed(window)
+        with mock.patch.object(QWindow, "startSystemResize") as resize, mock.patch.object(QWindow, "startSystemMove") as move:
+            QTest.mouseMove(window.windowHandle(), QPoint(window.width() - 2, window.height() - 2))
+            self.assertEqual(window.cursor().shape(), Qt.CursorShape.SizeFDiagCursor)
+            QTest.mousePress(window.windowHandle(), Qt.MouseButton.LeftButton, pos=QPoint(window.width() - 2, window.height() - 2))
+            QTest.mouseRelease(window.windowHandle(), Qt.MouseButton.LeftButton, pos=QPoint(window.width() - 2, window.height() - 2))
+        resize.assert_called_once_with(Qt.Edge.RightEdge | Qt.Edge.BottomEdge)
+        move.assert_not_called()
+
+
+class WindowShadowTests(unittest.TestCase):
+    def testOutsideKdeNoShadowIsMade(self):
+        with mock.patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": "GNOME"}):
+            self.assertFalse(historyWindow.WindowShadow().show(QWindow(), 1.0))
+
+    def testTheShadowGetsEightTilesAndIsDestroyedOnHide(self):
+        library = mock.Mock()
+        window = QWindow()
+        with mock.patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": "KDE"}), mock.patch.object(historyWindow.ctypes, "CDLL", return_value=library):
+            shadow = historyWindow.WindowShadow()
+            self.assertTrue(shadow.show(window, 2.0))
+            self.assertTrue(shadow.show(window, 2.0))
+            shadow.hide()
+        getattr(library, "_ZN13KWindowShadowC1EP7QObject").assert_called_once()
+        self.assertEqual(getattr(library, "_ZN17KWindowShadowTileC1Ev").call_count, 8)
+        self.assertEqual(getattr(library, "_ZN13KWindowShadow6createEv").call_count, 2)
+        getattr(library, "_ZN13KWindowShadow7destroyEv").assert_called_once()
+        for side in historyWindow.SHADOW_SIDES:
+            name = "set" + side + "Tile"
+            getattr(library, "_ZN13KWindowShadow" + str(len(name)) + name + "E14QSharedPointerI17KWindowShadowTileE").assert_called_once()
+
+    def testTheTilesFadeOutwardsFromTheWindow(self):
+        images = historyWindow.shadowImages(1.0)
+        top = images["Top"]
+        self.assertGreater(top.pixelColor(0, historyWindow.SHADOW_SIZE - 1).alpha(), top.pixelColor(0, 0).alpha())
+        corner = images["BottomRight"]
+        self.assertGreater(corner.pixelColor(0, 0).alpha(), corner.pixelColor(historyWindow.SHADOW_SIZE - 1, historyWindow.SHADOW_SIZE - 1).alpha())
 
 
 if (__name__ == "__main__"):

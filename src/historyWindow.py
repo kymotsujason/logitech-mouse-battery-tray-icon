@@ -4,9 +4,9 @@ import os
 import time
 
 from PyQt6 import sip
-from PyQt6.QtCore import QAbstractAnimation, QElapsedTimer, QPoint, QPointF, QRectF, QSize, QSizeF, Qt, QTimer, QVariantAnimation, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QAbstractAnimation, QElapsedTimer, QEvent, QMargins, QPoint, QPointF, QRectF, QSize, QSizeF, Qt, QTimer, QVariantAnimation, pyqtSignal, pyqtSlot
 from PyQt6.QtDBus import QDBusMessage
-from PyQt6.QtGui import QColor, QFont, QFontMetricsF, QIcon, QPainter, QPen, QPixmap, QRegion
+from PyQt6.QtGui import QColor, QFont, QFontMetricsF, QIcon, QImage, QLinearGradient, QPainter, QPen, QPixmap, QRadialGradient, QRegion
 from PyQt6.QtWidgets import QApplication, QGraphicsOpacityEffect, QLabel, QScrollBar, QWidget
 
 import charts
@@ -22,10 +22,21 @@ import serviceClient
 import serviceState
 
 PANE_WIDTH = 760
-BASE_HEIGHT = 560
-MAX_HEIGHT = 640
+BASE_HEIGHT = 584
+MAX_HEIGHT = 664
 SIDEBAR_WIDTH = 232
 MARGIN = 24
+# the window draws its own title strip, with the buttons in it, above the pane's content
+TITLE_HEIGHT = 40
+TOP_MARGIN = TITLE_HEIGHT + 8
+TITLE_BUTTON_SIZE = 28
+TITLE_BUTTON_GAP = 4
+TITLE_BUTTON_Y = 8
+TITLE_BUTTON_RIGHT = 10
+# how far in from the window's edge a press resizes it, since a window without a frame has no border to grab
+RESIZE_EDGE = 6
+SHADOW_SIZE = 28
+SHADOW_ALPHA = 0.32
 ICON_SIZE = 120
 HEALTH_WIDTH = 356
 HEALTH_MIN_HEIGHT = 112
@@ -37,11 +48,9 @@ ROW_HEIGHT = 46
 CHART_HEIGHT = 238
 CHART_MIN_HEIGHT = 160
 # the layout's fixed parts, top margin to bottom margin, around the top row and the chart
-FIXED_HEIGHT = MARGIN + 20 + SEGMENT_HEIGHT + 14 + 16 + FORM_HEIGHT + MARGIN
+FIXED_HEIGHT = TOP_MARGIN + 20 + SEGMENT_HEIGHT + 14 + 16 + FORM_HEIGHT + MARGIN
 # the narrowest pane that keeps the name and status clear of the health box
 PANE_MIN_WIDTH = MARGIN + ICON_SIZE + 12 + 120 + 12 + HEALTH_WIDTH + MARGIN
-# a usual title bar, for the room the screen leaves before the window has shown and its frame is known
-FRAME_ALLOWANCE = 40
 FETCH_GAP_SECONDS = 30
 # the service writes a UPower reading once its wake set wait is over, and holds a change of the percent alone until HOLD_SECONDS after its last write, so a fetch after a change waits out both and a bit for the GetAll each side makes
 UPOWER_SETTLE_SECONDS = history.WAKE_SET_SECONDS + history.HOLD_SECONDS + 3
@@ -147,6 +156,120 @@ def enableDesktopBlur(widget):
     region = QRegion()
     enable(sip.unwrapinstance(handle), True, sip.unwrapinstance(region))
     return True
+
+
+SHADOW_SIDES = ("Left", "TopLeft", "Top", "TopRight", "Right", "BottomRight", "Bottom", "BottomLeft")
+
+
+class SharedPointer(ctypes.Structure):
+    # QSharedPointer's two members, in the order qsharedpointer_impl.h gives them
+    _fields_ = [("value", ctypes.c_void_p), ("d", ctypes.c_void_p)]
+
+
+class RefCount(ctypes.Structure):
+    # QtSharedPointer::ExternalRefCountData
+    _fields_ = [("weakref", ctypes.c_int), ("strongref", ctypes.c_int), ("destroyer", ctypes.c_void_p)]
+
+
+@ctypes.CFUNCTYPE(None, ctypes.c_void_p)
+def keepTile(data):
+    pass
+
+
+def shadowImage(width, height, ratio, gradient):
+    image = QImage(round(width * ratio), round(height * ratio), QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(Qt.GlobalColor.transparent)
+    image.setDevicePixelRatio(ratio)
+    for stop, share in ((0.0, 1.0), (0.2, 0.65), (0.45, 0.3), (0.7, 0.1), (1.0, 0.0)):
+        gradient.setColorAt(stop, QColor(0, 0, 0, round(255 * SHADOW_ALPHA * share)))
+    painter = QPainter(image)
+    painter.fillRect(QRectF(0, 0, width, height), gradient)
+    painter.end()
+    return image
+
+
+def shadowImages(ratio):
+    # each corner fades out from the window's corner and each side from the window's edge, and KWin stretches the sides along the window
+    size = SHADOW_SIZE
+    return {
+        "TopLeft": shadowImage(size, size, ratio, QRadialGradient(QPointF(size, size), size)),
+        "TopRight": shadowImage(size, size, ratio, QRadialGradient(QPointF(0, size), size)),
+        "BottomRight": shadowImage(size, size, ratio, QRadialGradient(QPointF(0, 0), size)),
+        "BottomLeft": shadowImage(size, size, ratio, QRadialGradient(QPointF(size, 0), size)),
+        "Top": shadowImage(1, size, ratio, QLinearGradient(QPointF(0, size), QPointF(0, 0))),
+        "Bottom": shadowImage(1, size, ratio, QLinearGradient(QPointF(0, 0), QPointF(0, size))),
+        "Left": shadowImage(size, 1, ratio, QLinearGradient(QPointF(size, 0), QPointF(0, 0))),
+        "Right": shadowImage(size, 1, ratio, QLinearGradient(QPointF(0, 0), QPointF(size, 0))),
+    }
+
+
+class WindowShadow:
+    # the window has no frame, so KWin draws no shadow for it unless the window hands it one through KWindowShadow, which has no Python bindings either
+    def __init__(self):
+        self.shadow = None
+        self.ratio = None
+        # the buffers and images KWindowSystem points into stay alive as long as the shadow
+        self.kept = []
+
+    def call(self, symbol, restype, *argtypes):
+        function = windowSystemCall(symbol)
+        if (function is None):
+            return None
+        function.argtypes = list(argtypes)
+        function.restype = restype
+        return function
+
+    def make(self, handle, ratio):
+        construct = self.call("_ZN13KWindowShadowC1EP7QObject", None, ctypes.c_void_p, ctypes.c_void_p)
+        makeTile = self.call("_ZN17KWindowShadowTileC1Ev", None, ctypes.c_void_p)
+        setImage = self.call("_ZN17KWindowShadowTile8setImageERK6QImage", None, ctypes.c_void_p, ctypes.c_void_p)
+        setPadding = self.call("_ZN13KWindowShadow10setPaddingERK8QMargins", None, ctypes.c_void_p, ctypes.c_void_p)
+        setWindow = self.call("_ZN13KWindowShadow9setWindowEP7QWindow", None, ctypes.c_void_p, ctypes.c_void_p)
+        setters = {}
+        for side in SHADOW_SIDES:
+            name = "set" + side + "Tile"
+            setters[side] = self.call("_ZN13KWindowShadow" + str(len(name)) + name + "E14QSharedPointerI17KWindowShadowTileE", None, ctypes.c_void_p, ctypes.c_void_p)
+        if (None in (construct, makeTile, setImage, setPadding, setWindow) or None in setters.values()):
+            return False
+        # the objects live in buffers comfortably larger than the classes, which hold a QObject and a private pointer or the private pointer alone
+        shadow = ctypes.create_string_buffer(256)
+        construct(ctypes.addressof(shadow), None)
+        kept = [shadow]
+        for side, image in shadowImages(ratio).items():
+            tile = ctypes.create_string_buffer(64)
+            makeTile(ctypes.addressof(tile))
+            setImage(ctypes.addressof(tile), sip.unwrapinstance(image))
+            # a reference count that never reaches zero, so nothing ever tries to free the Python owned tile
+            count = RefCount(1 << 24, 1 << 24, ctypes.cast(keepTile, ctypes.c_void_p).value)
+            pointer = SharedPointer(ctypes.addressof(tile), ctypes.addressof(count))
+            # a QSharedPointer passed by value goes as the address of the caller's copy
+            setters[side](ctypes.addressof(shadow), ctypes.addressof(pointer))
+            kept += [tile, image, count, pointer]
+        padding = QMargins(SHADOW_SIZE, SHADOW_SIZE, SHADOW_SIZE, SHADOW_SIZE)
+        setPadding(ctypes.addressof(shadow), sip.unwrapinstance(padding))
+        setWindow(ctypes.addressof(shadow), sip.unwrapinstance(handle))
+        self.shadow = shadow
+        self.ratio = ratio
+        # an older shadow's buffers stay too, since KWindowSystem may still hold connections into them
+        self.kept += kept
+        return True
+
+    def show(self, handle, ratio):
+        if (handle is None):
+            return False
+        if (self.shadow is None or ratio != self.ratio):
+            self.hide()
+            if (not self.make(handle, ratio)):
+                return False
+        create = self.call("_ZN13KWindowShadow6createEv", ctypes.c_bool, ctypes.c_void_p)
+        return create is not None and bool(create(ctypes.addressof(self.shadow)))
+
+    def hide(self):
+        if (self.shadow is None):
+            return
+        destroy = self.call("_ZN13KWindowShadow7destroyEv", None, ctypes.c_void_p)
+        if (destroy is not None):
+            destroy(ctypes.addressof(self.shadow))
 
 
 def label(parent, size, weight=QFont.Weight.Normal, wrap=False):
@@ -263,6 +386,112 @@ def paintFocusRing(painter, rect, radius):
     painter.setPen(QPen(QColor(glass.BLUE), 2))
     painter.setBrush(Qt.BrushStyle.NoBrush)
     painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), radius, radius)
+
+
+class TitleButton(QWidget):
+    clicked = pyqtSignal()
+
+    def __init__(self, window, kind):
+        super().__init__(window)
+        self.owner = window
+        self.kind = kind
+        self.hovered = False
+        self.pressed = False
+        self.keyFocus = False
+        self.setFixedSize(TITLE_BUTTON_SIZE, TITLE_BUTTON_SIZE)
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self.nameForState()
+
+    def nameForState(self):
+        if (self.kind == "maximize"):
+            self.setAccessibleName("Restore" if self.owner.isMaximized() else "Maximize")
+        else:
+            self.setAccessibleName(capitalized(self.kind))
+        self.setToolTip(self.accessibleName())
+        self.update()
+
+    def enterEvent(self, event):
+        self.hovered = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.hovered = False
+        self.update()
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        if (event.button() != Qt.MouseButton.LeftButton):
+            return
+        self.pressed = True
+        self.update()
+
+    def mouseReleaseEvent(self, event):
+        if (event.button() != Qt.MouseButton.LeftButton or not self.pressed):
+            return
+        self.pressed = False
+        self.update()
+        if (self.rect().contains(event.position().toPoint())):
+            self.clicked.emit()
+
+    def mouseDoubleClickEvent(self, event):
+        # a quick second click is a second press, never the window's double click
+        self.mousePressEvent(event)
+
+    def focusInEvent(self, event):
+        self.keyFocus = isKeyFocus(event)
+        super().focusInEvent(event)
+
+    def focusOutEvent(self, event):
+        self.keyFocus = False
+        super().focusOutEvent(event)
+
+    def keyPressEvent(self, event):
+        if (event.key() in (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter)):
+            self.clicked.emit()
+        else:
+            super().keyPressEvent(event)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        theme = self.owner.theme
+        rect = QRectF(self.rect())
+        glyph = QColor(theme.text)
+        if (self.hovered or self.pressed):
+            painter.setPen(Qt.PenStyle.NoPen)
+            if (self.kind == "close"):
+                fill = QColor(theme.red)
+                fill.setAlphaF(0.75 if self.pressed else 1.0)
+                glyph = QColor("#FFFFFF")
+            else:
+                fill = glass.rgba(theme.grid)
+                if (self.pressed):
+                    fill.setAlphaF(min(1.0, fill.alphaF() * 2))
+            painter.setBrush(fill)
+            painter.drawEllipse(rect.adjusted(1, 1, -1, -1))
+        pen = QPen(glyph, 1.3)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        center = rect.center()
+        x, y = center.x(), center.y()
+        if (self.kind == "minimize"):
+            painter.drawLine(QPointF(x - 5, y), QPointF(x + 5, y))
+        elif (self.kind == "close"):
+            painter.drawLine(QPointF(x - 4.5, y - 4.5), QPointF(x + 4.5, y + 4.5))
+            painter.drawLine(QPointF(x - 4.5, y + 4.5), QPointF(x + 4.5, y - 4.5))
+        elif (self.owner.isMaximized()):
+            # the restore glyph, a window in front of another
+            painter.drawRoundedRect(QRectF(x - 5, y - 3, 8, 8), 1.5, 1.5)
+            painter.drawLine(QPointF(x - 2, y - 5), QPointF(x + 3.5, y - 5))
+            painter.drawLine(QPointF(x + 5, y - 3.5), QPointF(x + 5, y + 2))
+            painter.drawArc(QRectF(x + 2, y - 5, 3, 3), 0, 90 * 16)
+        else:
+            painter.drawRoundedRect(QRectF(x - 5, y - 5, 10, 10), 1.5, 1.5)
+        if (self.hasFocus() and self.keyFocus):
+            paintFocusRing(painter, rect, rect.height() / 2)
 
 
 class SegmentedControl(QWidget):
@@ -865,6 +1094,14 @@ class Sidebar(QWidget):
             if (self.rowRect(index).contains(event.position())):
                 self.picked.emit(row[0])
                 return
+        # a press between the rows goes on to the window, which moves on it
+        event.ignore()
+
+    def mouseDoubleClickEvent(self, event):
+        if (any(self.rowRect(index).contains(event.position()) for index in range(len(self.rows)))):
+            self.mousePressEvent(event)
+        else:
+            event.ignore()
 
     def focusInEvent(self, event):
         self.keyFocus = isKeyFocus(event)
@@ -941,6 +1178,11 @@ class HistoryWindow(QWidget):
         self.lineFor = lineFor
         self.iconStateFor = iconStateFor
         self.setWindowTitle("Mouse Battery")
+        # the window draws its own title strip and buttons, while the title still names it in the task manager and to a screen reader
+        self.setWindowFlag(Qt.WindowType.FramelessWindowHint)
+        self.dragFrom = None
+        self.cursorEdges = Qt.Edge(0)
+        self.windowShadow = WindowShadow()
         self.portalScheme = 0
         self.reducedMotion = 0
         self.motionFactor = 1.0
@@ -1068,6 +1310,10 @@ class HistoryWindow(QWidget):
         self.popup.setParent(self.content)
         self.popup.setSeconds(sleepCheckSeconds)
         self.popup.picked.connect(self.sleepCheckChanged.emit)
+        self.titleButtons = [TitleButton(self, kind) for kind in ("minimize", "maximize", "close")]
+        self.titleButtons[0].clicked.connect(self.showMinimized)
+        self.titleButtons[1].clicked.connect(self.toggleMaximized)
+        self.titleButtons[2].clicked.connect(self.close)
         self.choiceMenu = ChoiceMenu(self)
         self.message = label(self.content, 13, wrap=True)
         self.message.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1102,6 +1348,7 @@ class HistoryWindow(QWidget):
                 self.blurred = False
                 self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
                 self.update()
+            self.updateShadow()
         else:
             self.show()
         self.refresh()
@@ -1719,24 +1966,24 @@ class HistoryWindow(QWidget):
         contentHeight = max(self.height(), FIXED_HEIGHT + top + CHART_MIN_HEIGHT)
         self.pane.setGeometry(sidebarWidth, 0, viewWidth, self.height())
         self.content.resize(width, contentHeight)
-        self.mouseIcon.move(MARGIN - 6, MARGIN)
+        self.mouseIcon.move(MARGIN - 6, TOP_MARGIN)
         textX = MARGIN + ICON_SIZE + 12
         healthX = width - MARGIN - HEALTH_WIDTH
         # a pane narrower than designed takes the room out of the text, never out of the health box
         textWidth = min(210, healthX - textX - 12)
-        self.nameLabel.setGeometry(textX, MARGIN + 10, textWidth, 18)
-        self.levelLabel.setGeometry(textX - 2, MARGIN + 28, textWidth + 10, 50)
-        self.statusLabel.setGeometry(textX, MARGIN + 80, textWidth, 40)
-        self.healthRect = QRectF(healthX, MARGIN, HEALTH_WIDTH, healthHeight)
-        self.healthTitle.setGeometry(int(healthX + 18), MARGIN + 12, 200, 18)
-        self.symbol.move(int(healthX + 18), MARGIN + 40)
-        y = MARGIN + 38
+        self.nameLabel.setGeometry(textX, TOP_MARGIN + 10, textWidth, 18)
+        self.levelLabel.setGeometry(textX - 2, TOP_MARGIN + 28, textWidth + 10, 50)
+        self.statusLabel.setGeometry(textX, TOP_MARGIN + 80, textWidth, 40)
+        self.healthRect = QRectF(healthX, TOP_MARGIN, HEALTH_WIDTH, healthHeight)
+        self.healthTitle.setGeometry(int(healthX + 18), TOP_MARGIN + 12, 200, 18)
+        self.symbol.move(int(healthX + 18), TOP_MARGIN + 40)
+        y = TOP_MARGIN + 38
         for index, widget in enumerate(self.lineLabels):
             height = widget.heightForWidth(HEALTH_WIDTH - 60) if widget.text() else 0
             widget.setGeometry(int(healthX + 44), y, HEALTH_WIDTH - 60, max(0, height))
             y += height + 4 if height else 0
         self.refreshLabel.setGeometry(int(healthX + 44), y, HEALTH_WIDTH - 60, self.refreshLabel.heightForWidth(HEALTH_WIDTH - 60) if self.refreshLabel.text() else 0)
-        segmentY = MARGIN + top + 20
+        segmentY = TOP_MARGIN + top + 20
         self.segments.move(int((width - self.segments.width()) / 2), segmentY)
         self.segmentRect = QRectF((width - self.segments.width()) / 2, segmentY, self.segments.width(), SEGMENT_HEIGHT)
         chartY = segmentY + SEGMENT_HEIGHT + 14
@@ -1745,7 +1992,7 @@ class HistoryWindow(QWidget):
         for chart in self.charts:
             chart.setGeometry(self.chartRect.toRect())
         self.rangeControl.move(int(self.chartRect.right() - 12 - self.rangeControl.width()), int(self.chartRect.y() + 6))
-        self.message.setGeometry(MARGIN, MARGIN + TOP_ROW + 20, width - 2 * MARGIN, chartY + chartHeight - MARGIN - TOP_ROW - 20)
+        self.message.setGeometry(MARGIN, TOP_MARGIN + TOP_ROW + 20, width - 2 * MARGIN, chartY + chartHeight - TOP_MARGIN - TOP_ROW - 20)
         formY = chartY + chartHeight + 16
         self.formRect = QRectF(MARGIN, formY, width - 2 * MARGIN, FORM_HEIGHT)
         half = (width - 2 * MARGIN) / 2
@@ -1758,14 +2005,129 @@ class HistoryWindow(QWidget):
             column, row = index // 2, index % 2
             widget.setGeometry(int(MARGIN + column * half + 18), formY + row * 36, int(half - 36), 36)
         self.popup.move(int(MARGIN + 2 * half - 18 - self.popup.width()), formY + 36 + 6)
-        self.paneMessage.setGeometry(MARGIN, MARGIN, viewWidth - 2 * MARGIN, self.height() - 2 * MARGIN)
+        self.paneMessage.setGeometry(MARGIN, TOP_MARGIN, viewWidth - 2 * MARGIN, self.height() - TOP_MARGIN - MARGIN)
         self.placeScrollBars(sidebarWidth, viewWidth, width, contentHeight)
+        self.placeTitleButtons()
+
+    def updateShadow(self):
+        # a maximized window has no edges to cast a shadow past
+        if (self.isVisible() and not self.isMaximized() and not self.isFullScreen()):
+            self.windowShadow.show(self.windowHandle(), self.devicePixelRatioF())
+        else:
+            self.windowShadow.hide()
+
+    def toggleMaximized(self):
+        if (self.isMaximized()):
+            self.showNormal()
+        else:
+            self.showMaximized()
+
+    def changeEvent(self, event):
+        if (event.type() == QEvent.Type.WindowStateChange):
+            for button in self.titleButtons:
+                button.nameForState()
+            self.setEdgeCursor(Qt.Edge(0))
+            self.updateShadow()
+        super().changeEvent(event)
+
+    def onChart(self, point):
+        widget = self.childAt(point)
+        while (widget is not None and widget is not self):
+            if (isinstance(widget, charts.Chart)):
+                return True
+            widget = widget.parentWidget()
+        return False
+
+    def mousePressEvent(self, event):
+        # a press on the window's empty space, or on anything that lets it through, moves the window once it drags, while the charts keep theirs for hovering
+        if (event.button() != Qt.MouseButton.LeftButton or self.onChart(event.position().toPoint())):
+            super().mousePressEvent(event)
+            return
+        self.dragFrom = event.position()
+
+    def mouseMoveEvent(self, event):
+        if (self.dragFrom is None or not (event.buttons() & Qt.MouseButton.LeftButton)):
+            super().mouseMoveEvent(event)
+            return
+        # moved only past the drag distance, so a click or a double click never starts a move that would swallow its release
+        if ((event.position() - self.dragFrom).manhattanLength() < QApplication.startDragDistance()):
+            return
+        self.dragFrom = None
+        handle = self.windowHandle()
+        if (handle is not None):
+            handle.startSystemMove()
+
+    def mouseReleaseEvent(self, event):
+        self.dragFrom = None
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if (event.button() != Qt.MouseButton.LeftButton or self.onChart(event.position().toPoint())):
+            super().mouseDoubleClickEvent(event)
+            return
+        self.dragFrom = None
+        self.toggleMaximized()
+
+    def edgesAt(self, point):
+        edges = Qt.Edge(0)
+        if (self.isMaximized() or self.isFullScreen()):
+            return edges
+        if (point.x() < RESIZE_EDGE):
+            edges |= Qt.Edge.LeftEdge
+        elif (point.x() >= self.width() - RESIZE_EDGE):
+            edges |= Qt.Edge.RightEdge
+        if (point.y() < RESIZE_EDGE):
+            edges |= Qt.Edge.TopEdge
+        elif (point.y() >= self.height() - RESIZE_EDGE):
+            edges |= Qt.Edge.BottomEdge
+        return edges
+
+    def setEdgeCursor(self, edges):
+        if (edges == self.cursorEdges):
+            return
+        self.cursorEdges = edges
+        if (edges == Qt.Edge(0)):
+            self.unsetCursor()
+        elif (edges in (Qt.Edge.LeftEdge | Qt.Edge.TopEdge, Qt.Edge.RightEdge | Qt.Edge.BottomEdge)):
+            self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+        elif (edges in (Qt.Edge.RightEdge | Qt.Edge.TopEdge, Qt.Edge.LeftEdge | Qt.Edge.BottomEdge)):
+            self.setCursor(Qt.CursorShape.SizeBDiagCursor)
+        elif (edges in (Qt.Edge.LeftEdge, Qt.Edge.RightEdge)):
+            self.setCursor(Qt.CursorShape.SizeHorCursor)
+        else:
+            self.setCursor(Qt.CursorShape.SizeVerCursor)
+
+    def eventFilter(self, watched, event):
+        # the window's handle sees the pointer before any widget does, so the edges resize even where a control or the scroll bar reaches them
+        if (watched is not self.watchedHandle):
+            return super().eventFilter(watched, event)
+        kind = event.type()
+        if (kind == QEvent.Type.MouseMove and event.buttons() == Qt.MouseButton.NoButton):
+            self.setEdgeCursor(self.edgesAt(event.position()))
+        elif (kind == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton):
+            edges = self.edgesAt(event.position())
+            if (edges != Qt.Edge(0)):
+                watched.startSystemResize(edges)
+                return True
+        elif (kind == QEvent.Type.Leave):
+            self.setEdgeCursor(Qt.Edge(0))
+        return super().eventFilter(watched, event)
+
+    def placeTitleButtons(self):
+        # the buttons stay put while the content scrolls, and step in from a scroll bar along the right
+        right = self.width() - TITLE_BUTTON_RIGHT - (self.vScroll.width() if self.vScroll.isVisibleTo(self) else 0)
+        for index, button in enumerate(reversed(self.titleButtons)):
+            button.move(right - (index + 1) * TITLE_BUTTON_SIZE - index * TITLE_BUTTON_GAP, TITLE_BUTTON_Y)
+            button.raise_()
+        if (self.choiceMenu.isVisible()):
+            self.choiceMenu.raise_()
 
     def watchScreen(self):
         handle = self.windowHandle()
         if (handle is None or handle is self.watchedHandle):
             return
         self.watchedHandle = handle
+        handle.installEventFilter(self)
         # a window moved to a smaller screen, or one whose scale changed, fits its new room
         handle.screenChanged.connect(self.screenChanged)
         self.watchRoom(handle.screen())
@@ -1860,9 +2222,9 @@ class HistoryWindow(QWidget):
         screen = self.screen()
         if (screen is None):
             return None
+        # the window has no frame, so the room is all the screen leaves
         room = screen.availableGeometry()
-        frame = self.frameGeometry().height() - self.geometry().height()
-        return QSize(room.width(), room.height() - (frame if frame > 0 else FRAME_ALLOWANCE))
+        return QSize(room.width(), room.height())
 
     def resizeEvent(self, event):
         self.choiceMenu.hide()
