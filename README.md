@@ -11,19 +11,19 @@ Mouse Battery isn't affiliated with Logitech.
 On Ubuntu and Debian, download the `.deb` from the [latest release](https://github.com/kymotsujason/logitech-mouse-battery-tray-icon/releases/latest) and double click it, or install it from a terminal:
 
 ```bash
-sudo apt install ./logitech-mouse-battery_1.2.2_all.deb
+sudo apt install ./logitech-mouse-battery_1.2.3_all.deb
 ```
 
 On Fedora, download the `.rpm` from the same page:
 
 ```bash
-sudo dnf install ./logitech-mouse-battery-1.2.2-1.noarch.rpm
+sudo dnf install ./logitech-mouse-battery-1.2.3-1.noarch.rpm
 ```
 
 On Arch, download the `.pkg.tar.zst` from the same page and install it with pacman:
 
 ```bash
-sudo pacman -U ./logitech-mouse-battery-1.2.2-1-any.pkg.tar.zst
+sudo pacman -U ./logitech-mouse-battery-1.2.3-1-any.pkg.tar.zst
 ```
 
 An AUR package will follow once the AUR opens account registrations again.
@@ -33,7 +33,7 @@ The package gives Mouse Battery's service access to your receiver or cable, incl
 Each file in a release after 1.1.0 comes with a signed record of how it was built. To check a download with the GitHub CLI before you install it:
 
 ```bash
-gh attestation verify ./logitech-mouse-battery-1.2.2-1-any.pkg.tar.zst --repo kymotsujason/logitech-mouse-battery-tray-icon
+gh attestation verify ./logitech-mouse-battery-1.2.3-1-any.pkg.tar.zst --repo kymotsujason/logitech-mouse-battery-tray-icon
 ```
 
 ## Use
@@ -50,7 +50,7 @@ Opening the menu refreshes the reading of each mouse the battery service reads i
 
 ## Battery window
 
-Click the tray icon, or pick "Battery Health" from its menu, to open the battery window. It shows the mouse's level and status, a health box, and a level chart for the last 24 hours, 7 days, or 30 days. It also shows how many hours a charge lasts and how fast it charges month by month, and when the mouse was last charged. With two or more mice, a sidebar lists them all.
+Click the tray icon, or pick "Battery Health" from its menu, to open the battery window. It shows the mouse's level and status, a health box, and a level chart for the last 24 hours, 7 days, or 30 days. It also shows how many hours a charge lasts and how fast it charges month by month, and when the mouse was last charged. With two or more mice, a sidebar lists them all. The window draws its own title bar, so you move it by dragging any empty space and maximize it with a double click.
 
 ![The battery window with the level chart](docs/window-level.png)
 

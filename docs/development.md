@@ -54,7 +54,7 @@ The app is the flat set of modules in `src/`, which the packages install side by
 - `notify.py` sends desktop notifications.
 - `dbusCalls.py` makes the tray's D-Bus calls to the desktop and to UPower with a timeout, answering through a callback so a slow peer never holds it still. It also makes the blocking calls, each with a timeout, for the terminal check (to the battery service and UPower) and for the notice a second tray sends before it quits, and it unwraps the values in a reply. `serviceClient.py` makes the tray's own state and read calls to the battery service with its own callbacks and timeout, while its history and chart level calls go through `dbusCalls.py`.
 - `panelColor.py` works out the color the icon is drawn in from the desktop's theme, and reads the desktop portal's color scheme and reduced motion settings, which the window follows too.
-- `icon.py` draws the tray icon and the mouse picture in the battery window, and picks the window's title bar icon.
+- `icon.py` draws the tray icon and the mouse picture in the battery window, and picks the battery window's icon in the task manager.
 - `autostart.py` turns Open at Login on and off.
 - `check.py` is the terminal check.
 - `version.py` holds the version.

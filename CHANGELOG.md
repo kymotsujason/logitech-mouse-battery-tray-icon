@@ -2,6 +2,15 @@
 
 This file lists the changes in each release of Mouse Battery, newest first.
 
+## 1.2.3, 2026-10-17
+
+### Changed
+
+- The battery window draws its own title bar, with minimize, maximize, and close buttons at its top right, in place of the one the desktop draws.
+- Drag the window from any empty space to move it, double click empty space to maximize or restore it, and drag its edges or corners to resize it.
+- On KDE Plasma the window has rounded corners, with the blur behind it and its shadow shaped to match, and it goes square while maximized.
+- In the light theme, the mouse picture in the battery window is a soft gray instead of near black.
+
 ## 1.2.2, 2026-10-14
 
 ### Fixed
